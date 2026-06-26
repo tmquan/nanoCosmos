@@ -1,0 +1,445 @@
+# =====================================================================
+# cosmos3nano3d.yaml  --  FLATTENED standalone config
+# =====================================================================
+# Self-contained (NO ``defaults:`` chain).  Based on
+# ``cosmospredict3d.yaml`` (the combine recipe), swapped to the
+# Cosmos-3 Nano (16B) omni-transformer backbone with the 16B-specific
+# overrides applied:
+#   model.type = cosmos3nano3d, variant = Nano
+#   model.gradient_checkpointing = true   (16B activation memory)
+#   data.batch_size = 2, val_batch_size = 2
+#   training.limit_val_batches = 200
+#   training.compile = false, compile_fullgraph = false  (cudagraphs are
+#       incompatible with the Cosmos-3 forward-hook feature capture)
+#
+# NOTE: Cosmos-3 Nano's VAE is 16x spatial compression (vs Cosmos-Predict
+# 2.5's 8x), so membranes are blurrier -> expect MORE under-segmentation
+# than the 2B baseline unless paired with a high-res input path.
+#
+# Run with:
+#   python scripts/train.py --config-name cosmos3nano3d
+# =====================================================================
+
+experiment_name: cosmos3nano3d
+project_name: nanocosmos
+seed: 42
+logger: tensorboard
+ckpt_path: null
+ckpt_path_skip_prefixes: []
+ckpt_path_only_prefixes: null
+
+data:
+  dataset: snemi3d
+  data_root: data/SNEMI3D
+  batch_size: 2
+  num_workers: 8
+  cache_rate: 0.0
+  pin_memory: true
+  image_size: null
+  slice_mode: false
+  num_samples: 16000
+  # Boundary erosion probability for the FindBoundariesd transform.
+  find_boundaries: 1.0
+  # ``semantic`` -> erode boundary voxels only for the sem (foreground) head's
+  # target (a separate ``sem_label``); the instance ``label`` used for the
+  # affinity targets and the validation instance GT / fg-mask stays pristine.
+  # ``both`` -> legacy behaviour (erode the shared instance label in place).
+  boundary_target: semantic
+  elastic_prob: 0.0
+  elastic_sigma_range:
+  - 35
+  - 50
+  elastic_magnitude_range:
+  - 10
+  - 40
+  # Resolution harmonisation (``union`` mode): each anisotropic patch is
+  # resampled to a RANDOM target inside the shared resolution envelope below
+  # (z 30-40, xy 4-8 nm), the union of all native resolutions.  This gives the
+  # voxel-defined affinity offsets a consistent physical meaning across
+  # datasets AND acts as scale/anisotropy augmentation (z and xy targets are
+  # sampled independently).  Isotropic volumes (FIB-25 8x8x8) are passed
+  # through untouched -- their fine 8 nm z would otherwise force a ~5x z
+  # safe-crop; FIB's anisotropic contribution comes from the z-strided
+  # [40,8,8] copy instead.
+  resolution_zoom_prob: 0.9
+  resolution_zoom_mode: union
+  resolution_zoom_range:   # union envelope (z, y, x) in nm
+  - - 30
+    - 40
+  - - 4
+    - 8
+  - - 4
+    - 8
+  # True native voxel sizes (z, y, x in nm) per volume-name prefix.  In
+  # ``union`` mode these are the source resolutions resampled onto the
+  # envelope above (isotropic entries are skipped).
+  resolution_map:
+    AC:
+    - 30
+    - 6
+    - 6
+    neurons:
+    - 30
+    - 6
+    - 6
+    minnie65:
+    - 40
+    - 8
+    - 8
+    # CREMI3D ssTEM (Drosophila): 40 nm sections, 4 nm in-plane.
+    cremi3d:
+    - 40
+    - 4
+    - 4
+    # FLYEM3D FIB-SEM (Drosophila): 8 nm isotropic (native) -- skipped by the
+    # union resample.  The anisotropic copies (z-stride 4 -> 32 nm sections, all
+    # 4 phase offsets) use the flyem3d_z32 key; 32 nm sits just above the union
+    # z floor so the jitter mostly DOWNSAMPLES it (honest) rather than
+    # upsampling.  Download: scripts/download_flyem3d.py ... --z-stride 4
+    flyem3d:
+    - 8
+    - 8
+    - 8
+    flyem3d_z32:
+    - 32
+    - 8
+    - 8
+  # Missing-section augmentation (CREMI-style ssTEM defect): fully wired but
+  # OFF by default (decide during training).  Set ``missing_slice_prob > 0``
+  # to randomly blank whole z-sections of the image (train-only, image-only;
+  # labels untouched so affinities still supervise the true connectivity).
+  missing_slice_prob: 1.0
+  missing_slice_max: 2
+  missing_slice_fill: zero
+  missing_slice_consecutive: false
+  persistent_workers: true
+  train_volumes:
+  - vol: neurons_5000x2900x300_x3000_y7200_z950_volume
+    seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
+    root: data/SNEMI3D
+  - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
+    seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
+    seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
+    seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
+    seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
+    seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
+    seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
+    seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
+    root: data/MICRONS
+  # CREMI3D ssTEM (Drosophila, 4x4x40 nm).  Download + convert with
+  # ``python scripts/download_cremi3d.py --out-dir data/CREMI3D``.
+  - vol: cremi3d_sample_A_volume
+    seg: cremi3d_sample_A_segmentation
+    root: data/CREMI3D
+  - vol: cremi3d_sample_B_volume
+    seg: cremi3d_sample_B_segmentation
+    root: data/CREMI3D
+  - vol: cremi3d_sample_C_volume
+    seg: cremi3d_sample_C_segmentation
+    root: data/CREMI3D
+  # FLYEM3D FIB-SEM (Drosophila).  12 anisotropic variants (32x8x8 nm) of the
+  # 1536^3 dense core (~99.7% fg): 3 section-axis orientations (z / xz / yz) x
+  # 4 z-stride-4 phase offsets (p0..p3).  All match resolution_map key
+  # flyem3d_z32 and ride the union resample.  These are correlated (one cube,
+  # permuted/sub-sampled) -- consider down-weighting so FIB doesn't dominate
+  # the sampler.  Download: fetch the native cube once, then process locally:
+  #   python scripts/download_flyem3d.py --out-dir data/FLYEM3D --name flyem3d \
+  #       --origin 2304 2048 6144 --size 1536 1536 1536 --mip 0
+  #   python scripts/download_flyem3d.py --from-local \
+  #       data/FLYEM3D/flyem3d_8nm_x2304_y2048_z6144_volume.h5 \
+  #       --name flyem3d --orientations z y x --z-stride 4
+  - vol: flyem3d_z32xy8nm_p0_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_p0_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_p1_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_p1_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_p2_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_p2_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_p3_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_p3_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_xz_p0_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_xz_p0_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_xz_p1_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_xz_p1_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_xz_p2_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_xz_p2_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_xz_p3_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_xz_p3_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_yz_p0_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_yz_p0_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_yz_p1_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_yz_p1_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_yz_p2_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_yz_p2_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  - vol: flyem3d_z32xy8nm_yz_p3_x2304_y2048_z6144_volume
+    seg: flyem3d_z32xy8nm_yz_p3_x2304_y2048_z6144_segmentation
+    root: data/FLYEM3D
+  val_volumes:
+  - vol: AC4_inputs
+    seg: AC4_labels
+    root: data/SNEMI3D
+  - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+    seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+    root: data/MICRONS
+  test_volumes:
+  - vol: AC4_inputs
+    seg: AC4_labels
+    root: data/SNEMI3D
+  - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+    seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+    root: data/MICRONS
+  - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+    root: data/MICRONS
+  # CREMI3D A+/B+/C+ test volumes are intentionally NOT listed here: the
+  # challenge withholds their labels, so they can't produce GT metrics.  Run
+  # blind inference on them separately.
+  val_batch_size: 2
+  prefetch_factor: 8
+  patch_size:
+  - 80
+  - 256
+  - 256
+  min_foreground: 0.9
+  pixel_size:
+  - 30
+  - 6
+  - 6
+
+model:
+  type: cosmos3nano3d
+  variant: Nano
+  in_channels: 1
+  # Derived from loss.offsets (len(offsets) + sem + raw = 30 + 2); kept
+  # explicit here as a cross-check (the module derives + injects it).
+  head_channels: 32
+  feature_size: 64
+  dropout: 0.5
+  pretrained: true
+  dtype: bf16
+  freeze_vae_encoder: true
+  freeze_dit_backbone: 5 
+  freeze_vae_decoder: true
+  gradient_checkpointing: true
+  # Scale the VAE-encode input [0,1]->[-1,1] to match AutoencoderKLWan's
+  # pretrained range (it normalizes [0,1]->[-1,1] before encode()).  Feeding
+  # [0,1] washes out the reconstruction (see true/wan_decoder panel).  This
+  # shifts the latent distribution, so it is a fresh-run setting: a checkpoint
+  # trained with the old [0,1] input will not resume cleanly with it on.
+  vae_input_pm1: true
+
+optimizer:
+  lr: 0.0002
+  weight_decay: 0.0001
+  # AdamW betas; beta2=0.99 (Cosmos-3 generator recipe) adapts faster than
+  # the 0.999 default when fine-tuning the pretrained backbone.
+  betas:
+  - 0.9
+  - 0.99
+  scheduler:
+    type: cosine_warmup
+    # T_max spans the whole run (== training.max_epochs: 101).
+    T_max: 101
+    # Floor the LR at ~0.3x peak (Cosmos-3 generator uses a 0.30x floor)
+    # instead of decaying to ~0, so late epochs keep converging.
+    eta_min: 6.0e-05
+    warmup_epochs: 5
+  dit_backbone_lr: 1.0e-04
+  controlnet_lr: 1.0e-05
+
+loss:
+  ignore_index: -100
+  background: -1
+  # Config-driven affinity offset set (head width = len(offsets) + 2 derives
+  # automatically; MWS + TB read these too).  Pull-first ordering is required:
+  # the first ``n_pull`` offsets are the attractive (merge) edges, the rest
+  # are repulsive (mutex/separate) push edges.
+  n_pull: 5
+  offsets:
+  # --- pull: base glue (nn z/y/x) + high-res anti-leak diagonals ---
+  - [-1, 0, 0]      # z nn
+  - [0, -1, 0]      # y nn
+  - [0, 0, -1]      # x nn
+  - [0, -1, -1]     # xy diagonal
+  - [0, 1, -1]      # xy anti-diagonal
+  # --- push: deep out-of-plane (z) ---
+  - [-2, 0, 0]
+  - [-3, 0, 0]
+  - [-4, 0, 0]
+  - [-5, 0, 0]
+  - [-8, 0, 0]
+  # --- push: compact in-plane axis (y/x at 2,4,8,16,32) ---
+  - [0, -2, 0]
+  - [0, 0, -2]
+  - [0, -4, 0]
+  - [0, 0, -4]
+  - [0, -8, 0]
+  - [0, 0, -8]
+  - [0, -16, 0]
+  - [0, 0, -16]
+  - [0, -32, 0]
+  - [0, 0, -32]
+  # --- push: mid-range in-plane diagonals (at 2,4,8,16,32) ---
+  - [0, -2, -2]
+  - [0, 2, -2]
+  - [0, -4, -4]
+  - [0, 4, -4]
+  - [0, -8, -8]
+  - [0, 8, -8]
+  - [0, -16, -16]
+  - [0, 16, -16]
+  - [0, -32, -32]
+  - [0, 32, -32]
+  weight_aff:
+    weight: 1.0
+    lambda_bce: 1.0
+    lambda_dice: 1.0
+    lambda_focal: 1.0
+    gamma: 3.0
+    pull_weight: 1.0
+    # Emphasize the long-range push edges -- they are the only separation
+    # mechanism the Mutex Watershed has, and the channel where the head was
+    # collapsing to "merge" (see val voi_merge dominance).
+    push_weight: 3.0
+    mask_to_foreground: true
+    # Rebalance the positive ("merge") vs negative ("separate") affinity
+    # classes per offset; the target is positive-dominated, which biased the
+    # head to high affinities everywhere -> MWS under-segmentation.  This
+    # matters even more for Nano: its 16x VAE latent blurs membranes, so the
+    # head over-merges more than the 8x 2B baseline.
+    class_balance: auto
+    class_balance_clip: 10.0
+    # Add the complementary split-class soft-Dice so boundaries get direct
+    # region supervision (not just the merge class).
+    dice_two_sided: true
+    focal_alpha: null
+  weight_sem:
+    weight: 1.0
+    lambda_bce: 1.0
+    lambda_dice: 1.0
+    lambda_focal: 1.0
+    gamma: 3.0
+    # Foreground-dominant (min_foreground 0.9 + thin eroded boundary gaps),
+    # so rebalance fg/bg like the affinity head: inverse-freq class weights
+    # + the complementary background-class soft-Dice for direct supervision
+    # on the rare background / boundary voxels.
+    class_balance: auto
+    class_balance_clip: 10.0
+    dice_two_sided: true
+    focal_alpha: null
+  weight_raw:
+    weight: 1.0
+    loss: l1
+
+training:
+  mutex_watershed:
+    strides:
+    - 1
+    - 1
+    - 1
+    size_filter: 50
+    # Agglomeration backend: auto -> GPU torch Boruvka (mws_th, native
+    # zero-copy) on CUDA; cupy -> mws_cp (DLPack); cpu -> exact mws_np.
+    backend: auto
+    buckets: 16
+    # null (or 0) = no cap, full edges.
+    max_push_edges: null
+    # Gate the agglomeration with the predicted sem foreground
+    # (sem > sem_gate_threshold).  true -> instances are masked to the
+    # predicted membrane (thick rind where sem is blurry).  false -> MWS
+    # runs unmasked, so borders are 1-voxel affinity cuts (no thick rind).
+    # The eval instance metric always gates with the GT foreground.
+    gate_with_sem: true
+    sem_gate_threshold: 0.5
+    # Optionally grow labels into the unlabeled band so segments meet at a
+    # thin border (only relevant when gate_with_sem: true).  <= 0 fills all.
+    grow_boundaries: true
+    grow_max_distance: 2.0
+  max_epochs: 101
+  accelerator: auto
+  devices: auto
+  strategy: ddp
+  precision: bf16-true
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  limit_val_batches: 200
+  check_val_every_n_epoch: 20
+  num_sanity_val_steps: 2
+  log_every_n_steps: 100
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  # MUST be false for cosmos3nano3d: torch.compile cannot trace the diffusers
+  # Cosmos-3 transformer's gradient_checkpointing (torch.utils.checkpoint HOP),
+  # and cudagraphs corrupt its forward-hook feature capture.
+  compile: false
+  compile_fullgraph: true
+  fast_dev_run: false
+  profiler: null
+  resume_from_checkpoint: null
+
+callbacks:
+  checkpoint:
+    enabled: true
+    dirpath: null
+    filename: '{epoch:02d}-{val/automatic/loss:.4f}'
+    save_top_k: 3
+    monitor: val/automatic/loss
+    mode: min
+    save_last: true
+    verbose: true
+  early_stopping:
+    enabled: false
+    monitor: val/automatic/loss
+    patience: 20
+    mode: min
+    verbose: true
+    min_delta: 0.0
+  lr_monitor:
+    enabled: true
+  image_logger:
+    enabled: true
+    every_n_epochs: 1
+    max_images: 8
+  cuda_empty_cache_before_val: true
+  memory_logger:
+    enabled: true
+    log_every_n_steps: null
+
+output_dir: outputs

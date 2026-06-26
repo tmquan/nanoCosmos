@@ -1,0 +1,112 @@
+# nanocosmos -- pinned runtime dependencies (lockfile).
+#
+# Role of this file
+# -----------------
+# This is the *frozen* version of every package needed to reproduce the
+# CUDA-13 / Python-3.12 development environment.  It bundles together
+# the core runtime, the Cosmos backbone, the GPU (RAPIDS) extras, the
+# download-script helpers, the optional visualizer, AND the dev/test
+# tooling -- in other words, every ``[project.optional-dependencies]``
+# group from ``pyproject.toml`` rolled into one installable manifest.
+#
+# When to use which file
+# ----------------------
+#   * ``pip install -r requirements.txt``      -- bit-for-bit reproduction
+#                                                of the dev environment.
+#   * ``pip install -e ".[cosmos,dev]"``       -- permissive lower bounds,
+#                                                pulled from pyproject.toml.
+#   * ``pip install -e ".[cosmos,gpu-cu13,viz,scripts,dev]"``
+#                                              -- equivalent of this lockfile
+#                                                without the exact pins.
+#
+# Keep ``pyproject.toml`` as the single source of truth for the package's
+# logical dependency *groups*; this file just freezes specific resolved
+# versions on top of that.
+
+# Core deep learning
+--extra-index-url https://download.pytorch.org/whl/cu130
+# torch==2.10.0+cu130
+# torchvision==0.25.0+cu130
+pytorch-lightning==2.6.1
+torchmetrics==1.0.3
+monai==1.5.2
+einops==0.8.2
+
+# GPU acceleration (CUDA 13 wheels on NVIDIA's index).
+# Enables:
+#   - cupy-backed Mutex Watershed agglomeration (``mws_cp``) plus DLPack
+#     zero-copy torch <-> cupy interop in
+#     ``nanocosmos.inference.mutex_watershed``.
+#   - cupy / cucim-backed EDT / Gaussian / connected components in
+#     ``nanocosmos.transforms`` (optional; scipy / skimage CPU fallback).
+# For CUDA 12 builds replace cu13 -> cu12 and cuda13x -> cuda12x.
+#
+# NOTE: install with `pip`, not `uv pip`.  cupy-cuda13x==14.0.1 pins
+# cuda-pathfinder>=1.3.3,<2.dev0 which uv treats as a pre-release
+# request and refuses by default.  If you must use uv, pass
+# `--prerelease=allow --index-strategy unsafe-best-match`.
+--extra-index-url https://pypi.nvidia.com
+cupy-cuda13x==14.0.1
+
+# Configuration
+hydra-core==1.3.2
+omegaconf==2.3.0
+
+# Data formats
+h5py==3.15.1
+tifffile==2026.2.16
+pynrrd==1.1.3
+nibabel==5.3.3
+pillow==12.0.0
+cloud-volume>=10.4.0
+
+# Scientific computing
+numpy==2.3.5
+scipy==1.17.0
+scikit-learn==1.8.0
+scikit-image==0.26.0
+
+# Experiment tracking
+wandb==0.25.0
+tensorboard==2.20.0
+
+# Visualization
+matplotlib==3.10.8
+plotly>=5.24.0
+
+# Cosmos backbones (Cosmos 2.5 Predict/Transfer + Cosmos 3 Nano)
+#
+# The default backbone (``model.type: cosmos3nano3d``) loads
+# ``Cosmos3OmniTransformer``, which is NOT in any tagged diffusers
+# release yet -- the pinned 0.37.0 only ships the Cosmos 2.5 classes
+# (``CosmosTransformer3DModel`` etc.).  Without the git-main build the
+# wrapper silently falls back to a randomly-initialised DiT (see
+# ``_BaseCosmos25Wrapper._try_load_diffusers``).  Track HF's main until
+# a release (>= the version that exposes ``Cosmos3OmniTransformer``)
+# lands, then re-pin to that tag.  git main still ships every Cosmos
+# 2.5 class, so Predict/Transfer keep working.
+diffusers @ git+https://github.com/huggingface/diffusers.git
+# Cosmos 3 is an omni model: the pipeline pulls a Qwen3-VL vision
+# encoder + Qwen2 tokenizer from transformers, so it is now a hard
+# dependency (Qwen3-VL support requires a recent transformers).  Pin
+# the exact resolved version once the env is rebuilt.
+transformers>=4.57.0
+huggingface_hub>=1.6.0
+# git-main diffusers (0.39.0.dev0) requires safetensors>=0.8.0rc0, so
+# the old ``==0.7.0`` pin is unsatisfiable against it.  Track the rc
+# lower bound; re-pin to the resolved version at freeze time.
+safetensors>=0.8.0rc0
+accelerate==1.13.0
+
+# HTTP / networking
+requests #==2.32.5
+charset-normalizer #==3.4.5
+chardet<6.0.0
+
+# Utilities
+rich==14.3.2
+tqdm==4.66.5
+
+# Dev / testing
+pytest==9.0.2
+pytest-cov==7.0.0

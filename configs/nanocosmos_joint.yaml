@@ -1,0 +1,313 @@
+# =====================================================================
+# nanocosmos_joint.yaml  --  resolution-ladder super-resolution + segmentation
+# =====================================================================
+# The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
+# ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm, 160^3) a
+# single head that is the reconstructed fine EM (raw) AND the fine-grid
+# segmentation (aff + sem).  EVERY supervision term pools the fine prediction
+# down to wherever its ground truth lives (factor read from the GT shape).
+# Two branches (roles STACK by dataset), routed per task-homogeneous batch by
+# JointReconSegLoss:
+#
+#   dapt   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
+#          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
+#          (small voxel) AND UNLABELED FIB-25 (domain-matched neuropil).  Label-free.
+#   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
+#          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
+#          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.
+#
+# Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
+# Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
+# RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
+# is the only "resampling" and it is derived from the native label shape.
+#
+# NOTE: the multi-task datamodule + Lightning module that consume the
+# ``data.branches`` / ``loss`` schema below are the remaining integration layer
+# (the loss + degradation transform are implemented and tested:
+# nanocosmos/losses/joint.py, nanocosmos/transforms/degrade.py,
+# tests/test_joint.py).
+# =====================================================================
+
+experiment_name: nanocosmos_joint
+project_name: nanocosmos
+seed: 42
+logger: tensorboard
+ckpt_path: null
+ckpt_path_skip_prefixes: []
+ckpt_path_only_prefixes: null
+
+data:
+  # Fixed FINE network grid: 4 nm cube, 160^3 (0.64 um).  4 nm = COSEM mip0
+  # and the finest xy across all sets, so nothing is downsampled to reach it.
+  # NOTE (FOV vs resolution, see doc/RESOLUTION_LADDER.md sec 5): 160^3 @ 4 nm
+  # is only 0.64 um of context; consider a larger / non-cubic voxel patch or
+  # a 6 nm grid if neurites are context-starved -- weigh against 16B memory.
+  patch_size: [160, 160, 160]
+  pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
+  # No resolution jitter (clean recipe); the only resampling is the per-volume
+  # pool to the native label grid, derived from the label shape.
+  resolution_zoom_prob: 0.0
+  num_workers: 8
+  cache_rate: 0.0
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 8
+  find_boundaries: 1.0
+  boundary_target: semantic
+
+  # ---- realistic large-voxel degradation for the DAPT branch ----
+  # (nanocosmos.transforms.RandResolutionDegraded) -- the free
+  # large-voxel -> small-voxel pair.
+  degrade:
+    # Simulated section thickness zf = large_voxel_z / fine(4 nm).  Spans 8 nm (FIB)
+    # .. 40 nm (CREMI/MICrONS) sections, i.e. zf 2 .. 10, log-uniform.
+    zf_range: [2.0, 10.0]
+    jitter_prob: 0.5            # per-section in-plane misalignment (grid_sample)
+    max_jitter: 2.0             # +/- voxels
+    missing_prob: 0.3           # missing / duplicated sections
+    max_missing: 2
+    missing_fill: zero
+    noise_prob: 0.5             # section-dependent gaussian noise
+    noise_std: 0.05
+    contrast_prob: 0.5          # section-dependent gamma jitter
+    contrast_gamma: [0.8, 1.25]
+    up_mode: trilinear
+
+  # ---- the resolution ladder, as two task branches; the multi-task sampler
+  # yields task-homogeneous batches and interleaves them round-robin
+  # (sample_weight tunes the mix).  Each volume declares its NATIVE resolution
+  # (z, y, x nm); the datamodule resamples the image onto the 4 nm fine grid
+  # for the network input and keeps the labels on their native grid, so the
+  # loss pool factor = native/fine is derived from the label shape. ----
+  branches:
+    dapt:
+      task: dapt
+      batch_size: 2
+      sample_weight: 1.0
+      # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused).
+      # PLUS unlabeled FIB-25 (domain-matched neuropil) -- the vast
+      # unproofread volume reconstructs for free.  RandResolutionDegraded
+      # synthesises the (degraded -> clean) pair.  Add OpenOrganelle volumes
+      # here to scale DAPT toward petascale.
+      volumes:
+      # --- COSEM ~4 nm small voxel (exact z per volume) ---
+      - vol: jrc_hela-3_4x4x3.24nm_x4000_y0_z4000_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_macrophage-2_4x4x3.36nm_x4000_y1000_z3000_volume
+        root: data/COSEM3D
+        native_resolution: [3.36, 4, 4]
+      - vol: jrc_jurkat-1_4x4x3.44nm_x4000_y1000_z3000_volume
+        root: data/COSEM3D
+        native_resolution: [3.44, 4, 4]
+      # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY incl. the UNSEGMENTED surround ---
+      # FIB-25's proofread core is ~1536^3; the full volume is 6446x6643x8090, so
+      # the majority is unlabeled 8 nm neuropil -- a large free domain-matched
+      # DAPT source.  Crop image-only regions outside the core with:
+      #   python scripts/download_flyem3d.py --dataset fib25 --role dapt --origin <out-of-core> --size 512 512 512
+      - vol: flyem3d_8nm_dapt_x4000_y4000_z2000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      # --- optional scale-up: Hemibrain / MaleCNS 8 nm neuropil, image-only ---
+      #   python scripts/download_flyem3d.py --dataset hemibrain --role dapt --size 512 512 512
+      #   python scripts/download_flyem3d.py --dataset malecns  --role dapt --size 512 512 512
+      # - vol: flyem3d_hemibrain_8nm_dapt_<coords>_volume
+      #   root: data/FLYEM3D
+      #   native_resolution: [8, 8, 8]
+      # - vol: flyem3d_malecns_8nm_dapt_<coords>_volume
+      #   root: data/FLYEM3D
+      #   native_resolution: [8, 8, 8]
+    sft:
+      task: sft
+      batch_size: 2
+      sample_weight: 2.0
+      # Every labeled rung.  FIB-25 (fine, also a DAPT source above) +
+      # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
+      # volume's native label grid, then AffinityFGLoss.
+      volumes:
+      - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
+        seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: neurons_5000x2900x300_x3000_y7200_z950_volume # SNEMI3D 30x6x6
+        seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
+        root: data/SNEMI3D
+        native_resolution: [30, 6, 6]
+      - vol: cremi3d_sample_A_volume                       # CREMI 40x4x4
+        seg: cremi3d_sample_A_segmentation
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: cremi3d_sample_B_volume
+        seg: cremi3d_sample_B_segmentation
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: cremi3d_sample_C_volume
+        seg: cremi3d_sample_C_segmentation
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume  # MICrONS 40x8x8
+        seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+
+  val_batch_size: 1
+  # Validation on the labeled (sft) rungs -- instance metrics at native grid.
+  val_volumes:
+  - vol: AC4_inputs
+    seg: AC4_labels
+    root: data/SNEMI3D
+    task: sft
+    native_resolution: [30, 6, 6]
+
+model:
+  type: cosmos3nano3d
+  variant: Nano
+  in_channels: 1
+  head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
+  feature_size: 64
+  dropout: 0.5
+  pretrained: true
+  dtype: bf16
+  freeze_vae_encoder: true
+  freeze_dit_backbone: 5
+  freeze_vae_decoder: true
+  gradient_checkpointing: true
+  vae_input_pm1: true
+
+optimizer:
+  lr: 0.0002
+  weight_decay: 0.0001
+  betas: [0.9, 0.99]
+  scheduler:
+    type: cosine_warmup
+    T_max: 101
+    eta_min: 6.0e-05
+    warmup_epochs: 5
+  dit_backbone_lr: 1.0e-04
+
+# JointReconSegLoss: branch weights + the inner segmentation (AffinityFGLoss)
+# config.  ``weight_raw`` of the inner loss is forced to 0 -- the EM
+# reconstruction term is owned by the joint loss (``weight_recon``) so it can
+# target the clean EM and skip / switch grids per branch.
+loss:
+  type: joint
+  recon_loss: l1
+  weight_recon: 1.0
+  weight_seg: 1.0
+  # Per-branch multipliers (independent of draw frequency).
+  weight_dapt: 1.0
+  weight_sft: 1.0
+  seg:
+    ignore_index: -100
+    background: -1
+    n_pull: 5
+    offsets:
+    - [-1, 0, 0]
+    - [0, -1, 0]
+    - [0, 0, -1]
+    - [0, -1, -1]
+    - [0, 1, -1]
+    - [-2, 0, 0]
+    - [-3, 0, 0]
+    - [-4, 0, 0]
+    - [-5, 0, 0]
+    - [-8, 0, 0]
+    - [0, -2, 0]
+    - [0, 0, -2]
+    - [0, -4, 0]
+    - [0, 0, -4]
+    - [0, -8, 0]
+    - [0, 0, -8]
+    - [0, -16, 0]
+    - [0, 0, -16]
+    - [0, -32, 0]
+    - [0, 0, -32]
+    - [0, -2, -2]
+    - [0, 2, -2]
+    - [0, -4, -4]
+    - [0, 4, -4]
+    - [0, -8, -8]
+    - [0, 8, -8]
+    - [0, -16, -16]
+    - [0, 16, -16]
+    - [0, -32, -32]
+    - [0, 32, -32]
+    weight_aff:
+      weight: 1.0
+      lambda_bce: 1.0
+      lambda_dice: 1.0
+      lambda_focal: 1.0
+      gamma: 3.0
+      pull_weight: 1.0
+      push_weight: 3.0
+      mask_to_foreground: true
+      class_balance: auto
+      class_balance_clip: 10.0
+      dice_two_sided: true
+    weight_sem:
+      weight: 1.0
+      lambda_bce: 1.0
+      lambda_dice: 1.0
+      lambda_focal: 1.0
+      gamma: 3.0
+      class_balance: auto
+      class_balance_clip: 10.0
+      dice_two_sided: true
+
+training:
+  mutex_watershed:
+    strides: [1, 1, 1]
+    size_filter: 50
+    backend: auto
+    buckets: 16
+    max_push_edges: null
+    gate_with_sem: true
+    sem_gate_threshold: 0.5
+    grow_boundaries: true
+    grow_max_distance: 2.0
+  max_epochs: 101
+  accelerator: auto
+  devices: auto
+  strategy: ddp
+  precision: bf16-true
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  limit_val_batches: 200
+  check_val_every_n_epoch: 20
+  num_sanity_val_steps: 2
+  log_every_n_steps: 100
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  compile: false
+  compile_fullgraph: true
+  fast_dev_run: false
+  profiler: null
+  resume_from_checkpoint: null
+
+callbacks:
+  checkpoint:
+    enabled: true
+    dirpath: null
+    filename: '{epoch:02d}-{val/automatic/loss:.4f}'
+    save_top_k: 3
+    monitor: val/automatic/loss
+    mode: min
+    save_last: true
+    verbose: true
+  early_stopping:
+    enabled: false
+  lr_monitor:
+    enabled: true
+  image_logger:
+    enabled: true
+    every_n_epochs: 1
+    max_images: 8
+  cuda_empty_cache_before_val: true
+  memory_logger:
+    enabled: true
+    log_every_n_steps: null
+
+output_dir: outputs

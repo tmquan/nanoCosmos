@@ -1,0 +1,573 @@
+"""
+Affinity + foreground loss for the Mutex Watershed head.
+
+The model emits a single ``[B, HEAD_CHANNELS, D, H, W]`` head of raw
+logits / linear values (no activation in the forward pass): the per-offset
+affinities :data:`nanocosmos.losses._common.AFF_SLICE` and the scalar
+foreground :data:`nanocosmos.losses._common.SEM_SLICE` are logits; the
+``raw`` channel is linear.  This loss supervises all three:
+
+* **aff** -- per-voxel affinity logit ``z[o, v]`` for
+  ``aff[o, v] = P(label[v] == label[v+o])`` against the binary target from
+  :func:`~nanocosmos.losses._common.affinity_target_from_offsets`, with a
+  composite (masked logit-stable BCE + masked soft-Dice + optional focal,
+  the latter two on ``sigmoid(z)``).  Edges with a non-foreground endpoint
+  are masked out (see
+  :func:`~nanocosmos.losses._common.affinity_validity_mask`), and the
+  short-range *pull* offsets and long-range *push* offsets carry
+  independent weights.
+* **sem** -- the foreground / boundary (semantic) logit against
+  ``labels > 0``, via the shared
+  :class:`~nanocosmos.losses.dice_bce_focal.DiceBCEFocalLoss` composite.
+* **raw** -- the linear reconstruction channel against the (normalised)
+  input EM intensity in ``[-1, 1]``, via a plain L1 / MSE regression (an
+  auxiliary self-supervised signal that stabilises the shared decoder
+  features).
+
+At evaluation / inference the predicted affinities are agglomerated into
+instances by the Mutex Watershed (Wolf et al. 2018); see
+:mod:`nanocosmos.inference.mutex_watershed`.  This loss is the training
+supervisor only.
+
+Configuration schema
+--------------------
+``weight_aff`` / ``weight_sem`` / ``weight_raw`` are each a scalar (just
+the field weight) or a mapping ``{weight: ..., **sub_kwargs}``::
+
+    weight_aff:
+      weight: 1.0
+      lambda_bce: 1.0
+      lambda_dice: 1.0
+      lambda_focal: 0.0
+      gamma: 2.0
+      pull_weight: 1.0     # multiplier on the pull (nearest-neighbour) offsets
+      push_weight: 1.0      # multiplier on the push (long-range) offsets
+      mask_to_foreground: true   # drop edges with a background endpoint
+      class_balance: null   # null | "auto" (per-offset inverse-freq) | <float>
+      class_balance_clip: 10.0   # clamp on the "auto" per-offset weights
+      dice_two_sided: false # also score the complementary "separate" Dice
+      focal_alpha: null     # null | float in (0,1) up-weighting the "separate" class
+    weight_sem:
+      weight: 1.0
+      lambda_bce: 1.0
+      lambda_dice: 1.0
+      lambda_focal: 1.0
+      gamma: 2.0
+      class_balance: null   # null | "auto" (inverse-freq fg/bg) | <float>
+      class_balance_clip: 10.0
+      dice_two_sided: false # also score the complementary background Dice
+      focal_alpha: null     # null | float up-weighting the rare bg class
+    weight_raw:
+      weight: 1.0
+      loss: l1                   # l1 / mse / smooth_l1
+
+Output dict::
+
+    loss        # global weighted total
+    loss/aff    # affinity composite (un-weighted)
+    loss/sem    # foreground (semantic) composite (un-weighted)
+    loss/raw    # raw reconstruction (un-weighted)
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
+
+from nanocosmos.losses._common import (
+    AFFINITY_OFFSETS,
+    N_PULL,
+    affinity_target_from_offsets,
+    affinity_validity_mask,
+    canonical_regression_name,
+    head_channels_for,
+    head_slices,
+    offset_names,
+    regression_loss_fn,
+)
+from nanocosmos.losses.dice_bce_focal import DiceBCEFocalLoss
+
+HeadConfig = Union[float, int, Mapping[str, Any]]
+
+
+def _split_field(cfg: HeadConfig) -> Tuple[float, Dict[str, Any]]:
+    """Split ``weight_<field>`` into ``(weight, sub_kwargs)``.
+
+    Scalar shorthand: ``weight_sem: 1.0`` == ``weight_sem: {weight: 1.0}``.
+    A nested mapping without ``weight:`` defaults to ``weight: 1.0``.
+    """
+    if isinstance(cfg, Mapping):
+        d = dict(cfg)
+        return float(d.pop("weight", 1.0)), d
+    return float(cfg), {}
+
+
+def _parse_class_balance(
+    value: Union[None, str, float, int],
+) -> Union[None, str, float]:
+    """Normalise the ``class_balance`` config into ``None | "auto" | float``.
+
+    Accepts ``None`` / ``"none"`` / ``"null"`` (disabled), ``"auto"``
+    (per-offset inverse-frequency rebalancing), or a numeric multiplier on
+    the positive ("merge") class.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in ("none", "null", ""):
+            return None
+        if key == "auto":
+            return "auto"
+        raise ValueError(
+            f"class_balance must be None, 'auto', or a number; got {value!r}."
+        )
+    return float(value)
+
+
+class AffinityFGLoss(nn.Module):
+    """Affinity + foreground loss for the Mutex Watershed head.
+
+    Args:
+        weight_aff: Field-level config for the affinity head (scalar or
+            ``{weight, lambda_bce, lambda_dice, lambda_focal, gamma,
+            pull_weight, push_weight, mask_to_foreground, class_balance,
+            class_balance_clip, dice_two_sided, focal_alpha}``).  The last
+            four are robustness knobs against Mutex-Watershed over-merging
+            (all default to the prior, un-rebalanced behaviour):
+            ``class_balance`` (``None`` / ``"auto"`` / float) rebalances the
+            positive ("merge") vs negative ("separate") affinity classes;
+            ``dice_two_sided`` adds the complementary split-class Dice;
+            ``focal_alpha`` up-weights the rare "separate" class in the
+            focal term.
+        weight_sem: Field-level config for the foreground (semantic) head
+            (scalar or ``{weight, lambda_bce, lambda_dice, lambda_focal,
+            gamma}``).  Also accepts the same rebalancing knobs as the
+            affinity head -- ``class_balance`` (``None`` / ``"auto"`` /
+            float), ``class_balance_clip``, ``focal_alpha``, and
+            ``dice_two_sided`` -- to counter the fg-dominant class
+            imbalance (all default to the prior, un-rebalanced behaviour).
+        weight_raw: Field-level config for the raw reconstruction head
+            (scalar or ``{weight, loss}`` with ``loss`` in
+            ``l1 / mse / smooth_l1``).
+        offsets: Affinity offsets ``(dz, dy, dx)``.  Defaults to
+            :data:`nanocosmos.losses._common.AFFINITY_OFFSETS`.
+        n_pull: Number of leading offsets treated as pull
+            (the rest are push).  Only affects the per-offset loss
+            weighting here; the actual mutex behaviour lives in the
+            agglomerator.
+        background: Label value treated as background when building the
+            affinity target (its rows are zeroed).  ``None`` disables.
+        ignore_index: Label value masked out of the foreground target
+            (those voxels contribute as background in the sem target).
+    """
+
+    # Total head width -- set per-instance from the configured offset set
+    # (``head_channels_for(n_aff)``); not a fixed module constant.
+    num_channels: int
+
+    def __init__(
+        self,
+        weight_aff: HeadConfig = 1.0,
+        weight_sem: HeadConfig = 1.0,
+        weight_raw: HeadConfig = 1.0,
+        *,
+        offsets: Sequence[Sequence[int]] = AFFINITY_OFFSETS,
+        n_pull: int = N_PULL,
+        background: Optional[int] = -1,
+        ignore_index: int = -100,
+        eps: float = 1e-7,
+        dice_eps: float = 1e-5,
+        aff_chunk_size: int = 4,
+    ) -> None:
+        super().__init__()
+        self.offsets = tuple(tuple(int(c) for c in o) for o in offsets)
+        self.n_pull = int(n_pull)
+
+        # Config-driven head layout derived from the offset set: the loss
+        # owns the canonical {aff, sem, raw} slices + total width so the
+        # model head, MWS, and TB all agree without a fixed constant.
+        self.n_aff = len(self.offsets)
+        _slices = head_slices(self.n_aff)
+        self.aff_slice = _slices["aff"]
+        self.sem_slice = _slices["sem"]
+        self.raw_slice = _slices["raw"]
+        self.head_channels = head_channels_for(self.n_aff)
+        self.num_channels = self.head_channels
+        self.offset_names = offset_names(self.offsets, self.n_pull)
+
+        self.background = int(background) if background is not None else None
+        self.ignore_index = int(ignore_index)
+        self.eps = float(eps)
+        self.dice_eps = float(dice_eps)
+        # Offset-axis chunk size for the affinity loss (memory lever; the
+        # dense [B, N_AFF, D, H, W] stack is the largest step transient).
+        self.aff_chunk_size = int(aff_chunk_size)
+
+        # ----- aff -----
+        self.weight_aff, aff_kw = _split_field(weight_aff)
+        self.aff_lambda_bce = float(aff_kw.pop("lambda_bce", 1.0))
+        self.aff_lambda_dice = float(aff_kw.pop("lambda_dice", 1.0))
+        self.aff_lambda_focal = float(aff_kw.pop("lambda_focal", 0.0))
+        self.aff_gamma = float(aff_kw.pop("gamma", 2.0))
+        self.pull_weight = float(aff_kw.pop("pull_weight", 1.0))
+        self.push_weight = float(aff_kw.pop("push_weight", 1.0))
+        self.mask_to_foreground = bool(aff_kw.pop("mask_to_foreground", True))
+        # ----- robustness knobs (all default to the prior behaviour) -----
+        # Per-offset positive/negative rebalancing for the affinity head.
+        # The target is dominated by the positive ("merge") class, which
+        # biases the head toward high affinities everywhere -> the Mutex
+        # Watershed under-segments (push priority ``1 - aff`` collapses).
+        #   None      -> no rebalancing (legacy)
+        #   "auto"    -> per-offset inverse-frequency weighting (clamped)
+        #   <float>   -> fixed multiplier on the positive ("merge") class
+        self.class_balance = _parse_class_balance(aff_kw.pop("class_balance", None))
+        self.class_balance_clip = float(aff_kw.pop("class_balance_clip", 10.0))
+        # Symmetric soft-Dice: add the complementary ("separate") Dice so
+        # boundaries get direct region supervision, not just the merge class.
+        self.dice_two_sided = bool(aff_kw.pop("dice_two_sided", False))
+        # Optional focal alpha weighting the rare "separate" (t==0) class.
+        _fa = aff_kw.pop("focal_alpha", None)
+        self.focal_alpha = float(_fa) if _fa is not None else None
+        if aff_kw:
+            import warnings
+
+            warnings.warn(
+                f"AffinityFGLoss: ignoring unknown weight_aff keys: "
+                f"{sorted(aff_kw)}",
+                stacklevel=2,
+            )
+
+        # ----- sem (composite Dice + BCE + Focal on the foreground logit) -----
+        # Mirrors the affinity head's rebalancing knobs (class_balance /
+        # class_balance_clip / focal_alpha / dice_two_sided) so the
+        # foreground head can fight the same fg-dominant class imbalance.
+        self.weight_sem, sem_kw = _split_field(weight_sem)
+        _sem_fa = sem_kw.pop("focal_alpha", None)
+        self._sem_loss = DiceBCEFocalLoss(
+            lambda_dice=float(sem_kw.pop("lambda_dice", 1.0)),
+            lambda_bce=float(sem_kw.pop("lambda_bce", 1.0)),
+            lambda_focal=float(sem_kw.pop("lambda_focal", 1.0)),
+            gamma=float(sem_kw.pop("gamma", 2.0)),
+            class_balance=_parse_class_balance(sem_kw.pop("class_balance", None)),
+            class_balance_clip=float(sem_kw.pop("class_balance_clip", 10.0)),
+            focal_alpha=float(_sem_fa) if _sem_fa is not None else None,
+            dice_two_sided=bool(sem_kw.pop("dice_two_sided", False)),
+            smooth_nr=float(sem_kw.pop("smooth_nr", self.dice_eps)),
+            smooth_dr=float(sem_kw.pop("smooth_dr", self.dice_eps)),
+            eps=self.eps,
+        )
+        if sem_kw:
+            import warnings
+
+            warnings.warn(
+                f"AffinityFGLoss: ignoring unknown weight_sem keys: "
+                f"{sorted(sem_kw)}",
+                stacklevel=2,
+            )
+
+        # ----- raw (linear L1 / MSE reconstruction of the input EM) -----
+        self.weight_raw, raw_kw = _split_field(weight_raw)
+        self.loss_raw = canonical_regression_name(raw_kw.pop("loss", "l1"))
+        self._raw_fn = regression_loss_fn(self.loss_raw)
+        if raw_kw:
+            import warnings
+
+            warnings.warn(
+                f"AffinityFGLoss: ignoring unknown weight_raw keys: "
+                f"{sorted(raw_kw)}",
+                stacklevel=2,
+            )
+
+        # Per-offset channel weight vector (registered so it follows the
+        # module's device / dtype under FSDP MixedPrecision).
+        ch_w = torch.full((len(self.offsets),), self.push_weight)
+        ch_w[: self.n_pull] = self.pull_weight
+        self.register_buffer("_offset_weights", ch_w, persistent=False)
+
+    # ------------------------------------------------------------------
+    # Targets
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def build_targets(
+        self,
+        labels: torch.Tensor,
+        batch: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Build the per-step shared targets used by :meth:`forward`.
+
+        Returns ``{"aff": [B, N_AFF, ...], "aff_mask": [B, N_AFF, ...]}``
+        (the binary affinity target and its foreground validity mask).
+        The foreground target is derived from ``labels`` directly in
+        :meth:`forward`, so it is not cached.
+        """
+        out: Dict[str, torch.Tensor] = {}
+        if self.weight_aff > 0:
+            out["aff"] = affinity_target_from_offsets(
+                labels.long(), self.offsets, background=self.background,
+            )
+            if self.mask_to_foreground:
+                out["aff_mask"] = affinity_validity_mask(
+                    labels > 0, self.offsets,
+                )
+        return out
+
+    # ------------------------------------------------------------------
+    # Sub-losses
+    # ------------------------------------------------------------------
+
+    def _loss_aff(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Masked, offset-weighted composite on the affinity head.
+
+        ``logits`` is ``[B, N_AFF, D, H, W]`` (raw, pre-sigmoid); ``target``
+        / ``mask`` are ``[B, N_AFF, D, H, W]`` ``uint8`` (or ``mask=None``
+        for all-valid).  Channels are weighted by :attr:`_offset_weights`
+        (pull vs push).  The BCE term uses the logit-stable
+        ``binary_cross_entropy_with_logits``; the focal / Dice terms use
+        ``sigmoid(logits)``.
+
+        Computed by **chunking over the offset axis** so the peak fp32
+        intermediate is ``[B, chunk, D, H, W]`` rather than several
+        ``[B, N_AFF, D, H, W]`` tensors at once -- the dense affinity stack
+        is the largest transient in the step.  BCE / focal are summed and
+        the global soft-Dice numerator / denominator are accumulated across
+        chunks, so the result is numerically identical to the unchunked
+        form (sums are linear; Dice is a global ratio).
+        """
+        n = logits.shape[1]
+        ch_w = self._offset_weights.to(logits.device, torch.float32)
+        chunk = max(1, int(self.aff_chunk_size))
+
+        zero = logits.new_zeros((), dtype=torch.float32)
+        bce_sum = zero.clone()
+        focal_sum = zero.clone()
+        wmask_sum = zero.clone()
+        dice_inter = zero.clone()
+        dice_pm = zero.clone()
+        dice_tm = zero.clone()
+        # Complementary ("separate"/split-class) soft-Dice accumulators;
+        # only used when ``dice_two_sided`` is set.
+        ndice_inter = zero.clone()
+        ndice_pm = zero.clone()
+        ndice_tm = zero.clone()
+
+        cb = self.class_balance
+        need_probs = self.aff_lambda_focal > 0 or self.aff_lambda_dice > 0
+        for c0 in range(0, n, chunk):
+            c1 = min(c0 + chunk, n)
+            z = logits[:, c0:c1].float()
+            t = target[:, c0:c1].float()
+            p = z.sigmoid() if need_probs else None
+            cw = ch_w[c0:c1].view(1, -1, 1, 1, 1)
+            # Base per-voxel weight = validity mask * pull/push channel weight.
+            vm = torch.ones_like(z) if mask is None else mask[:, c0:c1].float()
+            wm_full = vm * cw
+
+            # Per-offset class rebalancing folded in as a per-voxel multiplier.
+            # Each offset lives entirely in one chunk, so the per-offset
+            # statistics are independent of ``chunk`` -> chunk-invariant.
+            if cb is not None:
+                if cb == "auto":
+                    dims = (0, 2, 3, 4)
+                    tot = vm.sum(dim=dims).clamp_min(1.0)
+                    pos = (t * vm).sum(dim=dims)
+                    f = (pos / tot).clamp(self.eps, 1.0 - self.eps)
+                    w_pos = (0.5 / f).clamp(max=self.class_balance_clip)
+                    w_neg = (0.5 / (1.0 - f)).clamp(max=self.class_balance_clip)
+                    cls_w = (
+                        t * w_pos.view(1, -1, 1, 1, 1)
+                        + (1.0 - t) * w_neg.view(1, -1, 1, 1, 1)
+                    )
+                else:  # fixed multiplier on the positive ("merge") class
+                    cls_w = t * float(cb) + (1.0 - t)
+                wm_full = wm_full * cls_w
+            wmask_sum = wmask_sum + wm_full.sum()
+
+            if self.aff_lambda_bce > 0:
+                bce = F.binary_cross_entropy_with_logits(
+                    z, t, reduction="none",
+                )
+                bce_sum = bce_sum + (bce * wm_full).sum()
+
+            if self.aff_lambda_focal > 0:
+                pc = p.clamp(self.eps, 1.0 - self.eps)
+                p_t = t * pc + (1.0 - t) * (1.0 - pc)
+                focal = (1.0 - p_t).pow(self.aff_gamma) * (-p_t.log())
+                if self.focal_alpha is not None:
+                    a = self.focal_alpha
+                    focal = focal * ((1.0 - t) * a + t * (1.0 - a))
+                focal_sum = focal_sum + (focal * wm_full).sum()
+
+            if self.aff_lambda_dice > 0:
+                pm = p * wm_full
+                dice_inter = dice_inter + (pm * t).sum()
+                dice_pm = dice_pm + pm.sum()
+                dice_tm = dice_tm + (t * wm_full).sum()
+                if self.dice_two_sided:
+                    qm = (1.0 - p) * wm_full
+                    s = 1.0 - t
+                    ndice_inter = ndice_inter + (qm * s).sum()
+                    ndice_pm = ndice_pm + qm.sum()
+                    ndice_tm = ndice_tm + (s * wm_full).sum()
+
+        denom = wmask_sum.clamp_min(1.0)
+        total = zero.clone()
+        if self.aff_lambda_bce > 0:
+            total = total + self.aff_lambda_bce * bce_sum / denom
+        if self.aff_lambda_focal > 0:
+            total = total + self.aff_lambda_focal * focal_sum / denom
+        if self.aff_lambda_dice > 0:
+            pos_dice = 1.0 - (2.0 * dice_inter + self.dice_eps) / (
+                dice_pm + dice_tm + self.dice_eps
+            )
+            if self.dice_two_sided:
+                neg_dice = 1.0 - (2.0 * ndice_inter + self.dice_eps) / (
+                    ndice_pm + ndice_tm + self.dice_eps
+                )
+                dice = 0.5 * (pos_dice + neg_dice)
+            else:
+                dice = pos_dice
+            total = total + self.aff_lambda_dice * dice
+        return total
+
+    def _loss_sem(
+        self, logits: torch.Tensor, labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Composite Dice + BCE + Focal on the binary foreground head.
+
+        ``logits`` are the raw (pre-sigmoid) ``sem`` head outputs;
+        :class:`DiceBCEFocalLoss` applies the logit-stable BCE and
+        sigmoids internally for its Dice / focal terms.
+        """
+        target = rearrange((labels > 0).float(), "b ... -> b 1 ...")
+        valid = rearrange(
+            (labels != self.ignore_index).float(), "b ... -> b 1 ...",
+        )
+        return self._sem_loss(logits, target, mask=valid)
+
+    def _loss_raw(
+        self, pred: torch.Tensor, raw_image: torch.Tensor,
+    ) -> torch.Tensor:
+        """Dense L1 / MSE reconstruction of the (normalised) input image.
+
+        ``pred`` is the linear ``raw`` channel; the target is the input
+        EM intensity, taken as-is (no clamp) so a faithfully-normalised
+        input drives a faithful regression.
+        """
+        if raw_image.dim() == pred.dim() - 1:
+            raw_image = rearrange(raw_image, "b ... -> b 1 ...")
+        return self._raw_fn(pred.float(), raw_image.detach().to(torch.float32))
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def canonical_loss_keys(self) -> list:
+        """Loss-dict keys :meth:`forward` always emits for this config.
+
+        Gated purely by ``weight_* > 0`` (never by batch content), so the
+        key set is identical on every DDP/FSDP rank -- the eval loop
+        pre-seeds these into its accumulator for a deterministic
+        cross-rank reduction (no ``all_gather_object``).
+        """
+        keys: list = ["loss"]
+        if self.weight_aff > 0:
+            keys.append("loss/aff")
+        if self.weight_sem > 0:
+            keys.append("loss/sem")
+        if self.weight_raw > 0:
+            keys.append("loss/raw")
+        return keys
+
+    def forward(
+        self,
+        head: torch.Tensor,
+        targets: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """Run the affinity + foreground sub-losses and aggregate.
+
+        Args:
+            head: ``[B, HEAD_CHANNELS, D, H, W]`` raw-logit head (aff / sem
+                are logits; raw is linear).
+            targets: Dict with ``labels`` ``[B, D, H, W]`` integer ids and
+                (optionally) a ``_cached_targets`` dict from
+                :meth:`build_targets`.  An optional ``sem_label`` (same shape
+                as ``labels``) supervises the ``sem`` head instead of
+                ``labels`` -- used for boundary-eroded foreground targets that
+                must not perturb the affinity target; falls back to ``labels``.
+
+        Returns:
+            ``{"loss", "loss/aff", "loss/sem", "loss/raw"}`` (per-field entries only for
+            active fields).
+        """
+        if head.shape[1] != self.head_channels:
+            raise ValueError(
+                f"AffinityFGLoss expects head with {self.head_channels} "
+                f"channels; got {head.shape[1]}."
+            )
+        labels = targets["labels"]
+        cached: Dict[str, torch.Tensor] = targets.get("_cached_targets") or {}
+        out: Dict[str, torch.Tensor] = {}
+        total = head.new_zeros(())
+
+        if self.weight_aff > 0:
+            aff_target = cached.get("aff")
+            aff_mask = cached.get("aff_mask")
+            if aff_target is None:
+                aff_target = affinity_target_from_offsets(
+                    labels.long(), self.offsets, background=self.background,
+                )
+                if self.mask_to_foreground:
+                    aff_mask = affinity_validity_mask(labels > 0, self.offsets)
+            l_aff = self._loss_aff(head[:, self.aff_slice], aff_target, aff_mask)
+            out["loss/aff"] = l_aff
+            total = total + self.weight_aff * l_aff
+
+        if self.weight_sem > 0:
+            # Optional boundary-eroded foreground label for the sem head only
+            # (the affinity target above always uses the pristine instance
+            # ``labels``).  Falls back to ``labels`` when not provided.
+            sem_labels = targets.get("sem_label")
+            if sem_labels is None:
+                sem_labels = labels
+            l_sem = self._loss_sem(head[:, self.sem_slice], sem_labels)
+            out["loss/sem"] = l_sem
+            total = total + self.weight_sem * l_sem
+
+        if self.weight_raw > 0:
+            raw_image = targets.get("raw_image")
+            if raw_image is None:
+                raise KeyError(
+                    "AffinityFGLoss requires `targets['raw_image']` when "
+                    "weight_raw > 0; pass the normalised input image."
+                )
+            l_raw = self._loss_raw(head[:, self.raw_slice], raw_image)
+            out["loss/raw"] = l_raw
+            total = total + self.weight_raw * l_raw
+
+        out["loss"] = total
+        return out
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"channels={self.num_channels}, n_offsets={len(self.offsets)}, "
+            f"n_pull={self.n_pull}, "
+            f"weight_aff={self.weight_aff}, weight_sem={self.weight_sem}, "
+            f"weight_raw={self.weight_raw}, "
+            f"class_balance={self.class_balance}, "
+            f"dice_two_sided={self.dice_two_sided})"
+        )
+
+
+__all__ = ["AffinityFGLoss"]

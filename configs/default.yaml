@@ -1,0 +1,233 @@
+# =====================================================================
+# Nanocosmos -- root config (`default`)
+# =====================================================================
+# Inheritance chain
+# -----------------
+#   default        <-- you are here
+#     └── snemi3d  (CosmosTransfer3D + SNEMI3D / neurons / MICrONS)
+#           └── combine   (drops AC4 from train, keeps it in val)
+#
+# Every concrete recipe inherits from this file via ``defaults: [- default]``
+# (or transitively through ``snemi3d`` / ``combine``).  Keys here are the
+# safe, dataset-agnostic defaults; per-recipe tuning lives in the child.
+#
+# To see the exact merged tree for any recipe::
+#
+#   python scripts/show_config.py --config-name <recipe>
+# =====================================================================
+
+# Experiment metadata
+experiment_name: nanocosmos
+project_name: nanocosmos
+seed: 42
+
+# Logging configuration
+logger: tensorboard  # Options: tensorboard, wandb
+
+# Optional: weights-only warm start (loaded *before* trainer.fit).
+# Pass via the CLI (e.g. ``+ckpt_path=outputs/<run>/checkpoints/last.ckpt``)
+# or set here directly.  Mutually exclusive with
+# ``training.resume_from_checkpoint`` (full-state Lightning resume).
+#
+# Companion filters (only meaningful when ``ckpt_path`` is set):
+# * ``ckpt_path_skip_prefixes`` drops any saved key starting with one of
+#   the listed prefixes -- use when the live model has submodules that
+#   should keep their fresh init (e.g. pretrained HF DiT, a newly-added
+#   ControlNet branch).
+#     +ckpt_path_skip_prefixes='[model.dit.,model.controlnet.]'
+# * ``ckpt_path_only_prefixes`` is the inverse allowlist: keep *only*
+#   keys matching one of the listed prefixes.
+#     +ckpt_path_only_prefixes='[model.feature_projector.,model.decoder_adapter.]'
+# The two filters are mutually exclusive.
+ckpt_path: null
+ckpt_path_skip_prefixes: null
+ckpt_path_only_prefixes: null
+
+# Data configuration
+data:
+  dataset: snemi3d  # Options: snemi3d, microns, neurons
+  data_root: data
+  batch_size: 4
+  num_workers: 16
+  cache_rate: 0.5
+  pin_memory: true
+  image_size: null
+  slice_mode: true
+  num_samples: null
+  find_boundaries: 0.0
+  elastic_prob: 0.0            # probability of 3-D elastic deformation (0 = off)
+  elastic_sigma_range: [35, 50]       # Gaussian smoothing σ — high = sparse, smooth warp
+  elastic_magnitude_range: [10, 40]   # displacement magnitude range (kept low for gentle warps)
+  resolution_zoom_prob: 0.0   # probability of random resolution zoom (0 = off)
+  resolution_zoom_range: null # per-axis [[z_min,z_max],[y_min,y_max],[x_min,x_max]] in nm; null = [30,40],[6,8],[6,8]
+  resolution_map: null  # prefix→[Z,Y,X] nm for per-volume native resolution; null = use pixel_size for all
+  # Keep false on multi-GPU jobs if host RAM is tight (each rank × num_workers processes).
+  persistent_workers: true
+  train_volumes: null  # List of {vol, seg} dicts; null = dataset defaults
+  val_volumes: null    # Defaults to train_volumes
+  test_volumes: null   # Defaults to train_volumes
+
+# Model configuration
+model:
+  type: cosmos3nano3d  # Options: cosmos3nano3d, cosmostransfer3d, cosmospredict3d, vista3d
+  # Backbone variant.  cosmos3nano3d -> "Nano" (16B, the only published
+  # Cosmos 3 generator); cosmos{transfer,predict}3d -> "2B" / "14B".
+  variant: Nano
+  in_channels: 1
+  # Affinity + sem + raw head (HEAD_CHANNELS = N_AFF + 2 = 16):
+  #   aff(N_AFF=14 offsets) + sem(1) + raw(1).  aff + sem are sigmoid;
+  #   raw is linear.  The affinities are agglomerated into instances by
+  #   the Mutex Watershed at eval (see training.mutex_watershed).
+  head_channels: 16
+  feature_size: 64
+  dropout: 0.2
+  # If true, the wrapper will auto-pull pretrained weights from HuggingFace
+  # on first instantiation:
+  #   cosmos3nano3d    -> nvidia/Cosmos3-Nano        (16B omni MoT; BF16 only)
+  #   cosmostransfer3d -> nvidia/Cosmos-Transfer2.5-2B
+  #   cosmospredict3d  -> nvidia/Cosmos-Predict2.5-2B
+  #   vista3d          -> MONAI/VISTA3D-HF
+  # Downloads are cached under ~/.cache/nanocosmos/.  Set to false to
+  # train from scratch.
+  # NOTE: cosmos3nano3d needs a bleeding-edge ``diffusers`` (>= 0.37,
+  # currently git main) that exposes ``Cosmos3OmniTransformer``.
+  pretrained: true
+
+# Optimizer configuration
+# Algorithm is hard-coded to AdamW in `BaseCosmosModule.configure_optimizers` /
+# `BaseVistaModule.configure_optimizers`; this block tunes its hyperparameters
+# and the LR scheduler wrapper (`_maybe_wrap_scheduler` in modules/base.py).
+optimizer:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  scheduler:
+    type: cosine
+    T_max: 100
+    eta_min: 1.0e-6
+
+# Loss configuration -- AffinityFGLoss (affinity + sem + raw head).
+#
+# Each ``weight_<head>`` is either a scalar (head's overall weight; all
+# sub-loss kwargs default) OR a mapping ``{weight: ..., <kwarg>: ...}``
+# whose entries are forwarded to the head's sub-loss.  A nested mapping
+# without ``weight:`` defaults to ``weight: 1.0``; set ``weight: 0`` to
+# disable a head entirely.
+loss:
+  ignore_index: -100              # sem label value masked from the sem target
+  background: -1                  # aff target background mask; -1 = keep every voxel
+
+  # Affinity head (per-offset P(same instance)).  Masked BCE + soft-Dice
+  # (+ optional focal) within the fg-fg validity mask; ``pull_weight``
+  # / ``push_weight`` rebalance the nn vs long-range offset groups.
+  weight_aff:
+    weight: 1.0
+    lambda_bce: 1.0
+    lambda_dice: 1.0
+    lambda_focal: 0.0
+    gamma: 2.0
+    pull_weight: 1.0
+    push_weight: 1.0
+    mask_to_foreground: true
+  # Foreground (semantic) head: sigmoid + composite Dice + BCE + Focal
+  # vs ``labels > 0``.  ``gamma=0`` collapses Focal to plain BCE.
+  weight_sem:
+    weight: 1.0
+    lambda_bce: 1.0
+    lambda_dice: 1.0
+    lambda_focal: 1.0
+    gamma: 2.0
+  # Raw reconstruction head: linear L1 / MSE regression of the
+  # (normalised) input EM intensity.
+  weight_raw:
+    weight: 1.0
+    loss: l1
+
+# Training configuration
+training:
+  # Validation-time agglomeration: Mutex Watershed over the predicted
+  # affinities (parameter-free; non-differentiable; GPU mws_cp by default
+  # on CUDA inputs, exact numpy/numba mws_np fallback).
+  # ``offsets`` / ``n_pull`` default to the loss's; leave unset
+  # unless you override ``AFFINITY_OFFSETS`` in
+  # ``nanocosmos/losses/_common.py``.  ``strides`` subsamples the
+  # push (long-range) edges only (throughput lever); ``size_filter``
+  # drops components smaller than N voxels.
+  mutex_watershed:
+    strides: [1, 4, 4]                  # [Z, Y, X]; dense Z, sparse in-plane
+    size_filter: 50
+  max_epochs: 100
+  accelerator: auto  # Options: cpu, gpu, tpu, auto
+  devices: auto
+  strategy: ddp  # Explicit DDP for even GPU memory distribution; bf16-mixed is recommended
+  precision: bf16-mixed  # Options: 32-true, 16-mixed, bf16-mixed
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  limit_val_batches: 10
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 2
+  log_every_n_steps: 50
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  # torch.compile on the DiT backbone (Cosmos-only; no-op on Vista).
+  # false/null = off; true = "reduce-overhead" (~1 min compile);
+  # "max-autotune" = best runtime but 5-15 min first compile.
+  compile: false
+  compile_fullgraph: false
+  fast_dev_run: false
+  profiler: null  # Options: null, simple, advanced, pytorch
+  # Full Lightning resume (optimizer, epoch, schedulers). Prefer this after crashes.
+  resume_from_checkpoint: null
+
+# Callbacks configuration
+callbacks:
+  checkpoint:
+    enabled: true
+    dirpath: null
+    # Scalar tags live under ``{stage}/{mode}/...`` — see
+    # ``nanocosmos/modules/base.py`` for the full hierarchy.
+    filename: "{epoch:02d}-{val/automatic/loss:.4f}"
+    save_top_k: 3
+    monitor: val/automatic/loss
+    mode: min
+    save_last: true
+    verbose: true
+
+  early_stopping:
+    enabled: false
+    monitor: val/automatic/loss
+    patience: 20
+    mode: min
+    verbose: true
+    min_delta: 0.0
+
+  lr_monitor:
+    enabled: true
+
+  image_logger:
+    enabled: true
+    every_n_epochs: 1
+    max_images: 4
+    # Panels (rank 0, epoch end): true/image, true/label, true/aff/*,
+    # pred/sem, pred/raw, pred/aff/*, and the Mutex Watershed instance
+    # segmentation pred/label/{pre,mul}.  See
+    # ``nanocosmos/callbacks/tensorboard/heads.py``.
+
+  # Clear the CUDA allocator cache on *both* sides of validation
+  # (before + after).  Helps large 3-D models at the train/val boundary
+  # by stopping the val-time peak from staying reserved in the training
+  # pool across epochs.
+  cuda_empty_cache_before_val: false
+
+  # Log CUDA memory to TensorBoard under ``cuda_memory/*``.  Use to
+  # diagnose slow drift toward OOM:
+  #   - ``allocated_gb`` flat, ``reserved_gb`` rising → fragmentation
+  #     (re-launch with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True).
+  #   - both rising → tensor leak; chase callback / image-logger refs.
+  #   - sawtooth tied to val epochs → val peak polluting train pool;
+  #     turn on ``cuda_empty_cache_before_val`` above.
+  memory_logger:
+    enabled: true
+    log_every_n_steps: null  # null → inherit ``training.log_every_n_steps``

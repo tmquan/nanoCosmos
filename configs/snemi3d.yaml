@@ -1,0 +1,629 @@
+# =====================================================================
+# SNEMI3D + Neurons + MICrONS  --  Cosmos3Nano3D training config
+# =====================================================================
+# Inheritance chain:  default <- snemi3d
+#
+# Trains Cosmos3Nano3D jointly on three EM datasets at a harmonised
+# resolution so a single model sees all three:
+#
+#   Dataset    Native res (Z, Y, X nm)   Source
+#   --------   -----------------------   --------------------------------
+#   SNEMI3D    30 x 6 x 6                scripts/download_snemi3d.py
+#   neurons    30 x 6 x 6                scripts/download_snemi3d.py
+#   MICrONS    40 x 8 x 8                scripts/download_microns.py
+#
+# `data.resolution_zoom_*` rescales every crop into the joint target
+# range Z = 30-40 nm, XY = 6-8 nm so the three sources are interchangeable.
+#
+# Splits used below:
+#   train : AC4 + 2 neurons cylinders + 10 MICrONS minnie65 crops
+#   val   : AC4 + 2 neurons cylinders + 2  MICrONS minnie65 crops
+#          (the SNEMI3D-family entries overlap with ``train`` -- only
+#          the MICrONS crops are held out; see the ``val_volumes``
+#          comment block below for the rationale)
+#   test  : same as val
+#
+# Quick start
+# -----------
+#   python scripts/train.py --config-name snemi3d
+#   python scripts/train.py --config-name snemi3d data.batch_size=8
+#
+# Resuming a crashed run.  ``scripts/train.py`` overwrites
+# ``cfg.output_dir`` with the timestamped run directory it just
+# created, so the resume path printed at the top of the log is the
+# **flat** ``<run_dir>/checkpoints/last.ckpt`` (the run directory line
+# in the log is the literal value to use here)::
+#
+#   python scripts/train.py --config-name snemi3d \
+#     training.resume_from_checkpoint=<run_dir>/checkpoints/last.ckpt
+#
+# Same-architecture weights-only warm start.  Use ``+ckpt_path=`` when
+# you want to seed a fresh run with the weights of an existing snemi3d
+# checkpoint but discard the optimiser / scheduler / RNG state (e.g.
+# starting a new sweep on top of trained weights).  The default
+# ``ckpt_path_skip_prefixes: []`` below loads every overlapping key,
+# including the trained ``model.dit.*``::
+#
+#   python scripts/train.py --config-name snemi3d \
+#     +ckpt_path=<run_dir>/checkpoints/last.ckpt
+#
+# Cross-architecture warm start.  When the saved ``last.ckpt`` was
+# trained with a different backbone (e.g. a Cosmos 2.5 Predict/Transfer
+# run, whose ``model.dit.*`` is a different transformer entirely, or a
+# Transfer run carrying a ``model.controlnet.*`` branch this wrapper
+# does not have), or when you want to wipe a co-adapted transformer and
+# fall back to the freshly-pulled HF base, add the skip list on the
+# CLI::
+#
+#   python scripts/train.py --config-name snemi3d \
+#     +ckpt_path=<run_dir>/checkpoints/last.ckpt \
+#     +ckpt_path_skip_prefixes=[model.dit.]
+# =====================================================================
+
+defaults:
+  - default
+
+experiment_name: snemi3d
+project_name: nanocosmos
+output_dir: outputs
+
+
+# ---------------------------------------------------------------------
+# Checkpoint loading policy (weights-only warm start)
+# ---------------------------------------------------------------------
+# Source-of-truth for ``+ckpt_path=...`` loads on this recipe.  Only
+# consulted by ``scripts/train.py::_resolve_checkpoint`` when
+# ``+ckpt_path=`` is set on the CLI; the default training paths
+# (fresh run, ``training.resume_from_checkpoint=...`` full Lightning
+# resume) ignore this key entirely.
+#
+# Default behaviour with the empty list below: every overlapping key
+# in the ckpt's ``state_dict`` is loaded (``strict=False``); any key
+# only present in the freshly-constructed module keeps its fresh init,
+# any key only present in the ckpt is logged as unexpected and
+# dropped.
+#
+# This default assumes a **same-architecture** warm start (current
+# Cosmos-Predict 2.5 wrapper on both sides), where the saved
+# ``model.dit.*`` has already been trained on this data by
+# ``freeze_dit_backbone: N`` (see ``model.freeze_dit_backbone`` below)
+# and is therefore *more* useful than the fresh HF base.
+#
+# For a **cross-architecture** warm start (e.g. migrating from the
+# older Cosmos-Transfer wrapper, which carried a ``model.controlnet.*``
+# branch this Predict wrapper does not) or any other case where you
+# want the freshly-pulled HF base DiT to win over the ckpt's DiT,
+# pass the skip list on the CLI::
+#
+#   +ckpt_path_skip_prefixes=[model.dit.]
+#
+# (The argument can list multiple prefixes; ControlNet migrations also
+# typically want ``model.controlnet.`` skipped if the source ckpt has
+# it.)
+# ---------------------------------------------------------------------
+ckpt_path_skip_prefixes: []
+
+
+# ---------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------
+data:
+  dataset: snemi3d
+  data_root: data/SNEMI3D
+
+  # ---- Loader & batching ----
+  # NOTE: cut from 4 to 2 because ``model.input_supersample: 2`` quadruples
+  # the in-plane latent voxels (~4x DiT tokens + VAE work).  Raise back
+  # toward 4-8 if you set ``input_supersample: 1``.
+  batch_size: 2
+  # Validation/test batch size.  The eval path runs a full-resolution
+  # decode + the Mutex Watershed + contingency-matrix metrics on top of
+  # the forward, so its per-batch peak exceeds the train step.  Under DDP
+  # a too-large val batch can tip one rank into OOM, which kills that rank
+  # and corrupts the survivors' epoch-end reduction.  Keep val modest to
+  # stay under the per-GPU ceiling; raise once you've confirmed headroom.
+  # (A per-batch OOM is also caught and skipped -- see
+  # ``BaseCircuitModule._eval_step_and_accumulate``.)  Pinned to 1 under
+  # ``input_supersample: 2``.
+  val_batch_size: 2
+  num_workers: 8
+  # persistent_workers=true keeps the DataLoader worker pool alive across
+  # epochs: disabling it re-spawns the forkserver pool every epoch and
+  # re-pays the MONAI transform-setup cost on every restart.  Set false
+  # only if host RAM is tight (each rank holds num_workers processes).
+  persistent_workers: true
+  pin_memory: true
+  # cache_rate=0: LazyVolDataset bypasses MONAI's CacheDataset path
+  # entirely (~0 MB base RAM per rank per the loader log), so the knob is
+  # effectively a no-op here -- kept explicit for clarity.
+  cache_rate: 0.0
+  # prefetch_factor=2 (PyTorch's documented default for
+  # ``DataLoader``).  Per-rank steady-state in-flight budget:
+  #   in_flight_batches/rank = num_workers * prefetch_factor = 8*2 = 16
+  # ``AffinityFGLoss`` builds its affinity / sem targets in-module from
+  # ``label`` (the affinity stack is uint8 and lives on-GPU, not in the
+  # loader), so each in-flight item carries only ``image`` + ``label``
+  # at 80x256x256 -- a light loader footprint.  Picking ``2`` over ``1``
+  # keeps one extra batch queued per worker so a momentarily-slow
+  # transform doesn't stall the GPU step; drop to ``1`` to claw back a
+  # little host RAM if the loader is no longer the bottleneck.
+  prefetch_factor: 2
+
+  # ---- Sampling & patch geometry ----
+  slice_mode: false               # false = volumetric crops; true = 2-D slices
+  num_samples: 16000              # crops drawn per epoch (across all volumes)
+  patch_size: [80, 256, 256]      # (Z, Y, X) voxels
+  min_foreground: 0.80            # reject crops with <80% foreground voxels
+  find_boundaries: 1.0            # probability of computing instance boundaries
+
+  # ---- Resolution harmonisation ----
+  # SNEMI3D / neurons are 30x6x6 nm, MICrONS is 40x8x8 nm.  We zoom each
+  # crop into the joint range below so one model can train on all three.
+  pixel_size: [30, 6, 6]                              # (Z, Y, X) nm — base / SNEMI3D
+  resolution_zoom_prob: 1.0                           # always apply (joint training)
+  resolution_zoom_range: [[30, 40], [6, 8], [6, 8]]   # target per-axis nm range
+  resolution_map:                                     # volume-prefix -> native nm
+    AC:       [30, 6, 6]
+    neurons:  [30, 6, 6]
+    minnie65: [40, 8, 8]
+
+  # Elastic deformation is disabled here; uncomment to enable.
+  # elastic_prob: 0.0
+  # elastic_sigma_range: [5, 8]
+  # elastic_magnitude_range: [50, 150]
+
+  # -------------------------------------------------------------------
+  # Train volumes
+  # -------------------------------------------------------------------
+  # Each entry pairs a raw `vol` with its instance-`seg` label volume,
+  # both stored under `root`.  MICrONS volume names embed the (x, y, z)
+  # crop origin -- the comment column is just that origin for at-a-glance
+  # scanning.
+  # -------------------------------------------------------------------
+  train_volumes:
+    # --- SNEMI3D (30x6x6 nm) ---
+    # AC4: SNEMI3D train block, 1024 x 1024 x 100, 401 instance IDs.
+    #   Download: python scripts/download_snemi3d.py --source snemi
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+
+    # neurons: fully-annotated cylinder, same 30x6x6 nm resolution.
+    #   Download: python scripts/download_snemi3d.py --source neurons
+    - vol: neurons_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+
+    - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+
+    # --- MICrONS minnie65 (40x8x8 nm, 4096x4096x800 crops) ---
+    #   Download: python scripts/download_microns.py --split
+    - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume          # train01
+      seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume         # train02
+      seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume          # train03
+      seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume         # train04
+      seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume          # train05
+      seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume          # train06
+      seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume         # train07
+      seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume          # train08
+      seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume         # train09
+      seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume          # train10
+      seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
+      root: data/MICRONS
+
+  # -------------------------------------------------------------------
+  # Val / test volumes
+  # -------------------------------------------------------------------
+  # ``val_volumes`` and ``test_volumes`` are the same list (anchored
+  # via ``&eval_volumes`` / ``*eval_volumes`` below).  Only the two
+  # MICrONS minnie65 crops are held out from training; the three
+  # SNEMI3D-family entries (AC4 + the two neurons / neurite11
+  # cylinders) are deliberately shared with ``train_volumes`` so the
+  # val-time Mutex Watershed / image-logger panels stay anchored to the same
+  # cropped neighbourhoods we see in training (cheap eyeball check
+  # against memorisation -- a healthy run still produces qualitatively
+  # different predictions per crop because each val draw is a fresh
+  # ``RandSpatialCropd`` sample).
+  # -------------------------------------------------------------------
+  val_volumes: &eval_volumes
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+    - vol: neurons_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+    - vol: neurite11_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurite11_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+    - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume          # test01
+      seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+      root: data/MICRONS
+    - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume         # test02
+      seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+      root: data/MICRONS
+
+  test_volumes: *eval_volumes
+
+
+# ---------------------------------------------------------------------
+# Model -- Cosmos3Nano3D (Cosmos3-Nano omni transformer, no ControlNet)
+# ---------------------------------------------------------------------
+# Cosmos 3 (Nano) is NVIDIA's 16B omnimodal world model.  Its generator
+# is a Mixture-of-Transformers (``Cosmos3OmniTransformer``) that jointly
+# handles text / image / video / audio / action; we drive only its
+# diffusion (video) tower as a feature extractor and feed null
+# conditioning for every other modality.  Loaded from
+# ``nvidia/Cosmos3-Nano`` @ ``main`` (transformer + Wan2.2-TI2V VAE
+# subfolders only; the omni sub-towers are skipped at download time):
+#
+#   self.dit  -- ``Cosmos3OmniTransformer`` (~16 B params), the only
+#                transformer branch.  Whether it trains depends on
+#                ``freeze_dit_backbone`` below.  Kept on the ``self.dit``
+#                attribute so the ``model.dit.*`` optimiser split,
+#                freeze schedule and ckpt skip-list all still apply.
+#
+# The Wan VAE latent (48-channel, 16x spatial / 4x temporal) feeds the
+# omni transformer alone (no auxiliary control signal).  See
+# ``nanocosmos/models/cosmos_3_nano/`` for the wrapper and
+# ``nanocosmos/models/cosmos_2_5_common/`` for the shared scaffolding.
+#
+# Requires a bleeding-edge ``diffusers`` (>= 0.37, currently git main)
+# that exposes ``Cosmos3OmniTransformer``; Cosmos 3 is BF16-only.
+# ---------------------------------------------------------------------
+model:
+  type: cosmos3nano3d
+  variant: "Nano"
+  dtype: "bf16"
+  pretrained: true                # auto-pulls nvidia/Cosmos-Predict2.5-2B from HF
+
+  # Affinity + sem + raw output head (must match
+  # nanocosmos.losses._common.HEAD_CHANNELS = N_AFF + 2):
+  in_channels: 1                  # raw EM input -> 1 channel
+  # aff(N_AFF=14 offsets: 3 pull nn + 11 push long-range)
+  # + sem(1, sigmoid foreground) + raw(1, linear L1 reconstruction) = 16.
+  # aff + sem are sigmoid probabilities (the affinities are agglomerated
+  # into instances by the Mutex Watershed at eval time -- see
+  # training.mutex_watershed below); raw is the linear input-recon channel.
+  head_channels: 16
+  feature_size: 64
+
+  # --- Effective latent resolution (membrane sharpness) ---
+  # The pretrained Cosmos VAE has a FIXED 8x in-plane spatial compression,
+  # so a 1-voxel membrane lands inside one latent cell and the decode is
+  # blurry -> soft affinities -> Mutex Watershed under-segmentation.
+  # ``input_supersample`` upsamples the EM in-plane *before* the VAE, so
+  # the latent grid is ``input/8`` of a larger image: at 2 the latent is
+  # H/4, W/4 of the original (vs H/8, W/8 at 1) -- 2x finer per membrane.
+  # Cost: ~factor^2 more DiT tokens + VAE work (Z is left alone, matching
+  # anisotropy), so cut ``data.batch_size`` to fit.  ``1`` disables.
+  input_supersample: 1            # 2 -> latent H/4, W/4 (was H/8, W/8)
+  # Full-resolution input skip into the head: routes the raw EM's sharp
+  # edges *around* the VAE bottleneck and fuses them before the head.
+  # Independent of input_supersample; can be combined.  Disabled here so
+  # the supersample experiment is isolated.
+  highres_skip: false
+  highres_skip_channels: 8
+  # Scale the VAE-encode input [0,1]->[-1,1] to match AutoencoderKLWan's
+  # pretrained range (it normalizes [0,1]->[-1,1] before encode()).  Feeding
+  # [0,1] washes out the reconstruction (see true/wan_decoder panel).  Shifts
+  # the latent distribution -> fresh-run setting (old [0,1] checkpoints will
+  # not resume cleanly with it on).
+  vae_input_pm1: true
+
+  # What to freeze.  Cosmos 3 has no ControlNet residual branch to
+  # absorb the trainable load, so leaving the omni transformer
+  # permanently frozen would mean only the heads + last VAE-decoder
+  # up-block train.  ``freeze_dit_backbone`` accepts three forms (parsed
+  # by ``nanocosmos/models/cosmos_2_5_common/wrapper_base.py::
+  # _resolve_freeze_dit_backbone``):
+  #
+  #   true  -> base transformer permanently frozen (heads-only training;
+  #            only ~1M params receive gradients).
+  #   false -> base transformer permanently trainable from step 0; the
+  #            ``model.dit.*`` param group picks up
+  #            ``optimizer.dit_backbone_lr`` (10x lower than the head
+  #            ``optimizer.lr``).
+  #   N (int, >= 0) -> transformer frozen for epochs ``0..N-1``, thawed
+  #            at the start of epoch ``N``.  ``N == 0`` is equivalent to
+  #            ``false``.  The param group is included in the optimizer
+  #            up front (with zero-grad no-op steps while frozen) so the
+  #            thaw doesn't disturb the LR scheduler -- see
+  #            ``nanocosmos/modules/cosmos_2_5_common/base.py::
+  #            on_train_epoch_start``.  Negative ints or non-bool /
+  #            non-int values raise at construction.
+  freeze_vae_encoder: true
+  # Current value: heads-only warm-up for 2 epochs, then a fine-tune of
+  # the 16B omni transformer from epoch 2 onwards.  WARNING: end-to-end
+  # fine-tuning a 16B backbone is very memory-heavy -- prefer ``true``
+  # (heads-only) unless you have the budget, and turn on
+  # ``gradient_checkpointing`` below if you thaw it.  The 2-epoch
+  # warm-up also shrinks the cold first multi-GPU all-reduce from ~16B
+  # params to the head group, giving the NCCL fabric a small warm-up
+  # collective before the big reductions start (the failure mode that
+  # motivated the NCCL env block at the top of ``scripts/train.py``).
+  # Lines up with ``optimizer.scheduler.warmup_epochs: 2`` so the
+  # transformer unfreezes exactly when the head LR finishes its linear
+  # warm-up.  Flip to ``true`` for a heads-only run.
+  #
+  # ``false`` = end-to-end training of the 15.2B omni transformer.  This
+  # only fits with FSDP FULL_SHARD (``training.strategy: fsdp`` below),
+  # which shards weights/grads/optimizer ~8x across ranks (~17 GB/rank).
+  # Under plain DDP this OOMs (~265 GB/rank, replicated) -- switch to
+  # ``true`` (heads-only) if you ever run on DDP.
+  freeze_dit_backbone: false
+  freeze_vae_decoder: true
+
+  # End-to-end training of the 15.2B omni transformer is only feasible
+  # with FSDP FULL_SHARD (``training.strategy: fsdp`` below) AND
+  # activation checkpointing.  ``true`` here enables the wrapper's
+  # diffusers-native gradient checkpointing on the 36 decoder layers
+  # (trades ~20-30% step time for ~40% less activation memory).  It is
+  # hook-aware (recompute in backward is gated by ``_hooks_active``) and
+  # is used *instead of* FSDP ``activation_checkpointing_policy`` to
+  # avoid double-wrapping the same layers.
+  # Disabled for speed (saves the ~20-30% recompute tax).  The 2B
+  # Cosmos-Predict DiT fits comfortably under DDP at this batch size, so
+  # activation checkpointing is not needed here.  If you later OOM (e.g.
+  # bigger crops / batch), flip back to ``true`` or lower ``data.batch_size``.
+  gradient_checkpointing: true
+  dropout: 0.0
+
+
+# ---------------------------------------------------------------------
+# Callbacks (overrides on top of default.yaml)
+# ---------------------------------------------------------------------
+callbacks:
+  cuda_empty_cache_before_val: true   # avoids val-peak polluting train pool
+  image_logger:
+    # Train + val visualizations at epoch end.  Rank 0 writes the images,
+    # but the epoch-end forward runs on ALL ranks so FSDP all-gathers are
+    # satisfied (see the FSDP-safe note below).  Per-rank val memory is
+    # bounded by ``data.val_batch_size`` + the OOM guard in
+    # ``BaseCircuitModule._eval_step_and_accumulate``.
+    #
+    # FSDP-safe: the epoch-end forward runs on ALL ranks (so the model's
+    # per-layer FSDP all-gathers are satisfied), and only rank 0 writes the
+    # panels to TensorBoard (non-rank-0 bail right after the forward).  See
+    # ``ImageLogger`` -- this replaced the rank-0-only / ``summon_full_params``
+    # approach, which desynced the collectives and hung to a 1800s NCCL
+    # timeout.  Every rank pays one extra ``model(images[:max_images])`` +
+    # ``wan_decoder`` decode at epoch end, so keep ``max_images`` modest.
+    enabled: true
+    max_images: 4
+
+
+# ---------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------
+training:
+  max_epochs: 101
+  accelerator: auto
+  devices: auto
+  # FSDP FULL_SHARD so the 15.2B omni DiT shards weights/grads/optimizer
+  # across the 8 ranks (DDP replicates it -> ~265 GB/rank OOM).  The
+  # FSDPStrategy (see ``scripts/train.py::setup_strategy``) wraps only the
+  # Cosmos3 decoder-layer class, keeps the small fp32-origin heads / VAE in
+  # the unsharded root unit, and uses ``use_orig_params=True`` so the
+  # ``model.dit.*`` vs heads optimiser split still works.  Switch back to
+  # ``ddp`` for heads-only (``freeze_dit_backbone: true``) runs.
+  #
+  # FSDP FULL_SHARD: shards the 15.2B omni DiT's weights/grads/optimizer
+  # across the 8 ranks (~17 GB/rank) so end-to-end training fits; DDP
+  # would replicate it -> ~265 GB/rank OOM.  The FSDPStrategy (see
+  # ``scripts/train.py::setup_strategy``) wraps only the Cosmos3
+  # decoder-layer class, keeps the small fp32-origin heads / VAE in the
+  # unsharded root unit, and uses ``use_orig_params=True`` so the
+  # ``model.dit.*`` vs heads optimiser split still works.
+  # DDP replicates the 2B Cosmos-Predict DiT per rank (~fits on 80 GB at
+  # this batch size); FSDP is only needed for the 16B Cosmos3 backbone.
+  strategy: ddp
+  # ``bf16-mixed`` is the recommended DDP precision: params stay fp32 with
+  # an outer bf16 autocast over the step.  (``bf16-true`` is for the
+  # natively-bf16 Cosmos3 backbone under FSDP MixedPrecision.)
+  precision: bf16-true
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  limit_val_batches: 200
+  # Pre-training sanity validation.  Disabled (0): a sanity pass on the
+  # near-random init head gives no useful signal, and it would run the
+  # agglomeration on garbage affinities.  The GPU path (mws_cp) handles
+  # that in ~0.2s, but the CPU fallback (mws_np) does not -- so 0 keeps
+  # startup safe regardless of whether cupy is available on the node.
+  num_sanity_val_steps: 0
+  log_every_n_steps: 100
+  check_val_every_n_epoch: 20     # validate every 20 epochs (default 1)
+  benchmark: true
+
+  # torch.compile on the DiT backbone:
+  #   false / null     -> off
+  #   true             -> "reduce-overhead"  (~1 min compile, good runtime)
+  #   "max-autotune"   -> best runtime, but 5-15 min first-run compile
+  #   "default"        -> Inductor fusion, NO cudagraphs
+  #
+  # MUST stay false (or "default") for the cosmos3nano3d backbone.  Its
+  # feature extraction captures DiT block activations via forward hooks
+  # (``Cosmos3Nano3DWrapper._extract_features_hook``).  The cudagraph
+  # modes ("reduce-overhead" / "max-autotune") place those captured
+  # tensors in reused static graph memory, and the next graph replay
+  # overwrites them before they're stacked -> "accessing tensor output
+  # of CUDAGraphs that has been overwritten".  Cloning in the hook can't
+  # escape because the hook runs *inside* the captured graph.  Cudagraphs
+  # are fundamentally incompatible with hook-based intermediate capture,
+  # so use "default" if you want Inductor fusion (no cudagraphs), else
+  # false.  (The Cosmos-2.5 backbones tolerated "reduce-overhead" only
+  # because their captured tensors happened not to be cudagraph-managed.)
+  #
+  # Enabled for the Cosmos-Predict 2.5 (2B) backbone: as the note above
+  # records, the Cosmos-2.5 backbones tolerate "reduce-overhead"
+  # cudagraphs (their hook-captured tensors are not cudagraph-managed),
+  # unlike cosmos3nano3d which MUST stay false/"default".
+  compile: false
+  # compile_fullgraph=true forces a single monolithic Inductor compile
+  # of the 2B DiT (no graph breaks), which gives the best steady-state
+  # runtime but pays for it with a multi-minute first-step stall.
+  # Under DDP that stall is synchronous across ranks, and combined
+  # with the cold-train-loader first batch it can overshoot
+  # ``TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC`` -- which is why we already
+  # bump that env var to 1800s in ``scripts/train.py``.  Flip to
+  # ``false`` (the safer default) if the watchdog still fires before
+  # the first step lands: ``false`` lets Inductor compile
+  # incrementally with graph breaks, trading ~10% runtime for a much
+  # shorter first-step.
+  compile_fullgraph: false
+
+  # -------------------------------------------------------------------
+  # Validation-time agglomeration: Mutex Watershed
+  # -------------------------------------------------------------------
+  # The affinity head's per-offset predictions are turned into discrete
+  # instance IDs by the parameter-free Mutex Watershed (Wolf et al. 2018;
+  # ``nanocosmos/inference/mutex_watershed.py``).  Non-differentiable, eval /
+  # inference only.  ``backend`` selects the GPU cupy Boruvka (mws_cp,
+  # default on CUDA) or the exact numpy/numba core (mws_np); see below.
+  #
+  # ``offsets`` and ``n_pull`` default to the loss's (so the head,
+  # target, and agglomerator share one edge convention) -- leave them
+  # unset unless you also override ``AFFINITY_OFFSETS`` in
+  # ``nanocosmos/losses/_common.py``.
+  #
+  # Knobs:
+  #   strides      -- per-axis subsampling of the *push* (long-range)
+  #                   edges only; pull nn edges are always dense.
+  #                   Coarser strides => far fewer edges => much faster /
+  #                   lighter MWS.  Default ``[1, 4, 4]`` keeps Z dense
+  #                   (anisotropy) and takes every 4th in-plane.  This is
+  #                   a throughput lever, not an accuracy knob in the
+  #                   usual regime.
+  #   size_filter  -- connected components smaller than this many voxels
+  #                   are reset to background (despeckle).
+  # -------------------------------------------------------------------
+  mutex_watershed:
+    # Push-edge subsampling [Z, Y, X]: Z dense, every 2nd in-plane push.
+    # The fine [1,2,2] setting keeps more long-range mutex edges to cut
+    # true boundaries (fights under-seg), at the cost of a larger edge
+    # graph (~30M edges/crop) -- fine for the GPU mws_cp path here; if the
+    # CPU fallback (mws_np) is ever used at this stride, set max_push_edges
+    # or coarsen to [1,4,4] to bound the build.
+    strides: [1, 2, 2]             # [Z, Y, X]; dense Z, every 2nd in-plane push
+    size_filter: 50
+    # auto -> GPU torch Boruvka (mws_th, native zero-copy); cupy -> mws_cp
+    # (DLPack); cpu -> exact mws_np.  max_push_edges null = full edges.
+    backend: auto
+    buckets: 16
+    max_push_edges: null
+
+
+# ---------------------------------------------------------------------
+# Optimizer (algorithm hard-coded to AdamW; see modules/cosmos_2_5_common/base.py)
+# ---------------------------------------------------------------------
+optimizer:
+  lr: 2e-4                        # head / new-parameter LR
+  dit_backbone_lr: 2e-5           # 10x lower for the pretrained DiT backbone
+  # ``controlnet_lr`` is harmless on Cosmos-Predict (no ControlNet
+  # branch -> the param group is empty -> the value is ignored), but
+  # left here so flipping ``model.type`` to cosmostransfer3d doesn't
+  # also need an optimizer-section edit.
+  controlnet_lr: 2e-5
+                                  # (defaults to ``dit_backbone_lr`` if unset)
+  weight_decay: 1.0e-4
+  # Cosine schedule is built in
+  # ``nanocosmos/modules/base.py::_maybe_wrap_scheduler``: a 2-epoch
+  # LinearLR warm-up (``start_factor=0.01``), then a CosineAnnealingLR
+  # over ``max(T_max - warmup_epochs, 1) = 48`` epochs, stepped per
+  # epoch.  Note ``T_max: 50`` is shorter than ``training.max_epochs:
+  # 101`` -- the LR reaches ``eta_min`` around epoch 50 and stays
+  # pinned there for the remaining ~50 epochs (long low-LR refinement
+  # tail).  If you want the cosine to extend across the whole run,
+  # set ``T_max`` to ``training.max_epochs``.
+  scheduler:
+    type: cosine_warmup
+    warmup_epochs: 2
+    T_max: 101
+    eta_min: 1.0e-6
+
+
+# ---------------------------------------------------------------------
+# Loss
+# ---------------------------------------------------------------------
+# AffinityFGLoss = one affinity + sem + raw head scored by three terms.
+#
+# Channel layout (see ``nanocosmos/losses/_common.py::AFFINITY_OFFSETS``):
+#   aff: ch  0 .. N_AFF-1  -> sigmoid per-offset affinity P(label[v]==label[v+o])
+#   sem: ch  N_AFF          -> sigmoid foreground / boundary probability
+#   raw: ch  N_AFF + 1      -> linear  L1 reconstruction of the input EM
+#
+# The first ``N_PULL`` (3) offsets are the nearest-neighbour
+# pull edges (z, y, x); the rest are long-range push edges.
+# At eval the affinities are agglomerated into instances by the Mutex
+# Watershed (see ``training.mutex_watershed`` above).
+#
+# weight_aff / weight_sem / weight_raw are each a scalar or a
+# ``{weight, **sub_kwargs}`` mapping.  ``weight: 0`` disables the field.
+# Sub-knobs:
+#   - aff: ``lambda_{bce,dice,focal}`` + ``gamma``, ``pull_weight`` /
+#     ``push_weight`` (per-offset class weighting), and
+#     ``mask_to_foreground`` (drop edges with a background endpoint).
+#   - sem: ``lambda_{bce,dice,focal}`` + ``gamma`` (DiceBCEFocalLoss).
+#   - raw: ``loss`` (``l1`` / ``mse`` / ``smooth_l1``).
+# ---------------------------------------------------------------------
+loss:
+  ignore_index: -100
+  background: -1
+
+  # Affinity head.  Within the fg-fg validity mask, same-instance
+  # (positive) affinities dominate for the short-range pull
+  # offsets, while the long-range push offsets carry the rare but
+  # critical "must separate" signal -- so a focal term can be added
+  # (``lambda_focal``) to redirect gradient onto the hard boundary
+  # edges.  ``pull_weight`` / ``push_weight`` rebalance the
+  # nn vs long-range offset groups if one dominates the loss.
+  # Tuned to fight the merge-collapse failure (MWS under-segmenting as
+  # the head predicts high affinity even across boundaries): a focal term
+  # (lambda_focal) refocuses gradient on the rare low-affinity boundary
+  # edges, and push_weight > pull_weight emphasises the
+  # long-range "must separate" edges that drive the mutex constraints.
+  weight_aff:
+    weight: 1.0
+    lambda_bce: 1.0
+    lambda_dice: 1.0
+    lambda_focal: 1.0
+    gamma: 5.0
+    pull_weight: 1.0
+    push_weight: 5.0
+    mask_to_foreground: true
+  # Foreground (semantic) head: ``data.min_foreground: 0.80`` => ~80-95%
+  # positive per crop, so foreground dominates.  Shrink ``lambda_bce``
+  # (plain BCE biases toward the dominant class) and grow ``lambda_focal``
+  # (focal's ``(1 - p_t)^gamma`` silences easy positives, redirecting
+  # gradient onto the rare boundary / ECS voxels).  Dice stays flat.
+  weight_sem:
+    weight: 1.0
+    lambda_bce: 1.0
+    lambda_dice: 1.0
+    lambda_focal: 1.0
+    gamma: 5.0
+  # Raw reconstruction head: linear L1 regression of the (normalised)
+  # input EM intensity -- an auxiliary self-supervised signal that
+  # stabilises the shared decoder features.
+  weight_raw:
+    weight: 1.0
+    loss: l1

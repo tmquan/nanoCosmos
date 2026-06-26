@@ -1,0 +1,138 @@
+# =====================================================================
+# Combined SNEMI3D + Neurons + MICrONS Configuration
+# =====================================================================
+# Inheritance chain:  default <- snemi3d <- combine
+#
+# Inherits everything from snemi3d.yaml and overrides the volume lists
+# to drop SNEMI3D AC4 from train (train uses the full neurons cylinder
+# + the 10 MICrONS train splits) while keeping AC4 in val/test for
+# comparison against the original SNEMI3D benchmark.  Resolution
+# harmonisation (resolution_zoom_prob/range/map) is inherited from
+# snemi3d.yaml.
+#
+# Native resolutions (all share 5:1 Z:XY anisotropy):
+#   SNEMI3D / neurons: 30x6x6 nm    MICrONS: 40x8x8 nm
+#
+# Each dataset is zoomed from its native resolution into the 30-40 nm Z,
+# 6-8 nm XY target range:
+#   SNEMI3D/neurons (30x6x6) -> zooms out (0.75-1.0x)
+#   MICrONS         (40x8x8) -> zooms in  (1.0-1.33x)
+#
+# Volumes (download_snemi3d.py --source all, download_microns.py --split):
+#   train: neurons cylinder       + MICrONS train01-10
+#   val:   SNEMI3D AC4            + MICrONS test01 + test02
+#   test:  SNEMI3D AC4            + MICrONS test01 + test02
+#
+# Usage:
+#   python scripts/train.py --config-name combine
+
+defaults:
+  - snemi3d
+
+experiment_name: combine
+project_name: nanocosmos
+
+
+# ---------------------------------------------------------------------
+# Training overrides
+# ---------------------------------------------------------------------
+training:
+  # ``compile_fullgraph: false`` overrides the snemi3d.yaml default of
+  # ``true``.  Combine has 11 train volumes (neurons cylinder + 10
+  # MICrONS minnie65 crops) versus snemi3d's 3, so the cold first
+  # batch on every rank pays a heavier lazy-reader probe bill (more
+  # volumes to open; MICrONS crops are 4096x4096x800 with denser
+  # instance counts).  Combined with the synchronous DDP first-step
+  # compile stall, ``true`` here can
+  # overshoot ``TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC`` even with the
+  # 1800 s bump in ``scripts/train.py``.  ``false`` lets Inductor
+  # break the graph at problem ops, trading ~10 percent steady-state
+  # runtime for a much shorter first-step landing -- the safer
+  # DDP-heartbeat choice the snemi3d.yaml comment block flags.  Flip
+  # back to ``true`` once you have a clean run on this hardware and
+  # want the last bit of throughput.
+  compile_fullgraph: false
+
+# Post-processing override: SNEMI3D + MICrONS are both ~5:1 anisotropic
+# (30-40 nm Z, 6-8 nm XY).  Neurons routinely touch across Z slices
+# while being genuinely distinct cells (by design of the dataset).  The
+# Mutex Watershed already respects this through the anisotropic affinity
+# offset set (short Z reach, long in-plane reach); if needed, tighten the
+# push-edge sampling in Z by overriding ``strides`` here.
+# training:
+#   mutex_watershed:
+#     strides: [1, 2, 2]   # [Z, Y, X]; denser in-plane push edges
+#     size_filter: 50
+
+data:
+  train_volumes:
+    - vol: neurons_5000x2900x300_x3000_y7200_z950_volume
+      seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
+      root: data/SNEMI3D
+
+    # --- MICrONS (40x8x8 nm, 4096x4096x800 crops) ---
+    - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
+      seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
+      seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
+      seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
+      seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
+      seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
+      seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
+      seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
+      seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
+      seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
+      seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
+      root: data/MICRONS
+
+  val_volumes:
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+
+    - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+      seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+      seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+      root: data/MICRONS
+
+  test_volumes:
+    - vol: AC4_inputs
+      seg: AC4_labels
+      root: data/SNEMI3D
+
+    - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+      seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+      root: data/MICRONS
+
+    - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+      seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+      root: data/MICRONS
