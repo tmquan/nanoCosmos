@@ -9,7 +9,7 @@
 # Two branches (roles STACK by dataset), routed per task-homogeneous batch by
 # Joint3DReconSegLoss:
 #
-#   dapt   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
+#   ssl   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
 #          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
 #          (small voxel) AND UNLABELED FIB-25 (domain-matched neuropil).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
@@ -57,7 +57,7 @@ data:
   find_boundaries: 1.0
   boundary_target: semantic
 
-  # ---- realistic large-voxel degradation for the DAPT branch ----
+  # ---- realistic large-voxel degradation for the SSL branch ----
   # (nanocosmos.transforms.RandResolutionDegraded) -- the free
   # large-voxel -> small-voxel pair.
   degrade:
@@ -82,15 +82,15 @@ data:
   # for the network input and keeps the labels on their native grid, so the
   # loss pool factor = native/fine is derived from the label shape. ----
   branches:
-    dapt:
-      task: dapt
+    ssl:
+      task: ssl
       batch_size: 1
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused).
       # PLUS unlabeled FIB-25 (domain-matched neuropil) -- the vast
       # unproofread volume reconstructs for free.  RandResolutionDegraded
       # synthesises the (degraded -> clean) pair.  Add OpenOrganelle volumes
-      # here to scale DAPT toward petascale.
+      # here to scale SSL toward petascale.
       volumes:
       # --- COSEM ~4 nm small voxel (exact z per volume), all tiles ---
       - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
@@ -105,9 +105,6 @@ data:
       - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x8192_y0_z0_volume
-        root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
       - vol: jrc_macrophage-2_4x4x3.36nm_x0_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.36, 4, 4]
@@ -118,9 +115,6 @@ data:
         root: data/COSEM3D
         native_resolution: [3.36, 4, 4]
       - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
-        root: data/COSEM3D
-        native_resolution: [3.36, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x7952_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.36, 4, 4]
       - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z0_volume
@@ -135,52 +129,40 @@ data:
       - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z4096_volume
         root: data/COSEM3D
         native_resolution: [3.44, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x7952_y0_z0_volume
-        root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
-      - vol: flyem3d_8nm_dapt_x1024_y1024_z1024_volume
+      - vol: flyem3d_8nm_ssl_x1024_y1024_z1024_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_8nm_dapt_x1024_y4096_z4096_volume
+      - vol: flyem3d_8nm_ssl_x1024_y4096_z4096_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_8nm_dapt_x4096_y1024_z4096_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
-      - vol: flyem3d_8nm_dapt_x4096_y4096_z1024_volume
+      - vol: flyem3d_8nm_ssl_x4096_y1024_z4096_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       # --- Hemibrain 8 nm neuropil, image-only ---
-      - vol: flyem3d_hemibrain_8nm_dapt_x4000_y4000_z4000_volume
+      - vol: flyem3d_hemibrain_8nm_ssl_x4000_y4000_z4000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_hemibrain_8nm_dapt_x12000_y12000_z12000_volume
+      - vol: flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_hemibrain_8nm_dapt_x16000_y30000_z36000_volume
+      - vol: flyem3d_hemibrain_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_hemibrain_8nm_dapt_x20000_y20000_z20000_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
-      - vol: flyem3d_hemibrain_8nm_dapt_x28000_y24000_z30000_volume
+      - vol: flyem3d_hemibrain_8nm_ssl_x20000_y20000_z20000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       # --- MaleCNS 8 nm neuropil, image-only ---
-      - vol: flyem3d_malecns_8nm_dapt_x4000_y4000_z4000_volume
+      - vol: flyem3d_malecns_8nm_ssl_x4000_y4000_z4000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_dapt_x12000_y12000_z12000_volume
+      - vol: flyem3d_malecns_8nm_ssl_x12000_y12000_z12000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_dapt_x16000_y30000_z36000_volume
+      - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_dapt_x20000_y20000_z20000_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_dapt_x28000_y24000_z30000_volume
+      - vol: flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       # --- CREMI 40x4x4 padded test volumes, IMAGE-ONLY (no public labels) ---
@@ -197,7 +179,7 @@ data:
       task: sft
       batch_size: 1
       sample_weight: 2.0
-      # Every labeled rung.  FIB-25 (fine, also a DAPT source above) +
+      # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
       # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
       # volume's native label grid, then AffinityFGLoss.
       volumes:
@@ -246,10 +228,6 @@ data:
         seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
-        seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
       - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
         seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
         root: data/MICRONS
@@ -266,19 +244,54 @@ data:
         seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
-        seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
 
   val_batch_size: 1
   # Validation on the labeled (sft) rungs -- instance metrics at native grid.
   val_volumes:
+  # SNEMI3D AC4 (labeled holdout).
   - vol: AC4_inputs
     seg: AC4_labels
     root: data/SNEMI3D
     task: sft
     native_resolution: [30, 6, 6]
+  # --- 20% holdout of the divisible-by-5 datasets (image-only COSEM/FLYEM ->
+  #     ssl recon validation) ---
+  - vol: jrc_hela-3_4x4x3.24nm_x8192_y0_z0_volume
+    root: data/COSEM3D
+    task: ssl
+    native_resolution: [3.24, 4, 4]
+  - vol: jrc_macrophage-2_4x4x3.36nm_x7952_y0_z0_volume
+    root: data/COSEM3D
+    task: ssl
+    native_resolution: [3.36, 4, 4]
+  - vol: jrc_jurkat-1_4x4x3.44nm_x7952_y0_z0_volume
+    root: data/COSEM3D
+    task: ssl
+    native_resolution: [3.44, 4, 4]
+  # FLYEM3D: 1 ssl volume per source (fib25-surround / hemibrain / malecns).
+  - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
+    root: data/FLYEM3D
+    task: ssl
+    native_resolution: [8, 8, 8]
+  - vol: flyem3d_hemibrain_8nm_ssl_x28000_y24000_z30000_volume
+    root: data/FLYEM3D
+    task: ssl
+    native_resolution: [8, 8, 8]
+  - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
+    root: data/FLYEM3D
+    task: ssl
+    native_resolution: [8, 8, 8]
+  # MICrONS: 2 of 12 labeled crops (sft instance-metric validation).
+  - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+    root: data/MICRONS
+    task: sft
+    native_resolution: [40, 8, 8]
+  - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+    seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+    root: data/MICRONS
+    task: sft
+    native_resolution: [40, 8, 8]
 
 model:
   type: joint3d          # -> Joint3DModule (Cosmos-3 Nano backbone + Joint3DReconSegLoss)
@@ -308,15 +321,15 @@ optimizer:
 
 # Joint3DReconSegLoss: branch weights + the inner segmentation (AffinityFGLoss)
 # config.  ``weight_raw`` of the inner loss is forced to 0 -- the EM
-# reconstruction term is owned by the joint loss (``weight_recon``) so it can
+# reconstruction term is owned by the joint loss (``weight_rec``) so it can
 # target the clean EM and skip / switch grids per branch.
 loss:
   type: joint3d
   recon_loss: l1
-  weight_recon: 1.0
+  weight_rec: 1.0
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency).
-  weight_dapt: 1.0
+  weight_ssl: 10. # 1.0
   weight_sft: 1.0
   seg:
     ignore_index: -100

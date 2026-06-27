@@ -22,7 +22,7 @@ The public loss surface is intentionally small:
 from nanocosmos.losses.affinity import AffinityFGLoss
 from nanocosmos.losses.dice_bce_focal import DiceBCEFocalLoss
 from nanocosmos.losses.joint3d import (
-    DAPT,
+    SSL,
     SFT,
     Joint3DReconSegLoss,
 )
@@ -51,7 +51,7 @@ from nanocosmos.losses._common import (
 __all__ = [
     "AffinityFGLoss",
     "Joint3DReconSegLoss",
-    "DAPT",
+    "SSL",
     "SFT",
     "DiceBCEFocalLoss",
     "HEAD_CHANNELS",

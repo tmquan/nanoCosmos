@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from nanocosmos.losses import Joint3DReconSegLoss, HEAD_CHANNELS, N_AFF
-from nanocosmos.losses.joint3d import DAPT, SFT
+from nanocosmos.losses.joint3d import SSL, SFT
 from nanocosmos.transforms import RandResolutionDegraded
 
 
@@ -36,24 +36,24 @@ def test_head_layout_delegated():
     assert loss.seg.weight_raw == 0.0
 
 
-def test_dapt_branch_recon_only():
+def test_ssl_branch_recon_only():
     loss = Joint3DReconSegLoss()
     head = _head()
     em = torch.rand(2, 1, 32, 32, 32)
-    out = loss(head, {"task": DAPT, "recon_image": em})
+    out = loss(head, {"task": SSL, "recon_image": em})
     assert "loss/recon" in out
     assert "loss/aff" not in out and "loss/sem" not in out
     out["loss"].backward()
     assert head.grad is not None and torch.isfinite(head.grad).all()
 
 
-def test_dapt_recon_pools_raw_to_larger_voxel_target():
-    # FIB-style DAPT: clean EM target on a larger-voxel native grid than the
+def test_ssl_recon_pools_raw_to_larger_voxel_target():
+    # FIB-style SSL: clean EM target on a larger-voxel native grid than the
     # small-voxel prediction -> raw is pooled down to the target grid before L1.
     loss = Joint3DReconSegLoss()
     head = _head(d=32, h=32, w=32)
     em = torch.rand(2, 1, 16, 16, 16)      # larger-voxel native EM (e.g. FIB 8 nm)
-    out = loss(head, {"task": DAPT, "recon_image": em})
+    out = loss(head, {"task": SSL, "recon_image": em})
     assert "loss/recon" in out
     out["loss"].backward()
     assert torch.isfinite(head.grad).all()
@@ -118,14 +118,14 @@ def test_mixed_task_batch_rejected():
     loss = Joint3DReconSegLoss()
     head = _head()
     with pytest.raises(ValueError):
-        loss(head, {"task": [DAPT, SFT], "recon_image": torch.rand(2, 1, 32, 32, 32)})
+        loss(head, {"task": [SSL, SFT], "recon_image": torch.rand(2, 1, 32, 32, 32)})
 
 
 def test_homogeneous_task_list_accepted():
     loss = Joint3DReconSegLoss()
     head = _head()
     em = torch.rand(2, 1, 32, 32, 32)
-    out = loss(head, {"task": [DAPT, DAPT], "recon_image": em})
+    out = loss(head, {"task": [SSL, SSL], "recon_image": em})
     assert "loss/recon" in out
 
 
@@ -133,9 +133,9 @@ def test_branch_weights_scale_total():
     head = _head(requires_grad=False)
     em = torch.rand(2, 1, 32, 32, 32)
     base = Joint3DReconSegLoss()
-    scaled = Joint3DReconSegLoss(weight_dapt=3.0)
-    b = base(head, {"task": DAPT, "recon_image": em})["loss"]
-    s = scaled(head, {"task": DAPT, "recon_image": em})["loss"]
+    scaled = Joint3DReconSegLoss(weight_ssl=3.0)
+    b = base(head, {"task": SSL, "recon_image": em})["loss"]
+    s = scaled(head, {"task": SSL, "recon_image": em})["loss"]
     assert torch.allclose(s, 3.0 * b, atol=1e-5)
 
 

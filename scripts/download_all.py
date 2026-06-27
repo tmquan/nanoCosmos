@@ -7,9 +7,9 @@ Orchestrates the per-dataset downloaders into the resolution-ladder layout
 segmentation foreground %).
 
 Groups (``--datasets``):
-    cosem    COSEM3D 4 nm small-voxel (DAPT)         -> data/COSEM3D
-    flyem    FLYEM3D 8 nm: fib25 (SFT core + DAPT
-             surround), hemibrain / malecns (DAPT)   -> data/FLYEM3D
+    cosem    COSEM3D 4 nm small-voxel (SSL)         -> data/COSEM3D
+    flyem    FLYEM3D 8 nm: fib25 (SFT core + SSL
+             surround), hemibrain / malecns (SSL)   -> data/FLYEM3D
     cremi    CREMI3D ssTEM (SFT)                      -> data/CREMI3D
     snemi    SNEMI3D / Neurons (SFT)                  -> data/SNEMI3D
     microns  MICrONS (SFT)                            -> data/MICRONS
@@ -43,7 +43,7 @@ _CONFIG = _HERE.parent / "configs" / "nanocosmos-16B.yaml"
 # COSEM crop origins (x y z); y kept at 0 because the volumes are thin in y.
 _COSEM_ORIGINS = [(0, 0, 0), (4096, 0, 4096), (8192, 0, 0), (0, 0, 8192), (4096, 0, 0)]
 _COSEM_VOLS = ["jrc_hela-3", "jrc_macrophage-2", "jrc_jurkat-1"]
-# Hemibrain / MaleCNS DAPT crop origins (x y z); 4 train + 1 test.  Kept within
+# Hemibrain / MaleCNS SSL crop origins (x y z); 4 train + 1 test.  Kept within
 # Hemibrain's bounds (~34427 x 39725 x 41394) for a 1024^3 crop; the per-volume
 # clamp in _clamp_box slides any out-of-bounds origin inside regardless.
 _FLYEM_ORIGINS = [(4000, 4000, 4000), (12000, 12000, 12000), (20000, 20000, 20000),
@@ -72,16 +72,16 @@ def _jobs(datasets: List[str], skip_existing: bool) -> List[Tuple[str, List[str]
                 jobs.append((f"cosem {ds} {o}", _cos(ds, o) + se))
 
     if "flyem" in datasets:
-        # FIB-25: SFT proofread core (image+seg) + DAPT unsegmented surround.
+        # FIB-25: SFT proofread core (image+seg) + SSL unsegmented surround.
         # The 1536^3 dense core (~99.7% fg) is the primary FIB-25 SFT volume
         # (doc/RESOLUTION_LADDER.md); image ~3.6 GB uint8, seg ~29 GB uint64.
         jobs.append(("flyem fib25 sft core (1536^3 dense core)",
                      _flyem("fib25", "sft", (2304, 2048, 6144), 1536) + se))
         for o in [(1024, 1024, 1024), (4096, 4096, 1024), (1024, 4096, 4096), (4096, 1024, 4096)]:
-            jobs.append((f"flyem fib25 dapt {o}", _flyem("fib25", "dapt", o, 1024) + se))
+            jobs.append((f"flyem fib25 ssl {o}", _flyem("fib25", "ssl", o, 1024) + se))
         for ds in ("hemibrain", "malecns"):                # 5x 1024^3 (4 train + 1 test)
             for o in _FLYEM_ORIGINS:
-                jobs.append((f"flyem {ds} dapt {o}", _flyem(ds, "dapt", o, 1024) + se))
+                jobs.append((f"flyem {ds} ssl {o}", _flyem(ds, "ssl", o, 1024) + se))
 
     if "cremi" in datasets:
         jobs.append(("cremi A/B/C",

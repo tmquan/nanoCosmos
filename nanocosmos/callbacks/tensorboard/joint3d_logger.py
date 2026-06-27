@@ -7,7 +7,7 @@ can branch on ``batch["task"]``:
 
 * **both branches** -- reconstruction panels::
 
-      {stage}/automatic/true/image        the (degraded, on dapt) network input
+      {stage}/automatic/true/image        the (degraded, on ssl) network input
       {stage}/automatic/pred/recon        the raw-head small-voxel reconstruction
       {stage}/automatic/true/recon_target the clean EM target (recon_image)
 
@@ -19,7 +19,7 @@ can branch on ``batch["task"]``:
       {stage}/automatic/pred/label        Mutex-Watershed instances
       {stage}/automatic/aff/pred/{offset} a few affinity channels
 
-The ``dapt`` branch is label-free, so it shows only the reconstruction panels.
+The ``ssl`` branch is label-free, so it shows only the reconstruction panels.
 """
 
 from typing import Any, Dict

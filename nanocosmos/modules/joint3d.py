@@ -11,12 +11,12 @@ differ from the plain affinity recipe, all task-routing:
 * :meth:`_loss_offsets` -- the offset list lives under ``loss.seg.offsets``
   (nested), so the head width is derived from there.
 * :meth:`_prepare_targets` -- builds the per-batch ``targets`` for the active
-  branch: ``dapt`` carries ``recon_image`` and **no labels**; ``sft`` carries
+  branch: ``ssl`` carries ``recon_image`` and **no labels**; ``sft`` carries
   native ``labels`` (+ cached affinity target) and optionally ``recon_image``
   (the original large-voxel EM for the ``raw`` data-consistency term).
 * :meth:`_accumulate_metrics` -- on ``sft`` the small-voxel head is pooled to
   the native label grid before the foreground / Mutex-Watershed metrics; on
-  ``dapt`` (no labels) segmentation metrics are skipped.
+  ``ssl`` (no labels) segmentation metrics are skipped.
 
 ``training_step`` / ``validation_step`` / the epoch-end reduce are inherited
 verbatim: they call ``_prepare_targets`` -> ``self.model(images)`` ->
@@ -32,7 +32,7 @@ from typing import Any, Dict
 import torch
 from einops import rearrange
 
-from nanocosmos.losses import DAPT, Joint3DReconSegLoss
+from nanocosmos.losses import SSL, Joint3DReconSegLoss
 from nanocosmos.models.cosmos_predict_2_5 import CosmosPredict3DWrapper
 from nanocosmos.modules.cosmos_3_nano.module import Cosmos3Nano3DModule
 
@@ -65,7 +65,7 @@ class Joint3DModule(Cosmos3Nano3DModule):
                 )
             return next(iter(uniq))
         raise KeyError(
-            "Joint3DModule batch is missing a 'task' field ('dapt' | 'sft'); "
+            "Joint3DModule batch is missing a 'task' field ('ssl' | 'sft'); "
             "the joint datamodule must tag each batch."
         )
 
@@ -83,13 +83,13 @@ class Joint3DModule(Cosmos3Nano3DModule):
         task = self._batch_task(batch)
         targets: Dict[str, Any] = {"task": task}
 
-        # Reconstruction target (clean EM): required on dapt, optional on sft
+        # Reconstruction target (clean EM): required on ssl, optional on sft
         # (the raw data-consistency term).  Pooled to its own grid in the loss.
         recon = batch.get("recon_image")
         if recon is not None:
             targets["recon_image"] = self._maybe_scale_recon(recon)
 
-        if task == DAPT:
+        if task == SSL:
             return targets  # label-free branch
 
         # ---- sft: native labels + cached affinity target ----
@@ -118,8 +118,8 @@ class Joint3DModule(Cosmos3Nano3DModule):
         prefix: str,
         bs: float,
     ) -> None:
-        # dapt is reconstruction-only (no labels) -> no segmentation metrics.
-        if targets.get("task") == DAPT or "labels" not in targets:
+        # ssl is reconstruction-only (no labels) -> no segmentation metrics.
+        if targets.get("task") == SSL or "labels" not in targets:
             return
         # The head is on the fine (small-voxel) grid; the labels are native.
         # Pool the head down to the label grid (a no-op when they match) so the
@@ -134,7 +134,7 @@ class Joint3DModule(Cosmos3Nano3DModule):
 class JointPredict3DModule(Joint3DModule):
     """Cosmos-Predict 2.5 (**2B**) backbone trained with the joint recon + seg loss.
 
-    Identical recipe to :class:`Joint3DModule` -- the dapt + sft round-robin,
+    Identical recipe to :class:`Joint3DModule` -- the ssl + sft round-robin,
     :class:`~nanocosmos.losses.Joint3DReconSegLoss`, and the small-voxel ->
     native-grid pooling are all inherited verbatim.  The only difference is
     the backbone: the 2B Cosmos-Predict DiT (8x spatial / 4x temporal VAE)

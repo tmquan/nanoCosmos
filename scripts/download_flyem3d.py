@@ -17,7 +17,7 @@ random access and write image (+ segmentation) as ``.h5`` files that
 axis order ``[Z, Y, X]``) loads directly.
 
 ``--role`` picks the ladder role (doc/RESOLUTION_LADDER.md): ``sft`` = image +
-segmentation (labeled rung); ``dapt`` = image only (label-free reconstruction;
+segmentation (labeled rung); ``ssl`` = image only (label-free reconstruction;
 e.g. FIB-25's unsegmented surround, or any Hemibrain / MaleCNS crop).
 
 Examples
@@ -26,8 +26,8 @@ Examples
     python scripts/download_flyem3d.py --dataset fib25 --role sft \
         --origin 2304 2048 6144 --size 512 512 512
 
-    # DAPT (image-only) crop of Hemibrain neuropil:
-    python scripts/download_flyem3d.py --dataset hemibrain --role dapt \
+    # SSL (image-only) crop of Hemibrain neuropil:
+    python scripts/download_flyem3d.py --dataset hemibrain --role ssl \
         --size 512 512 512
 
     # FIB-25 only: fetch the native cube once, then make local variants
@@ -118,17 +118,17 @@ def _parse_args() -> argparse.Namespace:
              "when --z-stride 1.",
     )
     p.add_argument(
-        "--role", default="sft", choices=("sft", "dapt"),
+        "--role", default="sft", choices=("sft", "ssl"),
         help="Ladder role (doc/RESOLUTION_LADDER.md).  'sft' = image + "
              "segmentation, for crops inside the proofread core (labeled "
-             "rung).  'dapt' = image only (implies --no-seg) + a `_dapt` name "
+             "rung).  'ssl' = image only (implies --no-seg) + a `_ssl` name "
              "tag, for the large UNSEGMENTED surround used as the label-free "
              "self-supervised reconstruction source.",
     )
     p.add_argument(
         "--no-seg", action="store_true",
         help="Download the image only (skip the ground-truth segmentation; "
-             "also implied by --role dapt).",
+             "also implied by --role ssl).",
     )
     p.add_argument(
         "--skip-existing", action="store_true", dest="skip_existing",
@@ -229,10 +229,10 @@ def main() -> None:
     image_src = SOURCES[args.dataset]["image"]
     seg_src = SOURCES[args.dataset]["seg"]
 
-    # DAPT crops are image-only (e.g. FIB-25's unsegmented surround); SFT crops
-    # carry the proofread segmentation.  ``--role dapt`` implies ``--no-seg``.
-    no_seg = bool(args.no_seg) or args.role == "dapt"
-    role_tag = "_dapt" if args.role == "dapt" else ""
+    # SSL crops are image-only (e.g. FIB-25's unsegmented surround); SFT crops
+    # carry the proofread segmentation.  ``--role ssl`` implies ``--no-seg``.
+    no_seg = bool(args.no_seg) or args.role == "ssl"
+    role_tag = "_ssl" if args.role == "ssl" else ""
 
     # --- acquire the FULL [Z, Y, X] crop (no stride) from one source ---
     if args.from_local:

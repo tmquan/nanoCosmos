@@ -9,7 +9,7 @@ Pick the doc that matches *your* current question.  All eight live in
 | "What datasets are there, and how do I download each one?"        | [`DATASETS.md`](./DATASETS.md)                                |
 | "Why is the code organised this way?  What pattern do you reach for?" | [`ORGANIZATION.md`](./ORGANIZATION.md)                    |
 | "How does the affinity head + loss + Mutex Watershed work (channel layout, math, eval)?" | [`MUTEXWATERSHED.md`](./MUTEXWATERSHED.md)        |
-| "How does the resolution ladder (small→large voxel) + DAPT/SFT training work?" | [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md) |
+| "How does the resolution ladder (small→large voxel) + SSL/SFT training work?" | [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md) |
 | "How does the joint reconstruction + segmentation loss work (mechanics, batch contract)?" | [`JOINT_TRAINING.md`](./JOINT_TRAINING.md)        |
 | "What are the backbone parameter budgets / data flow?"               | [`ARCHITECT.md`](./ARCHITECT.md)                          |
 | "What actually happens when I run `python scripts/train.py`?  Take me through one batch." | [`WALKTHROUGH.md`](./WALKTHROUGH.md) |

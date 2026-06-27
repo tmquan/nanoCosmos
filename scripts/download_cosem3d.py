@@ -7,7 +7,7 @@ OpenOrganelle ``s3://janelia-cosem-datasets`` (unchanged).
 
 The OpenOrganelle (COSEM) collection is the only public source of genuinely
 **~4 nm, near-cubic (small-voxel)** FIB-SEM, which anchors the
-*smallest-voxel* rung of the nanoCosmos resolution ladder (the DAPT
+*smallest-voxel* rung of the nanoCosmos resolution ladder (the SSL
 super-resolution prior; see
 doc/RESOLUTION_LADDER.md).  Volumes are served in Neuroglancer ``precomputed``
 from the AWS Open Data bucket ``s3://janelia-cosem-datasets`` (no account
@@ -17,10 +17,10 @@ needed), so we crop them the same way the MICrONS / FIB-25 volumes are fetched
 axis order ``[Z, Y, X]``).
 
 These are **cell-biology** FIB-SEM (HeLa, Jurkat, macrophage, ...), not
-neuropil: we use them **image-only**, for the label-free DAPT branch (their
+neuropil: we use them **image-only**, for the label-free SSL branch (their
 labels are organelle classes, not neuron instances).  They transfer the fine
 ultrastructure / z-continuity prior; pair with unlabeled FIB-25 for a
-domain-matched DAPT mix.
+domain-matched SSL mix.
 
 Verified mip-0 voxel sizes (x, y, z nm), read from each volume's ``info``:
 
@@ -29,7 +29,7 @@ Verified mip-0 voxel sizes (x, y, z nm), read from each volume's ``info``:
 
 (Resolution doubles per mip; mip 0 is the ~4 nm native scale.)
 
-DAPT budget (doc/RESOLUTION_LADDER.md): **5x 2048^3 per COSEM volume**.  The
+SSL budget (doc/RESOLUTION_LADDER.md): **5x 2048^3 per COSEM volume**.  The
 volumes are thin in y (1000-3000 vox), so a 2048 y-request is clamped to the
 volume; the 5 crops tile x/z.  One crop per invocation -- loop over origins:
 
@@ -83,7 +83,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--size", type=int, nargs=3, metavar=("X", "Y", "Z"), default=[2048, 2048, 2048],
-        help="Crop size in voxels (x y z) at the chosen mip (DAPT budget = "
+        help="Crop size in voxels (x y z) at the chosen mip (SSL budget = "
              "2048^3; clamped to the volume, so the thin y axis caps it).",
     )
     p.add_argument("--mip", type=int, default=0, help="Mip level (0 = ~4 nm native; doubles per level).")
@@ -187,7 +187,7 @@ def _save_h5(arr_zyx: np.ndarray, path: Path, resolution_xyz, dataset: str) -> N
         )
         ds.attrs["source"] = (
             f"OpenOrganelle / COSEM {dataset} "
-            f"(s3://janelia-cosem-datasets/{dataset}); image-only, DAPT branch."
+            f"(s3://janelia-cosem-datasets/{dataset}); image-only, SSL branch."
         )
 
 
@@ -215,7 +215,7 @@ def main() -> None:
           f"-> size {(x1 - x0, y1 - y0, z1 - z0)} voxels")
     if not (res[0] == res[1] and abs(res[0] - res[2]) <= 0.25 * res[0]):
         print(f"  NOTE: voxel is not near-cubic ({res}); the ladder "
-              f"expects a ~4 nm small (near-cubic) voxel for the DAPT anchor.")
+              f"expects a ~4 nm small (near-cubic) voxel for the SSL anchor.")
 
     if args.skip_existing and _is_valid_h5(out_path):
         print(f"Skip (already downloaded, valid HDF5): {out_path.name}")
@@ -234,10 +234,10 @@ def main() -> None:
     _save_h5(img_zyx, out_path, res, args.dataset)
     print(f"Saved image: {out_path.name}  shape(z,y,x) = {img_zyx.shape}")
 
-    print("\nConfig volume entry (paste under data.branches.dapt.volumes):")
+    print("\nConfig volume entry (paste under data.branches.ssl.volumes):")
     print(f"  - vol: {stem}_volume")
     print(f"    root: {out_dir}")
-    print("    # image-only; DAPT (no seg)")
+    print("    # image-only; SSL (no seg)")
 
 
 if __name__ == "__main__":

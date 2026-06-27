@@ -22,12 +22,12 @@ task-homogeneous -- see the round-robin multi-task sampler in the datamodule;
 this also gives per-branch batch-size / weighting control).  The roles
 **stack** by dataset (a labeled small-voxel rung like FIB-25 is in *both*):
 
-``dapt``  -- self-supervised reconstruction, gated by *voxel size*:
+``ssl``  -- self-supervised reconstruction, gated by *voxel size*:
     a degraded (large-voxel) input is reconstructed back to the clean small-
     voxel EM, ``L1(pool(raw -> recon_image grid), recon_image)``.  Sources:
     the smallest-voxel rung (COSEM 4 nm) and any other fine-enough volume,
     **including UNLABELED FIB** (the vast unproofread FIB-25 volume -- domain-
-    matched neuropil DAPT).  No segmentation supervision.
+    matched neuropil SSL).  No segmentation supervision.
 
 ``sft``  -- segmentation, gated by *labels*: any labeled rung.  The small-
     voxel head is pooled to the **label grid** (``labels.shape[-3:]``) via
@@ -49,7 +49,7 @@ segmentation gradient shapes the reconstruction and vice-versa.
 Output dict (keys gated by the active branch / configured weights)::
 
     loss              # global weighted total for this (homogeneous) batch
-    loss/recon        # reconstruction (dapt: main SR; sft: raw data-consistency)
+    loss/recon        # reconstruction (ssl: main SR; sft: raw data-consistency)
     loss/aff          # affinity segmentation (sft)
     loss/sem          # foreground segmentation (sft)
 """
@@ -68,16 +68,16 @@ from nanocosmos.losses._common import regression_loss_fn
 # Canonical branch names.  A batch carries exactly one of these in
 # ``targets["task"]`` (the datamodule's sampler yields task-homogeneous
 # batches).  See doc/RESOLUTION_LADDER.md:
-#   * DAPT -- self-supervised reconstruction of the clean small-voxel EM from a
+#   * SSL -- self-supervised reconstruction of the clean small-voxel EM from a
 #     degraded (large-voxel) input (gated by *voxel size*: any rung fine
 #     enough; labels optional).  Owns the ``raw`` reconstruction term.
 #   * SFT  -- segmentation on any *labeled* rung (gated by *labels*): pool the
 #     small-voxel head down to the label grid, then the affinity + sem loss.  A
 #     rung with labels does SFT regardless of where it sits on the ladder; the
 #     pool factor is derived from the labels (1 = the smallest-voxel case).
-DAPT = "dapt"
+SSL = "ssl"
 SFT = "sft"
-_TASKS = (DAPT, SFT)
+_TASKS = (SSL, SFT)
 
 
 def _as_channeled(x: torch.Tensor, ndim: int) -> torch.Tensor:
@@ -104,13 +104,13 @@ class Joint3DReconSegLoss(nn.Module):
             knobs) is passed straight through.
         recon_loss: Regression family for the reconstruction term
             (``l1`` / ``mse`` / ``smooth_l1``; default ``l1``).
-        weight_recon: Scalar weight on the reconstruction term.
+        weight_rec: Scalar weight on the reconstruction term.
         weight_seg: Scalar weight on the segmentation term.
-        weight_dapt / weight_sft: Per-branch multipliers on that branch's
+        weight_ssl / weight_sft: Per-branch multipliers on that branch's
             *total* (up/down-weight a whole branch independently of how often
             its batches are drawn).
         recon_image_key: Batch key holding the clean EM reconstruction target
-            (default ``"recon_image"``).  On ``dapt`` it is the clean small-
+            (default ``"recon_image"``).  On ``ssl`` it is the clean small-
             voxel EM (required); on ``sft`` it is the original large-voxel EM
             for the raw data-consistency term (optional).
         task_key: Batch key holding the branch name (default ``"task"``).
@@ -127,9 +127,9 @@ class Joint3DReconSegLoss(nn.Module):
         seg: Union[AffinityFGLoss, Mapping[str, Any], None] = None,
         *,
         recon_loss: str = "l1",
-        weight_recon: float = 1.0,
+        weight_rec: float = 1.0,
         weight_seg: float = 1.0,
-        weight_dapt: float = 1.0,
+        weight_ssl: float = 1.0,
         weight_sft: float = 1.0,
         recon_image_key: str = "recon_image",
         task_key: str = "task",
@@ -147,9 +147,9 @@ class Joint3DReconSegLoss(nn.Module):
 
         self._recon_fn = regression_loss_fn(recon_loss)
         self.recon_loss = recon_loss
-        self.weight_recon = float(weight_recon)
+        self.weight_rec = float(weight_rec)
         self.weight_seg = float(weight_seg)
-        self.weight_dapt = float(weight_dapt)
+        self.weight_ssl = float(weight_ssl)
         self.weight_sft = float(weight_sft)
 
         self.recon_image_key = str(recon_image_key)
@@ -194,7 +194,7 @@ class Joint3DReconSegLoss(nn.Module):
         DDP/FSDP rank regardless of which branch a rank happens to draw.
         """
         keys: List[str] = ["loss"]
-        if self.weight_recon > 0:
+        if self.weight_rec > 0:
             keys.append("loss/recon")
         if self.weight_seg > 0 and self.seg.weight_aff > 0:
             keys.append("loss/aff")
@@ -244,7 +244,7 @@ class Joint3DReconSegLoss(nn.Module):
         target's own grid (``recon_image.shape[-3:]``) before the regression,
         so the term works whether the target sits on the small-voxel grid
         (COSEM 4 nm; pool is a no-op) or a larger-voxel native grid (FIB 8 nm
-        DAPT, or the original large-voxel EM in the sft data-consistency term).
+        SSL, or the original large-voxel EM in the sft data-consistency term).
         """
         target = _as_channeled(recon_image, head.dim()).to(torch.float32)
         raw = self._pool_to(head[:, self.raw_slice], target.shape[-3:])
@@ -295,9 +295,9 @@ class Joint3DReconSegLoss(nn.Module):
         Args:
             head: ``[B, N_AFF + 2, D, H, W]`` small-voxel head (aff/sem
                 logits, raw linear) on the fixed small-voxel network grid.
-            targets: Must carry ``task``.  ``dapt`` carries ``recon_image``
+            targets: Must carry ``task``.  ``ssl`` carries ``recon_image``
                 (the clean EM reconstruction target, on the small-voxel grid
-                for COSEM or a larger-voxel native grid for FIB DAPT).  ``sft``
+                for COSEM or a larger-voxel native grid for FIB SSL).  ``sft``
                 carries ``labels`` at the native grid -- the pool factor is
                 read from the label shape, so no voxel-count key is needed --
                 and optionally ``recon_image`` (the original large-voxel EM)
@@ -305,7 +305,7 @@ class Joint3DReconSegLoss(nn.Module):
                 (from :meth:`build_targets`) is used when present.
 
         Returns:
-            ``dapt`` -> ``{"loss", "loss/recon"}``;
+            ``ssl`` -> ``{"loss", "loss/recon"}``;
             ``sft``  -> ``{"loss", "loss/aff", "loss/sem", ["loss/recon"]}``.
         """
         if head.shape[1] != self.head_channels:
@@ -320,22 +320,22 @@ class Joint3DReconSegLoss(nn.Module):
 
         recon_image = targets.get(self.recon_image_key)
 
-        if task == DAPT:
+        if task == SSL:
             # ---- self-supervised reconstruction of the clean EM ----
             # The whole branch: reconstruct the clean (small-voxel) EM from a
             # degraded (large-voxel) input.  ``recon_image`` is REQUIRED (it is
             # the only supervision on this label-free branch).
             if recon_image is None:
                 raise KeyError(
-                    f"Joint3DReconSegLoss[dapt] needs targets"
+                    f"Joint3DReconSegLoss[ssl] needs targets"
                     f"['{self.recon_image_key}'] (the clean EM reconstruction "
                     f"target)."
                 )
-            if self.weight_recon > 0:
+            if self.weight_rec > 0:
                 l_recon = self._recon_term(head, recon_image)
                 out["loss/recon"] = l_recon
-                total = total + self.weight_recon * l_recon
-            branch_w = self.weight_dapt
+                total = total + self.weight_rec * l_recon
+            branch_w = self.weight_ssl
         else:
             # ---- segmentation on a labeled rung ----
             # Pool the small-voxel head down to the LABEL grid (factor derived
@@ -355,10 +355,10 @@ class Joint3DReconSegLoss(nn.Module):
             # downsampled ("do no harm" / SR data-consistency).  ``recon_image``
             # here is the original large-voxel EM; optional (skipped if the
             # datamodule omits it).
-            if recon_image is not None and self.weight_recon > 0:
+            if recon_image is not None and self.weight_rec > 0:
                 l_recon = self._recon_term(head, recon_image)
                 out["loss/recon"] = l_recon
-                total = total + self.weight_recon * l_recon
+                total = total + self.weight_rec * l_recon
             branch_w = self.weight_sft
 
         out["loss"] = branch_w * total
@@ -367,10 +367,10 @@ class Joint3DReconSegLoss(nn.Module):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(seg={self.seg!r}, "
-            f"recon_loss={self.recon_loss}, weight_recon={self.weight_recon}, "
-            f"weight_seg={self.weight_seg}, weight_dapt={self.weight_dapt}, "
+            f"recon_loss={self.recon_loss}, weight_rec={self.weight_rec}, "
+            f"weight_seg={self.weight_seg}, weight_ssl={self.weight_ssl}, "
             f"weight_sft={self.weight_sft})"
         )
 
 
-__all__ = ["Joint3DReconSegLoss", "DAPT", "SFT"]
+__all__ = ["Joint3DReconSegLoss", "SSL", "SFT"]

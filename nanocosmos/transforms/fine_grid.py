@@ -15,7 +15,7 @@ voxel size and brought onto that grid by :class:`ToFineGridd`:
   the grid.
 
 On the ``sft`` branch the clean native image is captured as ``recon_image``
-before the image is resampled (the raw data-consistency target).  On ``dapt``
+before the image is resampled (the raw data-consistency target).  On ``ssl``
 the degradation transform has already written ``recon_image`` (the clean native
 patch); this transform only moves the two onto their grids.
 """
@@ -60,8 +60,8 @@ class ToFineGridd(MapTransform):
         image_key / recon_key / label_key: dict keys.
         set_recon_from_image: capture ``recon_image = image.clone()`` (the clean
             native patch) before resampling the image -- used on the ``sft``
-            branch (on ``dapt`` the degradation transform already wrote it).
-        task: value written to ``data["task"]`` (``"dapt"`` / ``"sft"``).
+            branch (on ``ssl`` the degradation transform already wrote it).
+        task: value written to ``data["task"]`` (``"ssl"`` / ``"sft"``).
     """
 
     def __init__(

@@ -19,7 +19,7 @@ it.
 | MICrONS    | Mouse V1 cortex, ssEM (minnie65)          | 8 × 8 × 40            | `minnie65: [40,8,8]`     | `download_microns.py`       | `data/MICRONS`   | `microns`                   |
 | CREMI3D    | *Drosophila* brain, ssTEM (A/B/C)         | 4 × 4 × 40            | `cremi3d: [40,4,4]`      | `download_cremi3d.py`       | `data/CREMI3D`   | `cremi3d`                   |
 | FLYEM3D    | FlyEM FIB-SEM (FIB-25 / Hemibrain / MaleCNS) | 8 × 8 × 8 (isotropic) | `flyem3d: [8,8,8]`    | `download_flyem3d.py`       | `data/FLYEM3D`   | `flyem3d` / `joint3d`       |
-| COSEM3D    | OpenOrganelle / COSEM cell FIB-SEM        | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d DAPT anchor)* | `download_cosem3d.py`  | `data/COSEM3D`   | `joint3d`                   |
+| COSEM3D    | OpenOrganelle / COSEM cell FIB-SEM        | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | `download_cosem3d.py`  | `data/COSEM3D`   | `joint3d`                   |
 | *(aux)* Zenodo 582636 | Rice grains, X-ray µCT (smoke test) | n/a              | n/a                      | `download_zenodo_582636.py` | `data/zenodo582636` | n/a                      |
 
 `COSEM3D` (4 nm, image-only) and the Hemibrain / MaleCNS members of `FLYEM3D`
@@ -234,7 +234,7 @@ Every downloader writes the `<stem>_volume.h5` (+ `<stem>_segmentation.h5` when
 labelled) convention above. The stems below are what the scripts emit and what
 you list (without the `_volume` / `_segmentation` suffix) under `vol:` / `seg:`
 in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
-(DAPT / CREMI test) have **no** `_segmentation.h5`.
+(SSL / CREMI test) have **no** `_segmentation.h5`.
 
 | Dataset | `<stem>` pattern | concrete example | seg? | root |
 | --- | --- | --- | --- | --- |
@@ -243,17 +243,17 @@ in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
 | **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume`, seg `…_v1300_segmentation` | yes | `data/MICRONS` |
 | **CREMI3D** | train `cremi3d_sample_{A,B,C}` ; test (EM only) `cremi3d_sample_{A+,B+,C+}` | `cremi3d_sample_A_volume`, `cremi3d_sample_A_segmentation` | A/B/C: yes / +: no | `data/CREMI3D` |
 | **FLYEM3D** · FIB-25 SFT core | `flyem3d_8nm_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_x2304_y2048_z6144` | yes | `data/FLYEM3D` |
-| **FLYEM3D** · FIB-25 DAPT surround | `flyem3d_8nm_dapt_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_dapt_x4000_y4000_z2000_volume` | no | `data/FLYEM3D` |
+| **FLYEM3D** · FIB-25 SSL surround | `flyem3d_8nm_ssl_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_ssl_x4000_y4000_z2000_volume` | no | `data/FLYEM3D` |
 | **FLYEM3D** · FIB-25 z-stride variants | `flyem3d_z32xy8nm[_xz/_yz][_p0..p3]_x{X}_y{Y}_z{Z}` | `flyem3d_z32xy8nm_p0_x2304_y2048_z6144` | yes | `data/FLYEM3D` |
-| **FLYEM3D** · Hemibrain | `flyem3d_hemibrain_8nm[_dapt]_x{X}_y{Y}_z{Z}` | `flyem3d_hemibrain_8nm_dapt_x12000_y12000_z12000_volume` | sft: yes / dapt: no | `data/FLYEM3D` |
-| **FLYEM3D** · MaleCNS | `flyem3d_malecns_8nm[_dapt]_x{X}_y{Y}_z{Z}` | `flyem3d_malecns_8nm_dapt_x20000_y20000_z20000_volume` | sft: yes / dapt: no | `data/FLYEM3D` |
+| **FLYEM3D** · Hemibrain | `flyem3d_hemibrain_8nm[_ssl]_x{X}_y{Y}_z{Z}` | `flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume` | sft: yes / ssl: no | `data/FLYEM3D` |
+| **FLYEM3D** · MaleCNS | `flyem3d_malecns_8nm[_ssl]_x{X}_y{Y}_z{Z}` | `flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume` | sft: yes / ssl: no | `data/FLYEM3D` |
 | **COSEM3D** | `{jrc_id}_{rx}x{ry}x{rz}nm_x{X}_y{Y}_z{Z}` (image only; `--resample-isotropic` → `{jrc_id}_4nm_…`) | `jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume` | no | `data/COSEM3D` |
 
 Notes on the stem fields:
 - **MICrONS** seg encodes the seg version: image `…_volume.h5`, seg
   `…_v1300_segmentation.h5` (so `vol:` and `seg:` differ by `_v{ver}`).
 - **FLYEM3D** stems: `8nm` = native isotropic, `z32xy8nm` = z-strided 32 nm
-  (FIB-25 only); `_dapt` = image-only (no seg); the `_xz` / `_yz` / `_p{n}`
+  (FIB-25 only); `_ssl` = image-only (no seg); the `_xz` / `_yz` / `_p{n}`
   suffixes are FIB-25 orientation / z-phase augmentation variants. Hemibrain /
   MaleCNS carry the dataset name in the stem so they never collide with FIB-25.
 - **COSEM3D** keeps the upstream `jrc_*` id and its exact (near-cubic) voxel in

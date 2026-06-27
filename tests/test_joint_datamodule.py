@@ -50,7 +50,7 @@ def test_to_fine_grid_shapes():
 @pytest.fixture
 def synth_root(tmp_path):
     rng = np.random.default_rng(0)
-    # dapt source: 4 nm (== fine), image only.
+    # ssl source: 4 nm (== fine), image only.
     _write_h5(tmp_path / "cosem_vol.h5", (rng.random((64, 64, 64)) * 255).astype(np.uint8))
     # sft source: 8 nm (coarser), image + segmentation.
     _write_h5(tmp_path / "fly_vol.h5", (rng.random((64, 64, 64)) * 255).astype(np.uint8))
@@ -65,7 +65,7 @@ def _make_dm(root, num_samples=2):
         patch_size=(32, 32, 32),
         pixel_size=(4.0, 4.0, 4.0),
         branches={
-            "dapt": {"batch_size": 1, "sample_weight": 1.0, "volumes": [
+            "ssl": {"batch_size": 1, "sample_weight": 1.0, "volumes": [
                 {"vol": "cosem_vol", "root": root, "native_resolution": [4, 4, 4]},
             ]},
             "sft": {"batch_size": 1, "sample_weight": 1.0, "volumes": [
@@ -97,9 +97,9 @@ def test_joint_datamodule_batch_contract(synth_root):
             assert tuple(batch["label"].shape[-3:]) == (16, 16, 16)
             assert tuple(batch["recon_image"].shape[-3:]) == (16, 16, 16)
         else:
-            # dapt 4 nm == fine grid.
+            # ssl 4 nm == fine grid.
             assert tuple(batch["recon_image"].shape[-3:]) == (32, 32, 32)
-    assert tasks == {"dapt", "sft"}   # round-robin yielded both branches
+    assert tasks == {"ssl", "sft"}   # round-robin yielded both branches
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ def test_joint_train_end_to_end(synth_root):
     module = _StubJointModule(
         model_config={"pretrained": False},
         optimizer_config={"lr": 1e-4},
-        loss_config={"weight_dapt": 1.0, "weight_sft": 1.0,
+        loss_config={"weight_ssl": 1.0, "weight_sft": 1.0,
                      "seg": {"offsets": _OFFSETS, "n_pull": _N_PULL}},
         training_config={"mutex_watershed": {"backend": "cpu"}},
     )

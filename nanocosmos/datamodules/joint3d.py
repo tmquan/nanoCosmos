@@ -2,7 +2,7 @@
 Multi-task datamodule for the joint reconstruction + segmentation recipe.
 
 Feeds :class:`~nanocosmos.modules.Joint3DModule` the batch contract it expects
-(see doc/JOINT_TRAINING.md): ``task`` (``"dapt"`` | ``"sft"``), the fine-grid
+(see doc/JOINT_TRAINING.md): ``task`` (``"ssl"`` | ``"sft"``), the fine-grid
 ``image``, the native-grid ``label`` (sft), and the ``recon_image`` target.
 
 Geometry (see doc/RESOLUTION_LADDER.md).  The network runs on a fixed fine
@@ -22,9 +22,9 @@ Config schema (``cfg.data``)::
 
     patch_size: [320, 256, 256]      # fine grid (z, y, x)
     pixel_size: [4, 4, 4]            # fine voxel size nm (cubic)
-    degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (dapt)
+    degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (ssl)
     branches:
-      dapt: {batch_size, sample_weight, volumes: [{vol, root, native_resolution}]}
+      ssl: {batch_size, sample_weight, volumes: [{vol, root, native_resolution}]}
       sft:  {batch_size, sample_weight, volumes: [{vol, seg, root, native_resolution}]}
     val_volumes: [{vol, seg, root, task, native_resolution}]   # optional
 """
@@ -154,13 +154,13 @@ class Joint3DDataModule(pl.LightningDataModule):
     def _group_transform(self, task: str, native_res: Sequence[float]) -> Compose:
         recon_size = _scaled(self.fine_patch, self.fine_nm,
                              [max(float(r), self.fine_nm) for r in native_res])
-        if task == "dapt":
+        if task == "ssl":
             return Compose([
                 EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
                 RandResolutionDegraded(keys=["image"], recon_key="recon_image", **self.degrade),
                 ToFineGridd(
                     image_size=self.fine_patch, recon_size=recon_size,
-                    set_recon_from_image=False, task="dapt",
+                    set_recon_from_image=False, task="ssl",
                 ),
                 EnsureTyped(keys=["image", "recon_image"]),
             ])

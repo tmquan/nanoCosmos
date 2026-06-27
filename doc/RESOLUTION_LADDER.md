@@ -7,21 +7,21 @@ fine, e.g. 4 nm; *large voxel size* = coarse, e.g. 30–40 nm.) Every dataset is
 placed on a **resolution ladder** by its voxel size and assigned a role by
 where it sits:
 
-- the **finest** data anchors **DAPT** (self-supervised: degrade → reconstruct);
+- the **finest** data anchors **SSL** (self-supervised: degrade → reconstruct);
 - the **middle** of the ladder does **all three** — it is upsampled (SR
-  forward), self-supervised (DAPT), *and* downsampled (to match coarser labels);
+  forward), self-supervised (SSL), *and* downsampled (to match coarser labels);
 - the **coarsest** labeled data is **SFT segmentation** — the small-voxel
   prediction is pooled back to native for the loss.
 
 **Role rule (the roles stack, they are not exclusive):**
-- **DAPT** is gated by *voxel size* — any rung fine enough can self-supervise
+- **SSL** is gated by *voxel size* — any rung fine enough can self-supervise
   (degrade → reconstruct), with or without labels.
 - **SFT** is gated by *labels* — **any rung that has neuron-instance labels
   does SFT too**, regardless of where it sits on the ladder (predict at the
   small-voxel grid, pool to its native grid, supervise).
 
-So a labeled rung (FIB-25, SNEMI3D) is **both** a DAPT source **and** an SFT
-source. COSEM is DAPT-only — not because of its position, but because its
+So a labeled rung (FIB-25, SNEMI3D) is **both** a SSL source **and** an SFT
+source. COSEM is SSL-only — not because of its position, but because its
 labels are organelles, not neuron instances.
 
 ---
@@ -40,7 +40,7 @@ labels are organelles, not neuron instances.
 
 > **Hemibrain** and **MaleCNS** are Janelia FlyEM connectomics releases — large,
 > proofread, **8 nm isotropic** neuropil FIB-SEM. They are domain-matched
-> (neuropil) DAPT sources *and*, because they carry neuron labels, SFT sources.
+> (neuropil) SSL sources *and*, because they carry neuron labels, SFT sources.
 > They are the scalable 8 nm counterpart to FIB-25.
 
 ---
@@ -55,31 +55,31 @@ back to native for that rung's loss (`< 1` ⇒ that axis is mildly *downsampled*
 `AVAIL_SIZE` is the **real full volume** (`x×y×z` vox, verified from each
 `info`). `USED_SIZE` is the **selective, representative portion we actually
 fetch** — we do **not** download whole volumes (Hemibrain/MaleCNS are
-peta-voxel; even FIB-25 is ~3.5e11 vox). Especially for DAPT a handful of
+peta-voxel; even FIB-25 is ~3.5e11 vox). Especially for SSL a handful of
 crops suffices. `Nx A×B×C` = N crops of that size. **USED_SIZE values below are
 a starting proposal — tune per compute/coverage.**
 
 | rank | volume | (z,y,x) nm | up z·xy | role | AVAIL_SIZE (x×y×z vox) | USED_SIZE (x×y×z vox) |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | **COSEM `jrc_hela-3`** | (**3.24**,4,4) | 0.81·1 | DAPT (anchor) | 12400×1000×12000 | 5× 2048×2048×2048 |
-| 2 | **COSEM `jrc_macrophage-2`** | (**3.36**,4,4) | 0.84·1 | DAPT (anchor) | 10000×2000×11087 | 5× 2048×2048×2048 |
-| 3 | **COSEM `jrc_jurkat-1`** | (**3.44**,4,4) | 0.86·1 | DAPT (anchor) | 10000×3000×8560 | 5× 2048×2048×2048 |
-| 4 | **FIB-25** | (8,8,8) | 2·2 | DAPT + SFT | 6446×6643×8090 | SFT 1× 1536³ (core); DAPT 4× 1024³ (surround) |
-| 5 | **Hemibrain** | (8,8,8) | 2·2 | DAPT (+SFT) | 34427×39725×41394 | 5× 1024³ (4 DAPT + 1 test) |
-| 6 | **MaleCNS** | (8,8,8) | 2·2 | DAPT (+SFT) | 94088×78317×134576 | 5× 1024³ (4 DAPT + 1 test) |
+| 1 | **COSEM `jrc_hela-3`** | (**3.24**,4,4) | 0.81·1 | SSL (anchor) | 12400×1000×12000 | 5× 2048×2048×2048 |
+| 2 | **COSEM `jrc_macrophage-2`** | (**3.36**,4,4) | 0.84·1 | SSL (anchor) | 10000×2000×11087 | 5× 2048×2048×2048 |
+| 3 | **COSEM `jrc_jurkat-1`** | (**3.44**,4,4) | 0.86·1 | SSL (anchor) | 10000×3000×8560 | 5× 2048×2048×2048 |
+| 4 | **FIB-25** | (8,8,8) | 2·2 | SSL + SFT | 6446×6643×8090 | SFT 1× 1536³ (core); SSL 4× 1024³ (surround) |
+| 5 | **Hemibrain** | (8,8,8) | 2·2 | SSL (+SFT) | 34427×39725×41394 | 5× 1024³ (4 SSL + 1 test) |
+| 6 | **MaleCNS** | (8,8,8) | 2·2 | SSL (+SFT) | 94088×78317×134576 | 5× 1024³ (4 SSL + 1 test) |
 | 7 | **SNEMI3D / Neurons** | (30,6,6) | 7.5·1.5 | SFT | 5000×2900×300 (Kasthuri); AC4 1024×1024×100 | full (train vol + AC4 val) |
 | 8 | **CREMI** | (40,4,4) | 10·1 | SFT | 3× 1250×1250×125 (A/B/C) | full 3× 1250×1250×125 |
 | 9 | **MICrONS** | (40,8,8) | 10·2 | SFT | petascale (full minnie65) | 1–10× 4096×4096×800 crops |
 
 Notes:
 - Sizes are `x×y×z` (Neuroglancer `info` order); the voxel column stays `(z,y,x)`.
-- COSEM DAPT budget = **5× 2048×2048×2048 per volume**, BUT COSEM volumes are
+- COSEM SSL budget = **5× 2048×2048×2048 per volume**, BUT COSEM volumes are
   thin in **y** (1000–3000 vox), so the y extent is **capped to the volume**:
   effective crops are ≈ 2048 × min(2048, y_avail) × 2048 — i.e. `jrc_hela-3`
   ≈ 2048×1000×2048, `jrc_macrophage-2` ≈ 2048×2000×2048, `jrc_jurkat-1`
   2048×2048×2048 (full 2k³ fits, y=3000). The 5 crops tile x·z.
-- Labels: COSEM = organelle (DAPT-only); FIB-25 = proofread **core** only (the
-  surround is unlabeled → DAPT); the rest carry neuron instances.
+- Labels: COSEM = organelle (SSL-only); FIB-25 = proofread **core** only (the
+  surround is unlabeled → SSL); the rest carry neuron instances.
 - Hemibrain / MaleCNS take **5× 1024³** each, with **1 of the 5 held out for
   test** (4 train + 1 eval). At 8 nm a 1024³ crop is ≈ 8.2 µm — the same
   physical extent as COSEM's 2048³ at 4 nm, so the rungs stay comparable.
@@ -116,7 +116,7 @@ handles the ≤ 1.24× difference).
 
 ## 3. Role bands
 
-### Band A — finest → **DAPT** (label-free super-resolution prior)
+### Band A — finest → **SSL** (label-free super-resolution prior)
 Sources (image-only; `RandResolutionDegraded` synthesises the degraded→clean
 pair):
 - **COSEM 4 nm** (`jrc_hela-3`, `jrc_macrophage-2`, `jrc_jurkat-1`, …) — genuine
@@ -124,8 +124,8 @@ pair):
 - **FIB-25 — the UNSEGMENTED surround** (and the core image): the dense
   proofread core is ~1536³, but the full FIB-25 volume is 6446×6643×8090, so the
   vast majority is **unlabeled 8 nm neuropil** — a large, free, domain-matched
-  DAPT source. Use the whole image volume image-only;
-- **Hemibrain / MaleCNS images** — petascale 8 nm neuropil, image-only for DAPT.
+  SSL source. Use the whole image volume image-only;
+- **Hemibrain / MaleCNS images** — petascale 8 nm neuropil, image-only for SSL.
 
 ```
 small-voxel x ──RandResolutionDegraded(zf, misalign, missing, noise)──► large-voxel input
@@ -136,11 +136,11 @@ This is the petascale-able pretraining: it teaches **fine ultrastructure +
 z-continuity** with zero annotation. COSEM contributes 4 nm texture; FIB-25 /
 Hemibrain / MaleCNS contribute domain-matched neuropil at 8 nm.
 
-### Band B — middle → **upsample / DAPT / downsample** (the bridge)
+### Band B — middle → **upsample / SSL / downsample** (the bridge)
 FIB-25 / Hemibrain / MaleCNS (8 nm, *labeled*) are the pivot rungs. Each plays
 every role:
 - **upsample**: an SR target/input toward the 4 nm grid;
-- **DAPT**: degrade → reconstruct (self-supervised; the unsegmented FIB-25
+- **SSL**: degrade → reconstruct (self-supervised; the unsegmented FIB-25
   surround makes this nearly free at scale);
 - **downsample**: their 8 nm neuron labels supervise segmentation by pooling
   the small-voxel prediction back to 8 nm.
@@ -170,7 +170,7 @@ The pieces in `nanocosmos/losses/joint.py` + `nanocosmos/transforms/degrade.py`
 
 | ladder concept | implementation |
 | --- | --- |
-| DAPT (any fine-enough image) | `Joint3DReconSegLoss` task `dapt` + `RandResolutionDegraded` |
+| SSL (any fine-enough image) | `Joint3DReconSegLoss` task `ssl` + `RandResolutionDegraded` |
 | SFT at native via pooling | task `sft` — pool prediction to the label grid |
 | SFT where native == 4 nm grid | `sft` with pool factor 1 (the `up=1` special case) |
 | pool factor | **derived from the GT shape** (`labels.shape[-3:]` / `recon_image.shape[-3:]`) |
@@ -186,19 +186,19 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 
 1. **Census + fine grid.** Adopt §2; fine grid = **4 nm cubic** (§2.1).
    (Revisit FOV/memory: 160³ @ 4 nm = 0.64 µm context — see §6.)
-2. **Acquire DAPT data.**
+2. **Acquire SSL data.**
    - `scripts/download_cosem3d.py` — 4 nm COSEM3D cubes (`jrc_hela-3`,
      `jrc_macrophage-2`, `jrc_jurkat-1`).
    - **FIB-25 image, including the unsegmented surround** — `download_flyem3d.py`
-     (image-only crops outside the proofread core), for 8 nm neuropil DAPT.
+     (image-only crops outside the proofread core), for 8 nm neuropil SSL.
    - optionally **Hemibrain / MaleCNS** image crops (8 nm), for scale.
 3. **Acquire SFT data.** FIB-25 core + SNEMI3D + CREMI + MICrONS
    (+ Hemibrain / MaleCNS labels if desired).
-4. **Config.** `configs/nanocosmos-16B.yaml`: `dapt` = COSEM + unsegmented
+4. **Config.** `configs/nanocosmos-16B.yaml`: `ssl` = COSEM + unsegmented
    FIB-25 (+ Hemibrain / MaleCNS); `sft` = every labeled rung, each carrying its
    native `(z, y, x)` so the pool factor is derived per volume.
-5. **Curriculum.** Phase 1 DAPT (label-free, 4 nm grid) → Phase 2 add SFT on the
-   labeled rungs (predict 4 nm, pool to native), keep DAPT live (joint).
+5. **Curriculum.** Phase 1 SSL (label-free, 4 nm grid) → Phase 2 add SFT on the
+   labeled rungs (predict 4 nm, pool to native), keep SSL live (joint).
 6. **Integration layer.** Multi-task datamodule (resample each volume onto the
    4 nm grid, keep native labels, round-robin task-homogeneous batches) +
    `Joint3DModule` routing to `Joint3DReconSegLoss`.

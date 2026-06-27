@@ -38,7 +38,7 @@ small-voxel cube.
 A round-robin multi-task sampler yields one branch per step. The roles
 **stack** by dataset (a labeled small-voxel rung like FIB-25 is in *both*).
 
-### `dapt` — self-supervised reconstruction (gated by *voxel size*)
+### `ssl` — self-supervised reconstruction (gated by *voxel size*)
 ```
 small-voxel x ──RandResolutionDegraded──► large-voxel input ──backbone──► raw = x̂
                                                                             │
@@ -83,7 +83,7 @@ All branches **backprop jointly** into the shared backbone (no detach): the
 segmentation gradient shapes the reconstruction and vice-versa.
 
 ```
-total = w_dapt · ( w_recon · L1_recon )                              # dapt
+total = w_ssl · ( w_recon · L1_recon )                              # ssl
       + w_sft  · ( w_seg · (aff + sem) [+ w_recon · L1_dataconsist]) # sft
 ```
 
@@ -95,12 +95,12 @@ total = w_dapt · ( w_recon · L1_recon )                              # dapt
 
 | key | branches | meaning |
 | --- | --- | --- |
-| `task` | all | `"dapt"` or `"sft"` (one per batch) |
-| `recon_image` | dapt (req), sft (opt) | clean EM recon target on its own grid; `raw` is pooled to match. dapt: clean small-voxel EM (main SR). sft: the **original large-voxel EM** → `raw` data-consistency. |
+| `task` | all | `"ssl"` or `"sft"` (one per batch) |
+| `recon_image` | ssl (req), sft (opt) | clean EM recon target on its own grid; `raw` is pooled to match. ssl: clean small-voxel EM (main SR). sft: the **original large-voxel EM** → `raw` data-consistency. |
 | `labels` | sft | instance ids at the **native** grid; the head is pooled to `labels.shape[-3:]` |
 | `_cached_targets` | sft | from `loss.build_targets(labels)` (precomputed affinity target) |
 
-- **DAPT** sample (COSEM or **unlabeled FIB**) → `RandResolutionDegraded` writes
+- **SSL** sample (COSEM or **unlabeled FIB**) → `RandResolutionDegraded` writes
   the degraded `image` + pristine `recon_image`; no `labels`.
 - **SFT** sample (any labeled rung) → `image` resampled to the small-voxel cube,
   `labels` kept on the **native** grid; the loss pools the prediction to the
@@ -113,16 +113,16 @@ total = w_dapt · ( w_recon · L1_recon )                              # dapt
 
 Implemented and unit-tested (`tests/test_joint.py`, 14 tests):
 
-- `nanocosmos/losses/joint.py` — `Joint3DReconSegLoss` (`dapt`/`sft` routing,
-  `_pool_to` all-axis pool to the GT grid, recon on dapt + raw
+- `nanocosmos/losses/joint.py` — `Joint3DReconSegLoss` (`ssl`/`sft` routing,
+  `_pool_to` all-axis pool to the GT grid, recon on ssl + raw
   data-consistency on sft, joint backprop, channel-layout delegation,
   deterministic `canonical_loss_keys`).
 - `nanocosmos/transforms/degrade.py` — `RandResolutionDegraded`.
-- `scripts/download_cosem3d.py` — fetch 4 nm COSEM3D cubes for the DAPT branch;
+- `scripts/download_cosem3d.py` — fetch 4 nm COSEM3D cubes for the SSL branch;
   `scripts/download_flyem3d.py` — FlyEM 8 nm (fib25 / hemibrain / malecns).
 
 Remaining: the multi-task datamodule (per-branch volume lists, resample to the
-small-voxel grid + keep native labels, `RandResolutionDegraded` for `dapt`,
+small-voxel grid + keep native labels, `RandResolutionDegraded` for `ssl`,
 round-robin task-homogeneous batches) + the Lightning module (route to
-`Joint3DReconSegLoss`, handle the label-free `dapt` step + eval) + `train.py`
+`Joint3DReconSegLoss`, handle the label-free `ssl` step + eval) + `train.py`
 wiring; see `configs/nanocosmos-16B.yaml`.

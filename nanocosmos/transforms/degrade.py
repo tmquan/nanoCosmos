@@ -1,5 +1,5 @@
 """
-Realistic large-voxel degradation of small-voxel EM (the free DAPT supervisor).
+Realistic large-voxel degradation of small-voxel EM (the free SSL supervisor).
 
 The nanoCosmos reconstruction objective is *large-voxel -> small-voxel*
 super-resolution: take a coarse (large-voxel) volume and synthesise the fine
@@ -8,7 +8,7 @@ source data (FIB-25 8 nm, or the genuinely 4 nm COSEM / OpenOrganelle volumes)
 we can manufacture that training pair **for free** -- no labels needed -- by
 degrading the small-voxel patch into a realistic large-voxel acquisition and
 keeping the original as the reconstruction target.  This is the self-supervised
-DAPT signal that unlocks petascale unlabeled EM.
+SSL signal that unlocks petascale unlabeled EM.
 
 (Voxel-size convention: *small voxel size* = fine, e.g. 4 nm; *large voxel
 size* = coarse, e.g. 30-40 nm.)
@@ -40,10 +40,10 @@ clean ``z``-decimation (the make-or-break sim-to-real concern):
    large-voxel content on the small-voxel canvas and its job is to restore
    the lost ``z`` detail.
 
-Image-only: there is no label here (DAPT is unlabeled).  When used to
+Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
 on the image and pool the label separately -- but its primary use is the
-label-free DAPT branch.
+label-free SSL branch.
 """
 
 from __future__ import annotations

@@ -50,7 +50,7 @@ class _BranchDataset(Dataset):
     def __getitem__(self, idx):
         d = self.d
         sample = {"task": self.task, "image": torch.rand(1, d, d, d)}
-        if self.task == "dapt":
+        if self.task == "ssl":
             sample["recon_image"] = torch.rand(1, d, d, d)
         else:  # sft
             sample["label"] = torch.randint(0, 3, (d, d, d), dtype=torch.long)
@@ -74,7 +74,7 @@ def _make_module():
     return _StubJointModule(
         model_config={"variant": "Nano", "pretrained": False},
         optimizer_config={"lr": 1e-4},
-        loss_config={"weight_dapt": 1.0, "weight_sft": 1.0, "seg": {}},
+        loss_config={"weight_ssl": 1.0, "weight_sft": 1.0, "seg": {}},
         training_config={"mutex_watershed": {"backend": "cpu"}},
     )
 
@@ -84,7 +84,7 @@ def test_head_width_derived_from_nested_seg_offsets():
     assert m.model.conv.out_channels == HEAD_CHANNELS  # 14 aff + sem + raw
 
 
-@pytest.mark.parametrize("task", ["dapt", "sft"])
+@pytest.mark.parametrize("task", ["ssl", "sft"])
 def test_joint_module_fast_dev_run(task):
     m = _make_module()
     dm = _BranchDataModule(task)
@@ -103,9 +103,9 @@ def test_joint_module_fast_dev_run(task):
 
 def test_prepare_targets_routing():
     m = _make_module()
-    # dapt: recon target, no labels.
-    t = m._prepare_targets({"task": ["dapt", "dapt"], "recon_image": torch.rand(2, 1, 16, 16, 16)})
-    assert t["task"] == "dapt" and "labels" not in t and "recon_image" in t
+    # ssl: recon target, no labels.
+    t = m._prepare_targets({"task": ["ssl", "ssl"], "recon_image": torch.rand(2, 1, 16, 16, 16)})
+    assert t["task"] == "ssl" and "labels" not in t and "recon_image" in t
     # sft: labels + cached affinity target.
     t = m._prepare_targets({
         "task": ["sft", "sft"],
