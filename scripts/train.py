@@ -446,8 +446,11 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     img_cfg = callback_cfg.get("image_logger", {})
     if img_cfg.get("enabled", True):
         # The joint recipe needs the task-aware logger (reconstruction panels +
-        # sft segmentation panels pooled to the native label grid).
-        is_joint = str(cfg.get("model", {}).get("type", "")).lower() == "joint3d"
+        # sft segmentation panels pooled to the native label grid).  Matches
+        # every joint variant: ``joint3d`` (Nano), ``joint3d_2b`` /
+        # ``joint_predict3d`` (Cosmos-Predict 2B).
+        _model_type = str(cfg.get("model", {}).get("type", "")).lower()
+        is_joint = _model_type.startswith("joint")
         if is_joint:
             from nanocosmos.callbacks import Joint3DImageLogger as _Logger
         else:
