@@ -2,7 +2,7 @@
 # nanocosmos-16B.yaml  --  resolution-ladder super-resolution + segmentation
 # =====================================================================
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
-# ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm, 160^3) a
+# ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm, 200x256x256) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
 # down to wherever its ground truth lives (factor read from the GT shape).
@@ -11,7 +11,7 @@
 #
 #   ssl   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
 #          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
-#          (small voxel) AND UNLABELED FIB-25 (domain-matched neuropil).  Label-free.
+#          (small voxel) + unlabeled FIB-25 / Hemibrain / MaleCNS neuropil + CREMI padded.  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
 #          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.
@@ -21,11 +21,11 @@
 # RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
 # is the only "resampling" and it is derived from the native label shape.
 #
-# NOTE: the multi-task datamodule + Lightning module that consume the
-# ``data.branches`` / ``loss`` schema below are the remaining integration layer
-# (the loss + degradation transform are implemented and tested:
-# nanocosmos/losses/joint.py, nanocosmos/transforms/degrade.py,
-# tests/test_joint.py).
+# Implemented + tested end-to-end: multi-task datamodule
+# (nanocosmos/datamodules/joint3d.py), Lightning module
+# (nanocosmos/modules/joint3d.py), joint loss (nanocosmos/losses/joint3d.py),
+# and degradation transform (nanocosmos/transforms/degrade.py).  See
+# tests/test_joint*.py.
 # =====================================================================
 
 experiment_name: nanocosmos-16B
@@ -39,11 +39,11 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 320 x 256 x 256 @ 4 nm = 1.28 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # 200 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
-  # the DiT token grid is (80, 16, 16) = 20,480 tokens (~5x the 256^3 = 4,000).
-  # Memory-heavy on the 16B backbone -- pair with gradient checkpointing and a
-  # small batch; drop toward 256^3 / 320x256x256 if it OOMs.
+  # the DiT token grid is (50, 16, 16) = 12,800 tokens.  Memory-heavy on the 16B
+  # backbone -- pair with gradient checkpointing and a small batch; drop the
+  # patch (e.g. 160x256x256) if it OOMs.
   patch_size: [200, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -86,11 +86,11 @@ data:
       task: ssl
       batch_size: 1
       sample_weight: 1.0
-      # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused).
-      # PLUS unlabeled FIB-25 (domain-matched neuropil) -- the vast
-      # unproofread volume reconstructs for free.  RandResolutionDegraded
-      # synthesises the (degraded -> clean) pair.  Add OpenOrganelle volumes
-      # here to scale SSL toward petascale.
+      # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
+      # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
+      # volumes -- domain-matched EM that reconstructs for free.
+      # RandResolutionDegraded synthesises the (degraded -> clean) pair.  Add
+      # OpenOrganelle volumes here to scale SSL toward petascale.
       volumes:
       # --- COSEM ~4 nm small voxel (exact z per volume), all tiles ---
       - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
@@ -246,7 +246,7 @@ data:
         native_resolution: [40, 8, 8]
 
   val_batch_size: 1
-  # Validation on the labeled (sft) rungs -- instance metrics at native grid.
+  # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
   # SNEMI3D AC4 (labeled holdout).
   - vol: AC4_inputs
