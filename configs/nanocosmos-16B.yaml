@@ -411,6 +411,7 @@ training:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
+  limit_train_batches: 1000
   limit_val_batches: 200
   check_val_every_n_epoch: 20
   num_sanity_val_steps: 2
