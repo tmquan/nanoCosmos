@@ -1,5 +1,5 @@
 # =====================================================================
-# nanocosmos_joint.yaml  --  resolution-ladder super-resolution + segmentation
+# nanocosmos-16B.yaml  --  resolution-ladder super-resolution + segmentation
 # =====================================================================
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
 # ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm, 160^3) a
@@ -28,7 +28,7 @@
 # tests/test_joint.py).
 # =====================================================================
 
-experiment_name: nanocosmos_joint
+experiment_name: nanocosmos-16B
 project_name: nanocosmos
 seed: 42
 logger: tensorboard

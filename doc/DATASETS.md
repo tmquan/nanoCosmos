@@ -24,7 +24,7 @@ it.
 
 `COSEM3D` (4 nm, image-only) and the Hemibrain / MaleCNS members of `FLYEM3D`
 (8 nm) are the small-/large-voxel rungs of the **joint super-resolution recipe**
-(`configs/nanocosmos_joint.yaml`, `data.dataset: joint3d`); see
+(`configs/nanocosmos-16B.yaml`, `data.dataset: joint3d`); see
 [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
 
 All scripts live in `scripts/` and write the on-disk convention described

@@ -194,7 +194,7 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
    - optionally **Hemibrain / MaleCNS** image crops (8 nm), for scale.
 3. **Acquire SFT data.** FIB-25 core + SNEMI3D + CREMI + MICrONS
    (+ Hemibrain / MaleCNS labels if desired).
-4. **Config.** `configs/nanocosmos_joint.yaml`: `dapt` = COSEM + unsegmented
+4. **Config.** `configs/nanocosmos-16B.yaml`: `dapt` = COSEM + unsegmented
    FIB-25 (+ Hemibrain / MaleCNS); `sft` = every labeled rung, each carrying its
    native `(z, y, x)` so the pool factor is derived per volume.
 5. **Curriculum.** Phase 1 DAPT (label-free, 4 nm grid) → Phase 2 add SFT on the

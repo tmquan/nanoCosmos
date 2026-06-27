@@ -125,4 +125,4 @@ Remaining: the multi-task datamodule (per-branch volume lists, resample to the
 small-voxel grid + keep native labels, `RandResolutionDegraded` for `dapt`,
 round-robin task-homogeneous batches) + the Lightning module (route to
 `Joint3DReconSegLoss`, handle the label-free `dapt` step + eval) + `train.py`
-wiring; see `configs/nanocosmos_joint.yaml`.
+wiring; see `configs/nanocosmos-16B.yaml`.

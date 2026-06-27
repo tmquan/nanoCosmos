@@ -24,7 +24,7 @@ Examples
 The download jobs are a *representative* manifest (crop counts / origins match
 the census USED_SIZE); edit ``_jobs`` or run the individual scripts for finer
 control.  Verification is config-driven: it scans the roots referenced by
-``configs/nanocosmos_joint.yaml``.
+``configs/nanocosmos-16B.yaml``.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from typing import Dict, List, Tuple
 
 _HERE = Path(__file__).resolve().parent
 _PY = sys.executable
-_CONFIG = _HERE.parent / "configs" / "nanocosmos_joint.yaml"
+_CONFIG = _HERE.parent / "configs" / "nanocosmos-16B.yaml"
 
 # COSEM crop origins (x y z); y kept at 0 because the volumes are thin in y.
 _COSEM_ORIGINS = [(0, 0, 0), (4096, 0, 4096), (8192, 0, 0), (0, 0, 8192), (4096, 0, 0)]
