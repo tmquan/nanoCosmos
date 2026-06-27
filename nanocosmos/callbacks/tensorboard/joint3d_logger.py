@@ -1,7 +1,7 @@
 """TensorBoard visualisation for the joint reconstruction + segmentation recipe.
 
-:class:`JointImageLogger` extends :class:`ImageLogger` for the two-branch
-:class:`~nanocosmos.modules.JointModule`.  It reuses the parent's batch-capture
+:class:`Joint3DImageLogger` extends :class:`ImageLogger` for the two-branch
+:class:`~nanocosmos.modules.Joint3DModule`.  It reuses the parent's batch-capture
 / epoch-end / autocast machinery and only overrides the per-epoch render so it
 can branch on ``batch["task"]``:
 
@@ -41,8 +41,8 @@ def _gray3(panel_2d: torch.Tensor) -> torch.Tensor:
     return repeat(_normalise(panel_2d.float()), "b 1 h w -> b 3 h w")
 
 
-class JointImageLogger(ImageLogger):
-    """Task-aware TensorBoard logger for :class:`JointModule`."""
+class Joint3DImageLogger(ImageLogger):
+    """Task-aware TensorBoard logger for :class:`Joint3DModule`."""
 
     def _run_visualization(self, tb, trainer, pl_module, batch, *, stage: str):
         task = self._resolve_task(batch.get("task"))
@@ -140,4 +140,4 @@ class JointImageLogger(ImageLogger):
         return "sft"
 
 
-__all__ = ["JointImageLogger"]
+__all__ = ["Joint3DImageLogger"]

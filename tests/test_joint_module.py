@@ -1,9 +1,9 @@
-"""Integration test for the JointModule training/eval loop (stub backbone).
+"""Integration test for the Joint3DModule training/eval loop (stub backbone).
 
-Runs the *real* ``JointModule`` loop through a tiny CPU ``pl.Trainer``
+Runs the *real* ``Joint3DModule`` loop through a tiny CPU ``pl.Trainer``
 (``fast_dev_run``) with a stub backbone in place of the 16B Cosmos-3 Nano, so
 the task routing (``_prepare_targets``), the inherited ``training_step`` ->
-``JointReconSegLoss`` path, and the sft metric pooling (``_accumulate_metrics``)
+``Joint3DReconSegLoss`` path, and the sft metric pooling (``_accumulate_metrics``)
 are all exercised without any HuggingFace download or GPU.
 """
 
@@ -14,7 +14,7 @@ import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
 
 from nanocosmos.losses import HEAD_CHANNELS
-from nanocosmos.modules import JointModule
+from nanocosmos.modules import Joint3DModule
 
 
 class _StubBackbone(nn.Module):
@@ -31,7 +31,7 @@ class _StubBackbone(nn.Module):
         return self.conv(x)
 
 
-class _StubJointModule(JointModule):
+class _StubJointModule(Joint3DModule):
     def _build_model(self, model_config):
         return _StubBackbone(model_config["head_channels"])
 
@@ -96,8 +96,8 @@ def test_joint_module_fast_dev_run(task):
         enable_progress_bar=False,
         enable_model_summary=False,
     )
-    # Should run 1 train + 1 val batch through the real JointModule loop
-    # (routing + JointReconSegLoss + sft metric pooling) without error.
+    # Should run 1 train + 1 val batch through the real Joint3DModule loop
+    # (routing + Joint3DReconSegLoss + sft metric pooling) without error.
     trainer.fit(m, dm)
 
 

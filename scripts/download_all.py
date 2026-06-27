@@ -42,9 +42,11 @@ _CONFIG = _HERE.parent / "configs" / "nanocosmos_joint.yaml"
 # COSEM crop origins (x y z); y kept at 0 because the volumes are thin in y.
 _COSEM_ORIGINS = [(0, 0, 0), (4096, 0, 4096), (8192, 0, 0), (0, 0, 8192), (4096, 0, 0)]
 _COSEM_VOLS = ["jrc_hela-3", "jrc_macrophage-2", "jrc_jurkat-1"]
-# Hemibrain / MaleCNS DAPT crop origins (x y z); 4 train + 1 test.
-_FLYEM_ORIGINS = [(12000, 12000, 12000), (20000, 20000, 20000),
-                  (16000, 24000, 30000), (24000, 16000, 40000), (28000, 28000, 50000)]
+# Hemibrain / MaleCNS DAPT crop origins (x y z); 4 train + 1 test.  Kept within
+# Hemibrain's bounds (~34427 x 39725 x 41394) for a 1024^3 crop; the per-volume
+# clamp in _clamp_box slides any out-of-bounds origin inside regardless.
+_FLYEM_ORIGINS = [(4000, 4000, 4000), (12000, 12000, 12000), (20000, 20000, 20000),
+                  (28000, 24000, 30000), (16000, 30000, 36000)]
 
 
 def _cos(ds: str, origin: Tuple[int, int, int]) -> List[str]:

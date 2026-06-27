@@ -1,6 +1,6 @@
 """Tests for the joint reconstruction + segmentation recipe.
 
-Covers the two-branch :class:`JointReconSegLoss` routing / shapes / gradient
+Covers the two-branch :class:`Joint3DReconSegLoss` routing / shapes / gradient
 flow and the :class:`RandResolutionDegraded` self-supervised (small-voxel ->
 large-voxel) degradation transform.
 """
@@ -8,8 +8,8 @@ large-voxel) degradation transform.
 import pytest
 import torch
 
-from nanocosmos.losses import JointReconSegLoss, HEAD_CHANNELS, N_AFF
-from nanocosmos.losses.joint import DAPT, SFT
+from nanocosmos.losses import Joint3DReconSegLoss, HEAD_CHANNELS, N_AFF
+from nanocosmos.losses.joint3d import DAPT, SFT
 from nanocosmos.transforms import RandResolutionDegraded
 
 
@@ -25,11 +25,11 @@ def _labels(b=2, d=32, h=32, w=32):
 
 
 # ---------------------------------------------------------------------------
-# JointReconSegLoss
+# Joint3DReconSegLoss
 # ---------------------------------------------------------------------------
 
 def test_head_layout_delegated():
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     assert loss.head_channels == HEAD_CHANNELS == N_AFF + 2
     assert loss.aff_slice.stop == N_AFF
     # The inner affinity loss must not also charge an input-recon term.
@@ -37,7 +37,7 @@ def test_head_layout_delegated():
 
 
 def test_dapt_branch_recon_only():
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head()
     em = torch.rand(2, 1, 32, 32, 32)
     out = loss(head, {"task": DAPT, "recon_image": em})
@@ -50,7 +50,7 @@ def test_dapt_branch_recon_only():
 def test_dapt_recon_pools_raw_to_larger_voxel_target():
     # FIB-style DAPT: clean EM target on a larger-voxel native grid than the
     # small-voxel prediction -> raw is pooled down to the target grid before L1.
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head(d=32, h=32, w=32)
     em = torch.rand(2, 1, 16, 16, 16)      # larger-voxel native EM (e.g. FIB 8 nm)
     out = loss(head, {"task": DAPT, "recon_image": em})
@@ -62,7 +62,7 @@ def test_dapt_recon_pools_raw_to_larger_voxel_target():
 def test_sft_branch_seg_only_no_recon():
     # SFT is seg-only when no recon target is supplied; labels on the small-
     # voxel grid -> pool factor 1 (no-op).
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head()
     labels = _labels()
     cached = loss.build_targets(labels)
@@ -76,7 +76,7 @@ def test_sft_branch_seg_only_no_recon():
 def test_sft_pools_small_voxel_head_to_label_grid():
     # Large-voxel labels (z and xy both coarser) -> the small-voxel head is
     # pooled to the label shape, factor derived from the labels.
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head(d=40, h=64, w=64)          # small-voxel grid
     labels = _labels(d=8, h=32, w=32)       # larger voxel on ALL three axes
     cached = loss.build_targets(labels)
@@ -90,7 +90,7 @@ def test_sft_pools_small_voxel_head_to_label_grid():
 def test_sft_raw_data_consistency_when_recon_image_present():
     # The 32-ch head always carries `raw`; on sft we also supervise it by
     # pooling the small-voxel raw down to the ORIGINAL large-voxel EM.
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head(d=40, h=64, w=64)            # small-voxel grid
     labels = _labels(d=8, h=32, w=32)         # native (large-voxel) label grid
     native_em = torch.rand(2, 1, 8, 32, 32)   # original large-voxel EM
@@ -107,22 +107,22 @@ def test_sft_raw_data_consistency_when_recon_image_present():
 
 def test_pool_to_shape_all_axes():
     head = _head(d=40, h=64, w=64)
-    pooled = JointReconSegLoss._pool_to(head, (8, 32, 32))
+    pooled = Joint3DReconSegLoss._pool_to(head, (8, 32, 32))
     assert pooled.shape == (2, HEAD_CHANNELS, 8, 32, 32)
     # No-op when already at the target shape.
-    same = JointReconSegLoss._pool_to(head, (40, 64, 64))
+    same = Joint3DReconSegLoss._pool_to(head, (40, 64, 64))
     assert same is head
 
 
 def test_mixed_task_batch_rejected():
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head()
     with pytest.raises(ValueError):
         loss(head, {"task": [DAPT, SFT], "recon_image": torch.rand(2, 1, 32, 32, 32)})
 
 
 def test_homogeneous_task_list_accepted():
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     head = _head()
     em = torch.rand(2, 1, 32, 32, 32)
     out = loss(head, {"task": [DAPT, DAPT], "recon_image": em})
@@ -132,15 +132,15 @@ def test_homogeneous_task_list_accepted():
 def test_branch_weights_scale_total():
     head = _head(requires_grad=False)
     em = torch.rand(2, 1, 32, 32, 32)
-    base = JointReconSegLoss()
-    scaled = JointReconSegLoss(weight_dapt=3.0)
+    base = Joint3DReconSegLoss()
+    scaled = Joint3DReconSegLoss(weight_dapt=3.0)
     b = base(head, {"task": DAPT, "recon_image": em})["loss"]
     s = scaled(head, {"task": DAPT, "recon_image": em})["loss"]
     assert torch.allclose(s, 3.0 * b, atol=1e-5)
 
 
 def test_canonical_loss_keys_stable():
-    loss = JointReconSegLoss()
+    loss = Joint3DReconSegLoss()
     keys = loss.canonical_loss_keys()
     assert keys[0] == "loss"
     assert set(keys) == {"loss", "loss/recon", "loss/aff", "loss/sem"}

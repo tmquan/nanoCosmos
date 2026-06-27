@@ -7,7 +7,7 @@
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
 # down to wherever its ground truth lives (factor read from the GT shape).
 # Two branches (roles STACK by dataset), routed per task-homogeneous batch by
-# JointReconSegLoss:
+# Joint3DReconSegLoss:
 #
 #   dapt   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
 #          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
@@ -37,7 +37,7 @@ ckpt_path_skip_prefixes: []
 ckpt_path_only_prefixes: null
 
 data:
-  dataset: joint        # -> JointDataModule (multi-task round-robin)
+  dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 320x256x256 @ 4 nm = 1.28 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
@@ -162,7 +162,7 @@ data:
     native_resolution: [30, 6, 6]
 
 model:
-  type: joint          # -> JointModule (Cosmos-3 Nano backbone + JointReconSegLoss)
+  type: joint3d          # -> Joint3DModule (Cosmos-3 Nano backbone + Joint3DReconSegLoss)
   variant: Nano
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
@@ -187,12 +187,12 @@ optimizer:
     warmup_epochs: 5
   dit_backbone_lr: 1.0e-04
 
-# JointReconSegLoss: branch weights + the inner segmentation (AffinityFGLoss)
+# Joint3DReconSegLoss: branch weights + the inner segmentation (AffinityFGLoss)
 # config.  ``weight_raw`` of the inner loss is forced to 0 -- the EM
 # reconstruction term is owned by the joint loss (``weight_recon``) so it can
 # target the clean EM and skip / switch grids per branch.
 loss:
-  type: joint
+  type: joint3d
   recon_loss: l1
   weight_recon: 1.0
   weight_seg: 1.0

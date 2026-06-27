@@ -147,7 +147,10 @@ def _clamp_box(origin, size, vol):
     if origin is None:
         centre = (lo + hi) // 2
         origin = centre - size // 2
-    origin = np.maximum(np.array(origin, dtype=np.int64), lo)
+    # Keep the WHOLE box inside [lo, hi]: clamp the origin to
+    # [lo, max(lo, hi - size)] so an out-of-bounds origin slides in instead of
+    # producing end < start (negative span -> OutOfBoundsError).
+    origin = np.clip(np.array(origin, dtype=np.int64), lo, np.maximum(lo, hi - size))
     end = np.minimum(origin + size, hi)
     return origin, end
 

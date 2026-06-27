@@ -1,8 +1,8 @@
 """End-to-end test for the joint data path (synthetic volumes, stub backbone).
 
-Writes tiny HDF5 volumes, builds :class:`JointDataModule`, and (a) checks the
+Writes tiny HDF5 volumes, builds :class:`Joint3DDataModule`, and (a) checks the
 per-branch batch contract (task / fine-grid image / native label / recon
-target), and (b) runs the *real* ``JointModule`` loop over the datamodule via
+target), and (b) runs the *real* ``Joint3DModule`` loop over the datamodule via
 ``pl.Trainer(fast_dev_run=True)`` on CPU -- i.e. the full "can I train?" path
 without the 16B backbone.
 """
@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 
-from nanocosmos.datamodules import JointDataModule
-from nanocosmos.modules import JointModule
+from nanocosmos.datamodules import Joint3DDataModule
+from nanocosmos.modules import Joint3DModule
 from nanocosmos.transforms import ToFineGridd
 
 # Small affinity offsets so tiny test grids stay above the offset reach.
@@ -44,7 +44,7 @@ def test_to_fine_grid_shapes():
 
 
 # ---------------------------------------------------------------------------
-# JointDataModule
+# Joint3DDataModule
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def synth_root(tmp_path):
 
 
 def _make_dm(root, num_samples=2):
-    return JointDataModule(
+    return Joint3DDataModule(
         data_root=root,
         patch_size=(32, 32, 32),
         pixel_size=(4.0, 4.0, 4.0),
@@ -103,7 +103,7 @@ def test_joint_datamodule_batch_contract(synth_root):
 
 
 # ---------------------------------------------------------------------------
-# Full train path: synthetic data -> JointDataModule -> JointModule -> Trainer
+# Full train path: synthetic data -> Joint3DDataModule -> Joint3DModule -> Trainer
 # ---------------------------------------------------------------------------
 
 class _StubBackbone(nn.Module):
@@ -118,7 +118,7 @@ class _StubBackbone(nn.Module):
         return self.conv(x)
 
 
-class _StubJointModule(JointModule):
+class _StubJointModule(Joint3DModule):
     def _build_model(self, model_config):
         return _StubBackbone(model_config["head_channels"])
 

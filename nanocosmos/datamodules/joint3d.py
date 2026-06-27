@@ -1,7 +1,7 @@
 """
 Multi-task datamodule for the joint reconstruction + segmentation recipe.
 
-Feeds :class:`~nanocosmos.modules.JointModule` the batch contract it expects
+Feeds :class:`~nanocosmos.modules.Joint3DModule` the batch contract it expects
 (see doc/JOINT_TRAINING.md): ``task`` (``"dapt"`` | ``"sft"``), the fine-grid
 ``image``, the native-grid ``label`` (sft), and the ``recon_image`` target.
 
@@ -16,7 +16,7 @@ Branches & batching.  Volumes are grouped by ``(task, native_resolution)`` --
 samples in a group share a tensor shape, so a batch can only be drawn from one
 group.  A round-robin batch sampler interleaves groups (weighted by each
 branch's ``sample_weight``), yielding **task- and shape-homogeneous** batches,
-which is exactly what ``JointReconSegLoss`` / ``JointModule`` require.
+which is exactly what ``Joint3DReconSegLoss`` / ``Joint3DModule`` require.
 
 Config schema (``cfg.data``)::
 
@@ -103,7 +103,7 @@ class _RoundRobinBatchSampler(Sampler):
                 yield idx
 
 
-class JointDataModule(pl.LightningDataModule):
+class Joint3DDataModule(pl.LightningDataModule):
     """Round-robin multi-task datamodule for the joint recipe."""
 
     def __init__(
@@ -226,7 +226,7 @@ class JointDataModule(pl.LightningDataModule):
                     _scaled(self.fine_patch, self.fine_nm, res), len(ds), bs,
                 )
         if not datasets:
-            raise ValueError("JointDataModule: no train volumes configured under data.branches.")
+            raise ValueError("Joint3DDataModule: no train volumes configured under data.branches.")
         self.train_dataset = ConcatDataset(datasets)
         self._train_groups = group_specs
 
@@ -276,4 +276,4 @@ class JointDataModule(pl.LightningDataModule):
         return self._loader(self.val_dataset, self._val_groups, shuffle=False)
 
 
-__all__ = ["JointDataModule"]
+__all__ = ["Joint3DDataModule"]

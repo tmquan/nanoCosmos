@@ -3,7 +3,7 @@
 This is the mechanics of the nanoCosmos training loss. For the governing
 framing (the **resolution ladder**, the dataset census, role assignment, and
 the curriculum) read [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md) first;
-this doc only details how `JointReconSegLoss` and the batch contract work.
+this doc only details how `Joint3DReconSegLoss` and the batch contract work.
 
 **Voxel-size convention** (used throughout): *small voxel size* = fine /
 high-detail (e.g. 4 nm); *large voxel size* = coarse (e.g. 30–40 nm). The
@@ -91,7 +91,7 @@ total = w_dapt · ( w_recon · L1_recon )                              # dapt
 
 ## 4. Batch contract (what the datamodule provides)
 
-`JointReconSegLoss.forward(head, targets)` consumes, per (homogeneous) batch:
+`Joint3DReconSegLoss.forward(head, targets)` consumes, per (homogeneous) batch:
 
 | key | branches | meaning |
 | --- | --- | --- |
@@ -113,7 +113,7 @@ total = w_dapt · ( w_recon · L1_recon )                              # dapt
 
 Implemented and unit-tested (`tests/test_joint.py`, 14 tests):
 
-- `nanocosmos/losses/joint.py` — `JointReconSegLoss` (`dapt`/`sft` routing,
+- `nanocosmos/losses/joint.py` — `Joint3DReconSegLoss` (`dapt`/`sft` routing,
   `_pool_to` all-axis pool to the GT grid, recon on dapt + raw
   data-consistency on sft, joint backprop, channel-layout delegation,
   deterministic `canonical_loss_keys`).
@@ -124,5 +124,5 @@ Implemented and unit-tested (`tests/test_joint.py`, 14 tests):
 Remaining: the multi-task datamodule (per-branch volume lists, resample to the
 small-voxel grid + keep native labels, `RandResolutionDegraded` for `dapt`,
 round-robin task-homogeneous batches) + the Lightning module (route to
-`JointReconSegLoss`, handle the label-free `dapt` step + eval) + `train.py`
+`Joint3DReconSegLoss`, handle the label-free `dapt` step + eval) + `train.py`
 wiring; see `configs/nanocosmos_joint.yaml`.

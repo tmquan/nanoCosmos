@@ -91,7 +91,7 @@ def _as_channeled(x: torch.Tensor, ndim: int) -> torch.Tensor:
     return x
 
 
-class JointReconSegLoss(nn.Module):
+class Joint3DReconSegLoss(nn.Module):
     """Two-branch joint EM reconstruction + segmentation loss.
 
     Args:
@@ -215,7 +215,7 @@ class JointReconSegLoss(nn.Module):
             uniq = set(map(str, task))
             if len(uniq) != 1:
                 raise ValueError(
-                    f"JointReconSegLoss expects task-homogeneous batches; "
+                    f"Joint3DReconSegLoss expects task-homogeneous batches; "
                     f"got mixed tasks {sorted(uniq)}.  Use the round-robin "
                     f"multi-task sampler so each batch is a single branch."
                 )
@@ -310,7 +310,7 @@ class JointReconSegLoss(nn.Module):
         """
         if head.shape[1] != self.head_channels:
             raise ValueError(
-                f"JointReconSegLoss expects a {self.head_channels}-channel "
+                f"Joint3DReconSegLoss expects a {self.head_channels}-channel "
                 f"head (N_AFF + 2); got {head.shape[1]}."
             )
         task = self._resolve_task(targets[self.task_key])
@@ -327,7 +327,7 @@ class JointReconSegLoss(nn.Module):
             # the only supervision on this label-free branch).
             if recon_image is None:
                 raise KeyError(
-                    f"JointReconSegLoss[dapt] needs targets"
+                    f"Joint3DReconSegLoss[dapt] needs targets"
                     f"['{self.recon_image_key}'] (the clean EM reconstruction "
                     f"target)."
                 )
@@ -373,4 +373,4 @@ class JointReconSegLoss(nn.Module):
         )
 
 
-__all__ = ["JointReconSegLoss", "DAPT", "SFT"]
+__all__ = ["Joint3DReconSegLoss", "DAPT", "SFT"]

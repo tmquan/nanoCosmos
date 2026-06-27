@@ -170,12 +170,12 @@ The pieces in `nanocosmos/losses/joint.py` + `nanocosmos/transforms/degrade.py`
 
 | ladder concept | implementation |
 | --- | --- |
-| DAPT (any fine-enough image) | `JointReconSegLoss` task `dapt` + `RandResolutionDegraded` |
+| DAPT (any fine-enough image) | `Joint3DReconSegLoss` task `dapt` + `RandResolutionDegraded` |
 | SFT at native via pooling | task `sft` — pool prediction to the label grid |
 | SFT where native == 4 nm grid | `sft` with pool factor 1 (the `up=1` special case) |
 | pool factor | **derived from the GT shape** (`labels.shape[-3:]` / `recon_image.shape[-3:]`) |
 
-The all-axis pool `JointReconSegLoss._pool_to(x, (d, h, w))` via
+The all-axis pool `Joint3DReconSegLoss._pool_to(x, (d, h, w))` via
 `adaptive_avg_pool3d` handles every rung (z *and* xy), with the factor read
 from the ground-truth shape (no `z_sections` key). Recon (`raw`) pools the same
 way to the reconstruction target's grid. `tests/test_joint.py` covers both.
@@ -201,7 +201,7 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
    labeled rungs (predict 4 nm, pool to native), keep DAPT live (joint).
 6. **Integration layer.** Multi-task datamodule (resample each volume onto the
    4 nm grid, keep native labels, round-robin task-homogeneous batches) +
-   `JointModule` routing to `JointReconSegLoss`.
+   `Joint3DModule` routing to `Joint3DReconSegLoss`.
 
 ---
 

@@ -1,11 +1,11 @@
 """
 Joint reconstruction + segmentation Lightning module (the nanoCosmos recipe).
 
-``JointModule`` reuses the **whole** Cosmos-3 Nano training/eval machinery
+``Joint3DModule`` reuses the **whole** Cosmos-3 Nano training/eval machinery
 (model build, freeze schedule, optimiser param-group split, gradient guard,
 the epoch-end reduce/log loop) from
 :class:`~nanocosmos.modules.cosmos_3_nano.module.Cosmos3Nano3DModule`, and
-swaps in :class:`~nanocosmos.losses.JointReconSegLoss`.  Only three things
+swaps in :class:`~nanocosmos.losses.Joint3DReconSegLoss`.  Only three things
 differ from the plain affinity recipe, all task-routing:
 
 * :meth:`_loss_offsets` -- the offset list lives under ``loss.seg.offsets``
@@ -20,7 +20,7 @@ differ from the plain affinity recipe, all task-routing:
 
 ``training_step`` / ``validation_step`` / the epoch-end reduce are inherited
 verbatim: they call ``_prepare_targets`` -> ``self.model(images)`` ->
-``self.criterion(head, targets)``, and :class:`JointReconSegLoss` does the
+``self.criterion(head, targets)``, and :class:`Joint3DReconSegLoss` does the
 branch routing + small-voxel→native pooling internally.
 
 Batches must be **task-homogeneous** (one branch per step) -- the joint
@@ -32,14 +32,14 @@ from typing import Any, Dict
 import torch
 from einops import rearrange
 
-from nanocosmos.losses import DAPT, JointReconSegLoss
+from nanocosmos.losses import DAPT, Joint3DReconSegLoss
 from nanocosmos.modules.cosmos_3_nano.module import Cosmos3Nano3DModule
 
 
-class JointModule(Cosmos3Nano3DModule):
+class Joint3DModule(Cosmos3Nano3DModule):
     """Cosmos-3 Nano backbone trained with the joint recon + seg loss."""
 
-    _loss_cls = JointReconSegLoss
+    _loss_cls = Joint3DReconSegLoss
 
     # ------------------------------------------------------------------
     # Config / target plumbing
@@ -59,12 +59,12 @@ class JointModule(Cosmos3Nano3DModule):
             uniq = set(map(str, task))
             if len(uniq) != 1:
                 raise ValueError(
-                    f"JointModule expects task-homogeneous batches; got mixed "
+                    f"Joint3DModule expects task-homogeneous batches; got mixed "
                     f"{sorted(uniq)}. Use the round-robin multi-task sampler."
                 )
             return next(iter(uniq))
         raise KeyError(
-            "JointModule batch is missing a 'task' field ('dapt' | 'sft'); "
+            "Joint3DModule batch is missing a 'task' field ('dapt' | 'sft'); "
             "the joint datamodule must tag each batch."
         )
 
@@ -130,4 +130,4 @@ class JointModule(Cosmos3Nano3DModule):
         self._accumulate_instance_metrics(pooled, targets, prefix, bs)
 
 
-__all__ = ["JointModule"]
+__all__ = ["Joint3DModule"]

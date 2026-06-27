@@ -242,7 +242,7 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     from nanocosmos.datamodules import (
         CREMI3DDataModule,
         FLYEM3DDataModule,
-        JointDataModule,
+        Joint3DDataModule,
         MICRONSDataModule,
         NeuronsDataModule,
         SNEMI3DDataModule,
@@ -253,9 +253,9 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     # The joint recipe uses a distinct config schema (data.branches /
     # data.degrade); build it directly rather than through the shared
     # single-dataset kwargs.
-    if dataset_type == "joint":
+    if dataset_type == "joint3d":
         d = cfg.data
-        return JointDataModule(
+        return Joint3DDataModule(
             data_root=d.get("data_root", "data"),
             patch_size=tuple(d.get("patch_size", (320, 256, 256))),
             pixel_size=tuple(d.get("pixel_size", (4.0, 4.0, 4.0))),
@@ -301,7 +301,7 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         Cosmos3Nano3DModule,
         CosmosPredict3DModule,
         CosmosTransfer3DModule,
-        JointModule,
+        Joint3DModule,
         Vista3DModule,
     )
 
@@ -311,8 +311,8 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         "cosmostransfer3d": CosmosTransfer3DModule,
         "cosmospredict3d": CosmosPredict3DModule,
         # The joint reconstruction + segmentation recipe (Cosmos-3 Nano
-        # backbone + JointReconSegLoss).  See doc/JOINT_TRAINING.md.
-        "joint": JointModule,
+        # backbone + Joint3DReconSegLoss).  See doc/JOINT_TRAINING.md.
+        "joint3d": Joint3DModule,
         # Legacy / verbose aliases.
         "cosmos3_nano_3d": Cosmos3Nano3DModule,
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
@@ -443,9 +443,9 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     if img_cfg.get("enabled", True):
         # The joint recipe needs the task-aware logger (reconstruction panels +
         # sft segmentation panels pooled to the native label grid).
-        is_joint = str(cfg.get("model", {}).get("type", "")).lower() == "joint"
+        is_joint = str(cfg.get("model", {}).get("type", "")).lower() == "joint3d"
         if is_joint:
-            from nanocosmos.callbacks import JointImageLogger as _Logger
+            from nanocosmos.callbacks import Joint3DImageLogger as _Logger
         else:
             from nanocosmos.callbacks import ImageLogger as _Logger
         callbacks.append(_Logger(
