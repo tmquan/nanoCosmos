@@ -22,7 +22,12 @@ import torch
 from einops import rearrange, reduce, repeat
 
 from nanocosmos.callbacks.tensorboard.tags import TagContext
-from nanocosmos.callbacks.tensorboard.viz import _label_to_rgb, _normalise, _to_2d
+from nanocosmos.callbacks.tensorboard.viz import (
+    _label_to_rgb,
+    _normalise,
+    _resize_2d,
+    _to_2d,
+)
 from nanocosmos.losses import (
     AFFINITY_OFFSETS,
     N_PULL,
@@ -65,9 +70,17 @@ def _add_aff_panels(
     mask_2d: torch.Tensor,
     epoch: int,
     tag_prefix: str,
+    size: Optional[Sequence[int]] = None,
 ) -> None:
-    """Central-slice affinity panels (a curated channel subset)."""
+    """Central-slice affinity panels (a curated channel subset).
+
+    When ``size=(H, W)`` is given, each panel (and the mask) is upsampled to
+    that size so affinity panels match the finest panel on the TB grid.
+    """
     aff_2d = _to_2d(aff_3d).clamp(0.0, 1.0)
+    if size is not None:
+        aff_2d = _resize_2d(aff_2d, size, mode="bilinear")
+        mask_2d = _resize_2d(mask_2d, size, mode="nearest")
     for k in indices:
         panel = repeat(aff_2d[:, k:k + 1] * mask_2d, "b 1 h w -> b 3 h w")
         tb.add_images(

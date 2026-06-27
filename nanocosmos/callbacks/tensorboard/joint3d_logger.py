@@ -30,7 +30,12 @@ from einops import rearrange, repeat
 from nanocosmos.callbacks.tensorboard.heads import _add_aff_panels, aff_panel_indices
 from nanocosmos.callbacks.tensorboard.image_logger import ImageLogger
 from nanocosmos.callbacks.tensorboard.tags import TagContext
-from nanocosmos.callbacks.tensorboard.viz import _label_to_rgb, _normalise, _to_2d
+from nanocosmos.callbacks.tensorboard.viz import (
+    _label_to_rgb,
+    _normalise,
+    _resize_2d,
+    _to_2d,
+)
 from nanocosmos.losses import AFFINITY_OFFSETS, N_PULL, offset_names
 
 
@@ -67,26 +72,37 @@ class Joint3DImageLogger(ImageLogger):
 
         crit = pl_module.criterion
         ctx = TagContext(stage=stage, mode=self.mode)
+        epoch = pl_module.current_epoch
+
+        # All panels are upsampled to the FINEST in-plane size (the fine network
+        # grid, e.g. 256x256) so every TB image -- including the SFT seg panels
+        # that are pooled to a coarser native grid -- renders at the same size.
+        target_hw = tuple(_to_2d(images[:n]).shape[-2:])
 
         # ---- reconstruction panels (both branches) ----
-        tb.add_images(ctx.tag("true/image"), _gray3(_to_2d(images[:n])), global_step=pl_module.current_epoch)
+        tb.add_images(ctx.tag("true/image"),
+                      _resize_2d(_gray3(_to_2d(images[:n])), target_hw),
+                      global_step=epoch)
         raw = head[:, crit.raw_slice][:n]               # [n,1,D,H,W] linear
-        tb.add_images(ctx.tag("pred/recon"), _gray3(_to_2d(raw)), global_step=pl_module.current_epoch)
+        tb.add_images(ctx.tag("pred/recon"),
+                      _resize_2d(_gray3(_to_2d(raw)), target_hw),
+                      global_step=epoch)
         recon_t = batch.get("recon_image")
         if recon_t is not None:
             recon_t = recon_t.to(pl_module.device)
             if recon_t.dim() == self.spatial_dims + 1:
                 recon_t = rearrange(recon_t, "b ... -> b 1 ...")
             tb.add_images(
-                ctx.tag("true/recon_target"), _gray3(_to_2d(recon_t[:n])),
-                global_step=pl_module.current_epoch,
+                ctx.tag("true/recon_target"),
+                _resize_2d(_gray3(_to_2d(recon_t[:n])), target_hw),
+                global_step=epoch,
             )
 
         # ---- segmentation panels (sft only) ----
         if task == "sft" and "label" in batch:
-            self._log_seg_panels(tb, ctx, pl_module, head, batch, n)
+            self._log_seg_panels(tb, ctx, pl_module, head, batch, n, target_hw)
 
-    def _log_seg_panels(self, tb, ctx, pl_module, head, batch, n):
+    def _log_seg_panels(self, tb, ctx, pl_module, head, batch, n, target_hw=None):
         epoch = pl_module.current_epoch
         crit = pl_module.criterion
         labels = batch["label"].to(pl_module.device)
@@ -97,15 +113,23 @@ class Joint3DImageLogger(ImageLogger):
         # Pool the fine head to the native label grid (matches the loss).
         pooled = crit._pool_to(head[:n], labels.shape[-3:])
 
-        # True instance labels.
+        # True instance labels.  (nearest upsample -> no label-colour blending.)
         labels_2d = rearrange(
             _to_2d(rearrange(labels, "b ... -> b 1 ...")), "b 1 ... -> b ...",
         )
-        tb.add_images(ctx.tag("true/label"), _label_to_rgb(labels_2d.long()), global_step=epoch)
+        tb.add_images(
+            ctx.tag("true/label"),
+            _resize_2d(_label_to_rgb(labels_2d.long()), target_hw, mode="nearest")
+            if target_hw else _label_to_rgb(labels_2d.long()),
+            global_step=epoch,
+        )
 
         # Foreground (sem) prediction.
         sem = pooled[:, crit.sem_slice].sigmoid()
-        tb.add_images(ctx.tag("pred/sem"), _gray3(_to_2d(sem)), global_step=epoch)
+        sem_panel = _gray3(_to_2d(sem))
+        if target_hw:
+            sem_panel = _resize_2d(sem_panel, target_hw)
+        tb.add_images(ctx.tag("pred/sem"), sem_panel, global_step=epoch)
 
         # Affinity channels (curated subset) + Mutex-Watershed instances.
         agg = getattr(pl_module, "agglomerator", None)
@@ -117,6 +141,7 @@ class Joint3DImageLogger(ImageLogger):
         _add_aff_panels(
             tb, ctx, aff, aff_panel_indices(len(offsets), n_pull, max_push=4),
             names=names, mask_2d=mask_2d, epoch=epoch, tag_prefix="aff/pred",
+            size=target_hw,
         )
 
         if agg is not None and self.spatial_dims == 3:
@@ -129,7 +154,10 @@ class Joint3DImageLogger(ImageLogger):
             seg_2d = rearrange(
                 _to_2d(rearrange(seg_3d, "b ... -> b 1 ...")), "b 1 ... -> b ...",
             )
-            tb.add_images(ctx.tag("pred/label"), _label_to_rgb(seg_2d.long()), global_step=epoch)
+            seg_rgb = _label_to_rgb(seg_2d.long())
+            if target_hw:
+                seg_rgb = _resize_2d(seg_rgb, target_hw, mode="nearest")
+            tb.add_images(ctx.tag("pred/label"), seg_rgb, global_step=epoch)
 
     @staticmethod
     def _resolve_task(task: Any) -> str:

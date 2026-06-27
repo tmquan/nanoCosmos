@@ -5,10 +5,31 @@ panel logger: central-slice extraction, per-image min-max normalisation,
 HSV colour LUT, and integer-label → pastel-RGB mapping.
 """
 
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange, reduce
+
+
+def _resize_2d(
+    img: torch.Tensor,
+    size: Sequence[int],
+    mode: str = "bilinear",
+) -> torch.Tensor:
+    """Resize a ``[B, C, H, W]`` panel to ``size=(H', W')`` for display.
+
+    Use ``mode="nearest"`` for discrete maps (instance-label RGB, masks) so
+    label colours / boundaries are not blended; ``"bilinear"`` for continuous
+    panels (EM image, reconstruction, sem / affinity probabilities).  A no-op
+    when the panel is already at ``size``.
+    """
+    target: Tuple[int, int] = (int(size[0]), int(size[1]))
+    if tuple(img.shape[-2:]) == target:
+        return img
+    if mode == "nearest":
+        return F.interpolate(img.float(), size=target, mode="nearest")
+    return F.interpolate(img.float(), size=target, mode="bilinear", align_corners=False)
 
 
 def _to_2d(t: torch.Tensor) -> torch.Tensor:
@@ -104,6 +125,7 @@ __all__ = [
     "_hsv_to_rgb",
     "_label_to_rgb",
     "_normalise",
+    "_resize_2d",
     "_to_2d",
 ]
 

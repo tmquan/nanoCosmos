@@ -91,7 +91,7 @@ data:
   branches:
     dapt:
       task: dapt
-      batch_size: 1
+      batch_size: 2
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused).
       # PLUS unlabeled FIB-25 (domain-matched neuropil) -- the vast
@@ -202,7 +202,7 @@ data:
         native_resolution: [40, 4, 4]
     sft:
       task: sft
-      batch_size: 1
+      batch_size: 2
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a DAPT source above) +
       # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
@@ -278,7 +278,7 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
 
-  val_batch_size: 1
+  val_batch_size: 2
   # Validation on the labeled (sft) rungs -- instance metrics at native grid.
   val_volumes:
   - vol: AC4_inputs
@@ -293,7 +293,7 @@ model:
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64
-  dropout: 0.0
+  dropout: 0.5
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
@@ -405,6 +405,11 @@ training:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
+  # Cap the (otherwise ~52k = 6.5 x num_samples) round-robin schedule to a sane
+  # epoch length.  1000 steps x batch_size 2 x 8 GPUs = 16000 samples/epoch.
+  # The schedule is shuffled, so this is a task-weighted random subset that
+  # rotates each epoch.
+  limit_train_batches: 1000
   limit_val_batches: 200
   check_val_every_n_epoch: 20
   num_sanity_val_steps: 2
@@ -413,7 +418,7 @@ training:
   enable_model_summary: true
   deterministic: false
   benchmark: true
-  compile: false
+  compile: true
   compile_fullgraph: true
   fast_dev_run: false
   profiler: null
