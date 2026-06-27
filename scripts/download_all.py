@@ -69,8 +69,10 @@ def _jobs(datasets: List[str]) -> List[Tuple[str, List[str]]]:
 
     if "flyem" in datasets:
         # FIB-25: SFT proofread core (image+seg) + DAPT unsegmented surround.
-        jobs.append(("flyem fib25 sft core",
-                     _flyem("fib25", "sft", (2304, 2048, 6144), 512)))
+        # The 1536^3 dense core (~99.7% fg) is the primary FIB-25 SFT volume
+        # (doc/RESOLUTION_LADDER.md); image ~3.6 GB uint8, seg ~29 GB uint64.
+        jobs.append(("flyem fib25 sft core (1536^3 dense core)",
+                     _flyem("fib25", "sft", (2304, 2048, 6144), 1536)))
         for o in [(1024, 1024, 1024), (4096, 4096, 1024), (1024, 4096, 4096), (4096, 1024, 4096)]:
             jobs.append((f"flyem fib25 dapt {o}", _flyem("fib25", "dapt", o, 1024)))
         for ds in ("hemibrain", "malecns"):                # 5x 1024^3 (4 train + 1 test)
