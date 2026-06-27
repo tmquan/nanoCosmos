@@ -414,7 +414,7 @@ training:
   # cannot auto-inject a DistributedSampler; the sampler + random per-item
   # patch sampling handle per-rank data spread instead.
   use_distributed_sampler: false
-  precision: bf16-true
+  precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
