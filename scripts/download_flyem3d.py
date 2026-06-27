@@ -130,7 +130,26 @@ def _parse_args() -> argparse.Namespace:
         help="Download the image only (skip the ground-truth segmentation; "
              "also implied by --role dapt).",
     )
+    p.add_argument(
+        "--skip-existing", action="store_true", dest="skip_existing",
+        help="If the output .h5 already exists and is a valid HDF5 (key 'main', "
+             "non-empty), skip it -- the integrity check on a prior download. "
+             "For the simple (z-stride 1, default orientation) case this skips "
+             "the CloudVolume fetch entirely; for variant runs it skips per file.",
+    )
     return p.parse_args()
+
+
+def _is_valid_h5(path: Path) -> bool:
+    """True iff ``path`` is a readable HDF5 with a non-empty ``main`` dataset."""
+    if not path.exists():
+        return False
+    try:
+        import h5py
+        with h5py.File(str(path), "r", locking=False) as f:
+            return "main" in f and f["main"].size > 0
+    except Exception:  # noqa: BLE001 -- corrupt / partial download
+        return False
 
 
 def _open(src: str, mip: int):
@@ -230,6 +249,17 @@ def main() -> None:
         print(f"Mip {args.mip}: resolution (x,y,z) = {res} nm")
         print(f"Crop box (x,y,z): [{x0}:{x1}, {y0}:{y1}, {z0}:{z1}]  "
               f"-> size {(x1 - x0, y1 - y0, z1 - z0)} voxels")
+        # Pre-fetch skip for the simple (single-output) case: a plain z-stride-1
+        # crop with the default orientation emits exactly one file, whose stem
+        # is known here -- if it's already a valid HDF5, skip the heavy fetch.
+        _simple = max(1, int(args.z_stride)) == 1 and list(dict.fromkeys(args.orientations)) == ["z"]
+        if args.skip_existing and _simple:
+            stem0 = f"{name}_{int(res[0])}nm{role_tag}_{coords}"
+            if _is_valid_h5(out_dir / f"{stem0}_volume.h5") and (
+                no_seg or _is_valid_h5(out_dir / f"{stem0}_segmentation.h5")
+            ):
+                print(f"Skip (already downloaded, valid HDF5): {stem0}_*.h5")
+                return
         # CloudVolume returns [X, Y, Z, C]; squeeze channel and move to [Z, Y, X].
         img = img_vol[x0:x1, y0:y1, z0:z1][..., 0]
         img_full = np.ascontiguousarray(np.transpose(img, (2, 1, 0)))
@@ -283,6 +313,12 @@ def main() -> None:
         for p in phases:
             suffix = f"{tag}_p{p}" if multi_phase else tag
             stem = f"{name}_{base_res}{role_tag}{suffix}_{coords}"
+            # Per-file skip (covers the multi-variant / from-local case).
+            if args.skip_existing and _is_valid_h5(out_dir / f"{stem}_volume.h5") and (
+                seg_o is None or _is_valid_h5(out_dir / f"{stem}_segmentation.h5")
+            ):
+                print(f"Skip (valid HDF5 exists): {stem}_*.h5")
+                continue
             img_p = np.ascontiguousarray(img_o[p::z_stride])
             _save_h5(img_p, out_dir / f"{stem}_volume.h5", eff_res)
             print(f"Saved image:        {stem}_volume.h5  shape(z,y,x)={img_p.shape}")

@@ -104,7 +104,25 @@ def _parse_args() -> argparse.Namespace:
         "--iso-target", type=float, default=4.0, dest="iso_target",
         help="Target cubic voxel size (nm) for --resample-isotropic (default 4).",
     )
+    p.add_argument(
+        "--skip-existing", action="store_true", dest="skip_existing",
+        help="If the output .h5 already exists and is a valid HDF5 (key 'main', "
+             "non-empty), skip the CloudVolume fetch (integrity check on a prior "
+             "download).  Lets a re-run resume without re-fetching.",
+    )
     return p.parse_args()
+
+
+def _is_valid_h5(path: Path) -> bool:
+    """True iff ``path`` is a readable HDF5 with a non-empty ``main`` dataset."""
+    if not path.exists():
+        return False
+    try:
+        import h5py
+        with h5py.File(str(path), "r", locking=False) as f:
+            return "main" in f and f["main"].size > 0
+    except Exception:  # noqa: BLE001 -- corrupt / partial download
+        return False
 
 
 def _resample_isotropic(img_zyx: np.ndarray, res_xyz, target_nm: float):
@@ -185,7 +203,12 @@ def main() -> None:
     x0, y0, z0 = (int(v) for v in origin)
     x1, y1, z1 = (int(v) for v in end)
     coords = f"x{x0}_y{y0}_z{z0}"
-    res_tag = "x".join(f"{r:g}" for r in res) + "nm"
+    # Final res tag / stem are known before the fetch (resample only retags to
+    # the cubic target), so the skip check can avoid the heavy download.
+    res_tag = (f"{args.iso_target:g}nm" if args.resample_isotropic
+               else "x".join(f"{r:g}" for r in res) + "nm")
+    stem = f"{name}_{res_tag}_{coords}"
+    out_path = out_dir / f"{stem}_volume.h5"
 
     print(f"Dataset: {args.dataset}  mip {args.mip}: resolution (x,y,z) = {res} nm")
     print(f"Crop box (x,y,z): [{x0}:{x1}, {y0}:{y1}, {z0}:{z1}]  "
@@ -194,6 +217,10 @@ def main() -> None:
         print(f"  NOTE: voxel is not near-cubic ({res}); the ladder "
               f"expects a ~4 nm small (near-cubic) voxel for the DAPT anchor.")
 
+    if args.skip_existing and _is_valid_h5(out_path):
+        print(f"Skip (already downloaded, valid HDF5): {out_path.name}")
+        return
+
     # CloudVolume returns [X, Y, Z, C]; squeeze channel, move to [Z, Y, X].
     img = vol[x0:x1, y0:y1, z0:z1][..., 0]
     img_zyx = np.ascontiguousarray(np.transpose(img, (2, 1, 0)))
@@ -201,12 +228,9 @@ def main() -> None:
     # Optional: bake an exact cubic voxel (off by default -- see the flag help).
     if args.resample_isotropic:
         img_zyx, res = _resample_isotropic(img_zyx, res, args.iso_target)
-        res_tag = f"{args.iso_target:g}nm"
         print(f"Resampled to exact {args.iso_target:g} nm cubic voxel -> "
               f"shape(z,y,x) = {img_zyx.shape}")
 
-    stem = f"{name}_{res_tag}_{coords}"
-    out_path = out_dir / f"{stem}_volume.h5"
     _save_h5(img_zyx, out_path, res, args.dataset)
     print(f"Saved image: {out_path.name}  shape(z,y,x) = {img_zyx.shape}")
 

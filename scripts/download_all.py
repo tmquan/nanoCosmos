@@ -30,6 +30,7 @@ control.  Verification is config-driven: it scans the roots referenced by
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import subprocess
 import sys
 from pathlib import Path
@@ -59,25 +60,28 @@ def _flyem(ds: str, role: str, origin: Tuple[int, int, int], size: int) -> List[
             "--origin", *map(str, origin), "--size", str(size), str(size), str(size)]
 
 
-def _jobs(datasets: List[str]) -> List[Tuple[str, List[str]]]:
+def _jobs(datasets: List[str], skip_existing: bool) -> List[Tuple[str, List[str]]]:
     jobs: List[Tuple[str, List[str]]] = []
+    # cosem / flyem downloaders support --skip-existing (valid output -> skip
+    # fetch).  cremi / snemi / microns don't take the flag, so it is not added.
+    se = ["--skip-existing"] if skip_existing else []
 
     if "cosem" in datasets:
         for ds in _COSEM_VOLS:
             for o in _COSEM_ORIGINS:                       # 5x 2048^3 (y clamps)
-                jobs.append((f"cosem {ds} {o}", _cos(ds, o)))
+                jobs.append((f"cosem {ds} {o}", _cos(ds, o) + se))
 
     if "flyem" in datasets:
         # FIB-25: SFT proofread core (image+seg) + DAPT unsegmented surround.
         # The 1536^3 dense core (~99.7% fg) is the primary FIB-25 SFT volume
         # (doc/RESOLUTION_LADDER.md); image ~3.6 GB uint8, seg ~29 GB uint64.
         jobs.append(("flyem fib25 sft core (1536^3 dense core)",
-                     _flyem("fib25", "sft", (2304, 2048, 6144), 1536)))
+                     _flyem("fib25", "sft", (2304, 2048, 6144), 1536) + se))
         for o in [(1024, 1024, 1024), (4096, 4096, 1024), (1024, 4096, 4096), (4096, 1024, 4096)]:
-            jobs.append((f"flyem fib25 dapt {o}", _flyem("fib25", "dapt", o, 1024)))
+            jobs.append((f"flyem fib25 dapt {o}", _flyem("fib25", "dapt", o, 1024) + se))
         for ds in ("hemibrain", "malecns"):                # 5x 1024^3 (4 train + 1 test)
             for o in _FLYEM_ORIGINS:
-                jobs.append((f"flyem {ds} dapt {o}", _flyem(ds, "dapt", o, 1024)))
+                jobs.append((f"flyem {ds} dapt {o}", _flyem(ds, "dapt", o, 1024) + se))
 
     if "cremi" in datasets:
         jobs.append(("cremi A/B/C",
@@ -95,17 +99,39 @@ def _jobs(datasets: List[str]) -> List[Tuple[str, List[str]]]:
     return jobs
 
 
-def _run_jobs(jobs: List[Tuple[str, List[str]]], dry_run: bool) -> Dict[str, int]:
+def _run_jobs(jobs: List[Tuple[str, List[str]]], dry_run: bool, jobs_n: int) -> Dict[str, int]:
+    """Run the download jobs, up to ``jobs_n`` concurrently.
+
+    Each job is its own ``subprocess`` (a per-dataset downloader); a thread
+    pool runs ``jobs_n`` at once.  Output is captured per-job and printed on
+    completion (with a stderr tail on failure) so the parallel logs stay
+    readable instead of interleaving.  One failed job never aborts the rest.
+    """
     results: Dict[str, int] = {}
-    for label, argv in jobs:
-        print(f"\n=== {label} ===\n  $ {' '.join(argv)}")
-        if dry_run:
+    if dry_run:
+        for label, argv in jobs:
+            print(f"\n=== {label} ===\n  $ {' '.join(argv)}")
             results[label] = 0
-            continue
-        rc = subprocess.run(argv).returncode
-        results[label] = rc
-        if rc != 0:
-            print(f"  [WARN] '{label}' exited {rc} (continuing)")
+        return results
+
+    def _run_one(item: Tuple[str, List[str]]):
+        label, argv = item
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        return label, proc.returncode, proc.stdout, proc.stderr
+
+    print(f"Running {len(jobs)} job(s), {jobs_n} at a time ...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs_n)) as ex:
+        for label, rc, out, err in ex.map(_run_one, jobs):
+            results[label] = rc
+            if rc == 0:
+                tail = (out or "").strip().splitlines()
+                note = next((ln.strip() for ln in reversed(tail)
+                             if "skip" in ln.lower() or "Saved" in ln), "done")
+                print(f"[OK]   {label}: {note}")
+            else:
+                print(f"[FAIL {rc}] {label} (continuing)")
+                for ln in (err or out or "").strip().splitlines()[-6:]:
+                    print(f"    {ln}")
     return results
 
 
@@ -182,14 +208,21 @@ def main() -> None:
                    choices=all_groups + ["all"], help="Which groups to download.")
     p.add_argument("--verify-only", action="store_true", help="Skip download; just verify disk.")
     p.add_argument("--dry-run", action="store_true", help="Print the download plan, do not run.")
+    p.add_argument("--jobs", "-j", type=int, default=4,
+                   help="Number of downloads to run in parallel (default 4).")
+    p.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True,
+                   help="Skip a cosem/flyem crop whose output .h5 already exists and is "
+                        "a valid HDF5 (the integrity check). Use --no-skip-existing to "
+                        "force re-download. Default: on.")
     args = p.parse_args()
 
     datasets = all_groups if "all" in args.datasets else args.datasets
 
     if not args.verify_only:
-        jobs = _jobs(datasets)
-        print(f"Planned {len(jobs)} download job(s) for: {', '.join(datasets)}")
-        results = _run_jobs(jobs, args.dry_run)
+        jobs = _jobs(datasets, args.skip_existing)
+        print(f"Planned {len(jobs)} download job(s) for: {', '.join(datasets)} "
+              f"(parallel={args.jobs}, skip_existing={args.skip_existing})")
+        results = _run_jobs(jobs, args.dry_run, args.jobs)
         if not args.dry_run:
             n_fail = sum(1 for rc in results.values() if rc != 0)
             print(f"\nDownload: {len(results) - n_fail}/{len(results)} jobs OK"
