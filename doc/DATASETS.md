@@ -1,10 +1,11 @@
 # Datasets
 
-Every dataset nanocosmos trains on is **3-D electron-microscopy (EM)** with
-dense **instance** (neuron-id) labels, stored on disk in one shared
-convention and pulled in by the datamodule. This doc covers what each
-dataset is, its native resolution, and the exact script that downloads
-it.
+Every dataset nanocosmos trains on is **3-D electron-microscopy (EM)**, stored
+on disk in one shared convention and pulled in by the datamodule. Most carry
+dense **instance** (neuron-id) labels for the segmentation (`sft`) branch; the
+self-supervised (`ssl`) sources — COSEM3D, MitoEM2, and the unlabeled FlyEM
+surround — are **image-only**. This doc covers what each dataset is, its native
+resolution, and the exact script that downloads (or converts) it.
 
 > Resolutions are quoted as the source reports them (usually `x × y × z`
 > nm). The config's `resolution_map` uses **`(z, y, x)`** order — both are
@@ -12,21 +13,20 @@ it.
 
 ## At a glance
 
-| Dataset    | Tissue / modality                         | Native res (x,y,z nm) | `resolution_map` (z,y,x) | Download script             | Data root        | Config key (`data.dataset`) |
-| ---------- | ----------------------------------------- | --------------------- | ------------------------ | --------------------------- | ---------------- | --------------------------- |
-| SNEMI3D    | Mouse S1 cortex, ssEM (AC3/AC4)           | 6 × 6 × 30            | `AC: [30,6,6]`           | `download_snemi3d.py`       | `data/SNEMI3D`   | `snemi3d`                   |
-| Neurons    | Mouse S1 cortex, ssEM (Kasthuri cylinder) | 6 × 6 × 30            | `neurons: [30,6,6]`      | `download_snemi3d.py`       | `data/SNEMI3D`   | `neurons`                   |
-| MICrONS    | Mouse V1 cortex, ssEM (minnie65)          | 8 × 8 × 40            | `minnie65: [40,8,8]`     | `download_microns.py`       | `data/MICRONS`   | `microns`                   |
-| CREMI3D    | *Drosophila* brain, ssTEM (A/B/C)         | 4 × 4 × 40            | `cremi3d: [40,4,4]`      | `download_cremi3d.py`       | `data/CREMI3D`   | `cremi3d`                   |
-| FLYEM3D    | FlyEM FIB-SEM (FIB-25 / Hemibrain / MaleCNS) | 8 × 8 × 8 (isotropic) | `flyem3d: [8,8,8]`    | `download_flyem3d.py`       | `data/FLYEM3D`   | `flyem3d` / `joint3d`       |
-| COSEM3D    | OpenOrganelle / COSEM cell FIB-SEM        | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | `download_cosem3d.py`  | `data/COSEM3D`   | `joint3d`                   |
-| MitoEM2    | Mitochondria EM, 8 subsets (Beta/Jurkat/Macro/Mossy/Podo/Pyra/Sperm/Stem) | 16 × 16 × 16 & 8 × 8 × 30 | *(joint3d SSL, per-vol)* | nnU-Net `.nii.gz` → `*_volume.h5` | `data/MitoEM2`   | `joint3d`                   |
-| *(aux)* Zenodo 582636 | Rice grains, X-ray µCT (smoke test) | n/a              | n/a                      | `download_zenodo_582636.py` | `data/zenodo582636` | n/a                      |
+| Dataset | Tissue / EM modality | Native res (x,y,z nm) | `resolution_map` (z,y,x) | Publication | Download / convert | Data root | Config key (`data.dataset`) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SNEMI3D | Mouse S1 cortex, **ssSEM** (AC3/AC4) | 6 × 6 × 30 | `AC: [30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `snemi3d` |
+| Neurons | Mouse S1 cortex, **ssSEM** (Kasthuri cylinder) | 6 × 6 × 30 | `neurons: [30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `neurons` |
+| MICrONS | Mouse V1 cortex, **ssTEM** (minnie65) | 8 × 8 × 40 | `minnie65: [40,8,8]` | MICrONS Consortium 2025, *Nature* (preprint bioRxiv 2021.07.28.454025) | `download_microns.py` | `data/MICRONS` | `microns` |
+| CREMI3D | *Drosophila* brain, **ssTEM** (A/B/C) | 4 × 4 × 40 | `cremi3d: [40,4,4]` | CREMI challenge 2016 (cremi.org); FAFB Zheng et al. 2018, *Cell* | `download_cremi3d.py` | `data/CREMI3D` | `cremi3d` |
+| FLYEM3D | FlyEM *Drosophila*, **FIB-SEM** (FIB-25 / Hemibrain / MaleCNS) | 8 × 8 × 8 (isotropic) | `flyem3d: [8,8,8]` | Takemura 2015 *PNAS* (FIB-25); Scheffer 2020 *eLife* (Hemibrain); Berg 2025 *bioRxiv* (MaleCNS) | `download_flyem3d.py` | `data/FLYEM3D` | `flyem3d` / `joint3d` |
+| COSEM3D | OpenOrganelle / COSEM cell, **FIB-SEM** | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | Xu et al. 2021 *Nature*; Heinrich et al. 2021 *Nature* | `download_cosem3d.py` | `data/COSEM3D` | `joint3d` |
+| MitoEM2 | Mitochondria EM, **mixed FIB-SEM / ssSEM / SBF-SEM** (8 subsets) | 16 × 16 × 16 & 8 × 8 × 30 | *(joint3d SSL, per-vol)* | Liu et al. 2025, *bioRxiv* (MitoEM 2.0); orig. Wei et al. 2020, *MICCAI* | `convert_mitoem2.py` | `data/MitoEM2` | `joint3d` |
 
-`COSEM3D` (4 nm, image-only) and the Hemibrain / MaleCNS members of `FLYEM3D`
-(8 nm) are the small-/large-voxel rungs of the **joint super-resolution recipe**
-(`configs/nanocosmos-16B.yaml`, `data.dataset: joint3d`); see
-[`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
+`COSEM3D` (4 nm), `MitoEM2` (8–16 nm), and the Hemibrain / MaleCNS members of
+`FLYEM3D` (8 nm) are the image-only `ssl` rungs of the **joint super-resolution
+recipe** (`configs/nanocosmos-16B.yaml` / `nanocosmos-2B.yaml`,
+`data.dataset: joint3d`); see [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
 
 All scripts live in `scripts/` and write the on-disk convention described
 in [On-disk convention](#on-disk-convention). The multi-dataset
@@ -66,7 +66,7 @@ are thin metadata subclasses of `MICRONSDataset`/`MICRONSDataModule`.
 ## SNEMI3D (AC3 / AC4)
 
 - **What:** The SNEMI3D challenge crops from Kasthuri et al. 2015 mouse
-  somatosensory cortex (ssEM). `AC4` = train (1024 × 1024 × 100, EM +
+  somatosensory cortex (**ssSEM**, ATUM tape-collecting + SEM). `AC4` = train (1024 × 1024 × 100, EM +
   labels); `AC3` = test (1024 × 1024 × 100, **EM only** — labels were
   never publicly released).
 - **Resolution:** 6 × 6 × 30 nm (anisotropic).
@@ -110,7 +110,8 @@ Files land in `data/SNEMI3D/` (config volume
 ## MICrONS (minnie65)
 
 - **What:** IARPA MICrONS mouse primary visual cortex (V1), ~1 mm³,
-  ~120k neurons. We use representative sub-volumes for training.
+  ~120k neurons, automated serial-section TEM (**ssTEM**). We use
+  representative sub-volumes for training.
 - **Resolution:** **8 × 8 × 40 nm** — this is the EM *imagery*
   resolution (mip 0 of the released precomputed bucket). The often-quoted
   **4 × 4 × 40 nm** is the *annotation/coordinate frame*, not the image
@@ -123,7 +124,9 @@ Files land in `data/SNEMI3D/` (config volume
   `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume.h5`.
 - **Source:** AWS / GCS public buckets via `cloud-volume`
   (`.../iarpa_microns/minnie/minnie65/em`).
-- **Citation:** MICrONS Consortium (2021), bioRxiv 2021.07.28.454025.
+- **Citation:** MICrONS Consortium (2025), *Functional connectomics spanning
+  multiple areas of mouse visual cortex*, Nature (preprint bioRxiv
+  2021.07.28.454025).
 
 ```bash
 python scripts/download_microns.py --split                       # 10 train + 2 test, v1300
@@ -183,8 +186,11 @@ image-only `cremi3d_sample_A+_volume`, …).
   (≈12.3 µm, **~99.7% foreground**).
 - **Source:** `gs://neuroglancer-public-data/flyem_fib-25/{image, ground_truth}`
   (Neuroglancer precomputed) via `cloud-volume`.
-- **Citation:** Takemura, S. et al. (2015), PNAS 112(44):13711-13716,
+- **Citation (FIB-25):** Takemura, S. et al. (2015), PNAS 112(44):13711-13716,
   doi:10.1073/pnas.1509820112.
+- **Other FLYEM3D members:** Hemibrain — Scheffer, L.K. et al. (2020),
+  *eLife* 9:e57443 (FIB-SEM); MaleCNS — Berg, S. et al. (2025), *bioRxiv*
+  2025.10.09.680999 (eFIB-SEM, 8 nm isotropic).
 
 Recommended: fetch the native cube **once**, then generate all variants
 locally with `--from-local` (no re-download).
@@ -210,22 +216,6 @@ Files land in `data/FLYEM3D/`
 clamped to the volume bounds; the script loads the whole crop into RAM,
 so it is built for crops, not the full petavoxel volume (the full image
 is ~346 GB / seg ~2.8 TB at mip 0).
-
----
-
-## *(Auxiliary)* Zenodo 582636 — rice grains
-
-Not connectomics: an X-ray µCT volume of packed rice grains (689 TIFF
-slices, ~3.93 GB). Useful as a non-EM **3-D instance-segmentation smoke
-test** for the data-loading + clustering pipeline (densely-packed,
-touching objects easy to verify by eye). MD5-verified, resumable.
-
-```bash
-python scripts/download_zenodo_582636.py            # downloads + verifies
-```
-
-The script doubles as a template for any Zenodo record (change
-`RECORD_ID`).
 
 ---
 

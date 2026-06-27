@@ -165,7 +165,7 @@ on all three axes, since coarser sets are also coarser in xy (MICrONS 8 nm,
 
 ## 4. How this maps onto the implemented code
 
-The pieces in `nanocosmos/losses/joint.py` + `nanocosmos/transforms/degrade.py`
+The pieces in `nanocosmos/losses/joint3d.py` + `nanocosmos/transforms/degrade.py`
 **already implement this ladder**:
 
 | ladder concept | implementation |

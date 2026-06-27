@@ -17,7 +17,8 @@
 #
 #   ssl   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
 #          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
-#          (small voxel) + unlabeled FIB-25 / Hemibrain / MaleCNS neuropil + CREMI padded.  Label-free.
+#          (small voxel) + unlabeled FlyEM (FIB-25/Hemibrain/MaleCNS) + CREMI
+#          padded + MitoEM2 (image-only mito EM).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
 #          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.

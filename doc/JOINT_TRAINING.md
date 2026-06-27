@@ -7,9 +7,9 @@ this doc only details how `Joint3DReconSegLoss` and the batch contract work.
 
 **Voxel-size convention** (used throughout): *small voxel size* = fine /
 high-detail (e.g. 4 nm); *large voxel size* = coarse (e.g. 30–40 nm). The
-network predicts on a fixed **small-voxel grid** (the finest voxel size, e.g.
-160³ at 4 nm) and every loss term pools that prediction **down** to wherever
-its ground truth lives.
+network predicts on a fixed **small-voxel grid** (the finest voxel size, 4 nm;
+the configs use a `[200, 256, 256]` patch) and every loss term pools that
+prediction **down** to wherever its ground truth lives.
 
 ---
 
@@ -100,8 +100,9 @@ total = w_ssl · ( w_recon · L1_recon )                              # ssl
 | `labels` | sft | instance ids at the **native** grid; the head is pooled to `labels.shape[-3:]` |
 | `_cached_targets` | sft | from `loss.build_targets(labels)` (precomputed affinity target) |
 
-- **SSL** sample (COSEM or **unlabeled FIB**) → `RandResolutionDegraded` writes
-  the degraded `image` + pristine `recon_image`; no `labels`.
+- **SSL** sample (COSEM 4 nm, unlabeled FlyEM 8 nm, or MitoEM2 8–16 nm — all
+  image-only) → `RandResolutionDegraded` writes the degraded `image` + pristine
+  `recon_image`; no `labels`.
 - **SFT** sample (any labeled rung) → `image` resampled to the small-voxel cube,
   `labels` kept on the **native** grid; the loss pools the prediction to the
   label grid (factor 1 when native == small-voxel). Optionally pass the
@@ -111,18 +112,24 @@ total = w_ssl · ( w_recon · L1_recon )                              # ssl
 
 ## 5. Status
 
-Implemented and unit-tested (`tests/test_joint.py`, 14 tests):
+The whole joint recipe is implemented and unit-tested (`tests/test_joint*.py`):
 
-- `nanocosmos/losses/joint.py` — `Joint3DReconSegLoss` (`ssl`/`sft` routing,
+- `nanocosmos/losses/joint3d.py` — `Joint3DReconSegLoss` (`ssl`/`sft` routing,
   `_pool_to` all-axis pool to the GT grid, recon on ssl + raw
   data-consistency on sft, joint backprop, channel-layout delegation,
   deterministic `canonical_loss_keys`).
-- `nanocosmos/transforms/degrade.py` — `RandResolutionDegraded`.
-- `scripts/download_cosem3d.py` — fetch 4 nm COSEM3D cubes for the SSL branch;
-  `scripts/download_flyem3d.py` — FlyEM 8 nm (fib25 / hemibrain / malecns).
-
-Remaining: the multi-task datamodule (per-branch volume lists, resample to the
-small-voxel grid + keep native labels, `RandResolutionDegraded` for `ssl`,
-round-robin task-homogeneous batches) + the Lightning module (route to
-`Joint3DReconSegLoss`, handle the label-free `ssl` step + eval) + `train.py`
-wiring; see `configs/nanocosmos-16B.yaml`.
+- `nanocosmos/transforms/degrade.py` — `RandResolutionDegraded`;
+  `nanocosmos/transforms/fine_grid.py` — `ToFineGridd` (resample to the
+  small-voxel grid, keep native labels / recon target).
+- `nanocosmos/datamodules/joint3d.py` — `Joint3DDataModule`: per-branch volume
+  lists, round-robin task-homogeneous batches (`_RoundRobinBatchSampler`).
+- `nanocosmos/modules/joint3d.py` — `Joint3DModule` (Cosmos-3 Nano backbone)
+  and `JointPredict3DModule` (Cosmos-Predict 2.5 2B backbone); both route to
+  `Joint3DReconSegLoss` and handle the label-free `ssl` step + eval.
+- `nanocosmos/callbacks/tensorboard/joint3d_logger.py` — `Joint3DImageLogger`
+  logs **both** `ssl` and `sft` panels each epoch (task-namespaced tags).
+- `train.py` selects the module by `model.type` (`joint3d` / `joint3d_2b`); see
+  `configs/nanocosmos-16B.yaml` and `configs/nanocosmos-2B.yaml`.
+- Data: `scripts/download_cosem3d.py` (4 nm COSEM3D), `scripts/download_flyem3d.py`
+  (FlyEM 8 nm: fib25 / hemibrain / malecns), `scripts/convert_mitoem2.py`
+  (MitoEM2 nnU-Net `.nii.gz` → image-only h5).
