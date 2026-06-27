@@ -50,7 +50,7 @@ data:
   # xy, so the DiT token grid is (80, 32, 32) = 81,920 tokens (~4x the 16B's 16x-xy
   # grid).  The 2B backbone is ~8x smaller in params, so it usually fits with
   # gradient checkpointing and a small batch; drop the patch (e.g. 320x192x192) if OOMs.
-  patch_size: [320, 256, 256]
+  patch_size: [200, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.

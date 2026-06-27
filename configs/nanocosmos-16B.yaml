@@ -44,7 +44,7 @@ data:
   # the DiT token grid is (80, 16, 16) = 20,480 tokens (~5x the 256^3 = 4,000).
   # Memory-heavy on the 16B backbone -- pair with gradient checkpointing and a
   # small batch; drop toward 256^3 / 320x256x256 if it OOMs.
-  patch_size: [320, 256, 256]
+  patch_size: [200, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
@@ -421,7 +421,7 @@ training:
   deterministic: false
   benchmark: true
   compile: false
-  compile_fullgraph: true
+  compile_fullgraph: false
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null
