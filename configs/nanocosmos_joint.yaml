@@ -37,12 +37,14 @@ ckpt_path_skip_prefixes: []
 ckpt_path_only_prefixes: null
 
 data:
-  # Fixed FINE network grid: 4 nm cube, 160^3 (0.64 um).  4 nm = COSEM mip0
-  # and the finest xy across all sets, so nothing is downsampled to reach it.
-  # NOTE (FOV vs resolution, see doc/RESOLUTION_LADDER.md sec 5): 160^3 @ 4 nm
-  # is only 0.64 um of context; consider a larger / non-cubic voxel patch or
-  # a 6 nm grid if neurites are context-starved -- weigh against 16B memory.
-  patch_size: [160, 160, 160]
+  dataset: joint        # -> JointDataModule (multi-task round-robin)
+  # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
+  # 320x256x256 @ 4 nm = 1.28 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
+  # the DiT token grid is (80, 16, 16) = 20,480 tokens (~5x the 160^3 = 4,000).
+  # Memory-heavy on the 16B backbone -- pair with gradient checkpointing and a
+  # small batch; drop toward 160^3 / 320x160x160 if it OOMs.
+  patch_size: [320, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
@@ -160,7 +162,7 @@ data:
     native_resolution: [30, 6, 6]
 
 model:
-  type: cosmos3nano3d
+  type: joint          # -> JointModule (Cosmos-3 Nano backbone + JointReconSegLoss)
   variant: Nano
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw

@@ -242,10 +242,37 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
     from nanocosmos.datamodules import (
         CREMI3DDataModule,
         FLYEM3DDataModule,
+        JointDataModule,
         MICRONSDataModule,
         NeuronsDataModule,
         SNEMI3DDataModule,
     )
+
+    dataset_type = cfg.data.get("dataset", "snemi3d").lower()
+
+    # The joint recipe uses a distinct config schema (data.branches /
+    # data.degrade); build it directly rather than through the shared
+    # single-dataset kwargs.
+    if dataset_type == "joint":
+        d = cfg.data
+        return JointDataModule(
+            data_root=d.get("data_root", "data"),
+            patch_size=tuple(d.get("patch_size", (320, 256, 256))),
+            pixel_size=tuple(d.get("pixel_size", (4.0, 4.0, 4.0))),
+            branches=OmegaConf.to_container(d.get("branches", {}), resolve=True),
+            degrade=OmegaConf.to_container(d.get("degrade", {}), resolve=True),
+            val_volumes=OmegaConf.to_container(d.get("val_volumes"), resolve=True)
+            if d.get("val_volumes") is not None else None,
+            num_workers=int(d.get("num_workers", 8)),
+            pin_memory=bool(d.get("pin_memory", True)),
+            persistent_workers=bool(d.get("persistent_workers", True)),
+            prefetch_factor=int(d.get("prefetch_factor", 4)),
+            num_samples=int(d.get("num_samples", 8000)),
+            val_num_samples=int(d.get("val_num_samples", 16)),
+            val_batch_size=int(d.get("val_batch_size", 1)),
+            min_foreground=float(d.get("min_foreground", 0.0)),
+            seed=int(cfg.get("seed", 0)),
+        )
 
     datamodule_classes = {
         "snemi3d": SNEMI3DDataModule,
@@ -255,7 +282,6 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
         "neurons": NeuronsDataModule,
     }
 
-    dataset_type = cfg.data.get("dataset", "snemi3d").lower()
     cls = datamodule_classes.get(dataset_type)
     if cls is None:
         raise ValueError(
@@ -275,6 +301,7 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         Cosmos3Nano3DModule,
         CosmosPredict3DModule,
         CosmosTransfer3DModule,
+        JointModule,
         Vista3DModule,
     )
 
@@ -283,6 +310,9 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         "cosmos3nano3d": Cosmos3Nano3DModule,
         "cosmostransfer3d": CosmosTransfer3DModule,
         "cosmospredict3d": CosmosPredict3DModule,
+        # The joint reconstruction + segmentation recipe (Cosmos-3 Nano
+        # backbone + JointReconSegLoss).  See doc/JOINT_TRAINING.md.
+        "joint": JointModule,
         # Legacy / verbose aliases.
         "cosmos3_nano_3d": Cosmos3Nano3DModule,
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
@@ -299,10 +329,15 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
             f"Choose from: {sorted(module_classes)}"
         )
 
+    # ``loss.type`` is a routing hint for readability (the module class fixes
+    # the loss class); strip it so it isn't forwarded as a loss kwarg.
+    loss_cfg = dict(cfg.get("loss", {}))
+    loss_cfg.pop("type", None)
+
     return cls(
         model_config=model_cfg,
         optimizer_config=dict(cfg.get("optimizer", {})),
-        loss_config=dict(cfg.get("loss", {})),
+        loss_config=loss_cfg,
         training_config=dict(cfg.get("training", {})),
     )
 
@@ -406,8 +441,14 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
 
     img_cfg = callback_cfg.get("image_logger", {})
     if img_cfg.get("enabled", True):
-        from nanocosmos.callbacks import ImageLogger
-        callbacks.append(ImageLogger(
+        # The joint recipe needs the task-aware logger (reconstruction panels +
+        # sft segmentation panels pooled to the native label grid).
+        is_joint = str(cfg.get("model", {}).get("type", "")).lower() == "joint"
+        if is_joint:
+            from nanocosmos.callbacks import JointImageLogger as _Logger
+        else:
+            from nanocosmos.callbacks import ImageLogger as _Logger
+        callbacks.append(_Logger(
             every_n_epochs=img_cfg.get("every_n_epochs", 1),
             max_images=img_cfg.get("max_images", 4),
             spatial_dims=3,

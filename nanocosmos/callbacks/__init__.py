@@ -30,10 +30,11 @@ from nanocosmos.callbacks.memory import (
     CudaEmptyCacheCallback,
     CudaMemoryLoggerCallback,
 )
-from nanocosmos.callbacks.tensorboard import ImageLogger
+from nanocosmos.callbacks.tensorboard import ImageLogger, JointImageLogger
 
 __all__ = [
     "CudaEmptyCacheCallback",
     "CudaMemoryLoggerCallback",
     "ImageLogger",
+    "JointImageLogger",
 ]

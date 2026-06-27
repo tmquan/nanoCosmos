@@ -46,6 +46,7 @@ from nanocosmos.transforms.rand_transpose_xy import RandTransposeXYd
 from nanocosmos.transforms.resolution_zoom import RandResolutionZoomd
 from nanocosmos.transforms.missing_slice import RandMissingSliced
 from nanocosmos.transforms.degrade import RandResolutionDegraded
+from nanocosmos.transforms.fine_grid import ToFineGridd
 
 __all__ = [
     "Labeld",
@@ -55,4 +56,5 @@ __all__ = [
     "RandResolutionZoomd",
     "RandMissingSliced",
     "RandResolutionDegraded",
+    "ToFineGridd",
 ]

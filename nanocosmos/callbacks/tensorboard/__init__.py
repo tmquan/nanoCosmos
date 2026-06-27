@@ -71,5 +71,6 @@ through ``nanocosmos.callbacks.tensorboard.viz._to_2d``).
 """
 
 from nanocosmos.callbacks.tensorboard.image_logger import ImageLogger
+from nanocosmos.callbacks.tensorboard.joint_logger import JointImageLogger
 
-__all__ = ["ImageLogger"]
+__all__ = ["ImageLogger", "JointImageLogger"]

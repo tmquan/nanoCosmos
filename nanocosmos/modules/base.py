@@ -134,7 +134,7 @@ class BaseCircuitModule(pl.LightningModule):
         # determines the unified-head width so the model, loss, and Mutex
         # Watershed all agree on one channel count.  Derive it here and
         # inject into the model kwargs (overriding any stale config value).
-        _offsets = loss_config.get("offsets")
+        _offsets = self._loss_offsets(loss_config)
         _n_aff = len(_offsets) if _offsets is not None else len(AFFINITY_OFFSETS)
         _head_channels = _n_aff + 2
         _cfg_hc = model_config.get("head_channels")
@@ -165,6 +165,17 @@ class BaseCircuitModule(pl.LightningModule):
         self.agglomerator = MutexWatershed(**mws_config)
 
         self._eval_accum: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0])
+
+    def _loss_offsets(self, loss_config: Dict[str, Any]):
+        """Affinity offsets used to derive the unified-head width.
+
+        Default reads ``loss_config["offsets"]`` (the flat ``AffinityFGLoss``
+        schema).  Subclasses whose loss nests the offsets (e.g. the joint
+        recipe's ``loss.seg.offsets``) override this so the head width is
+        still derived correctly.  ``None`` falls back to the default offset
+        set.
+        """
+        return loss_config.get("offsets")
 
     def _build_model(self, model_config: Dict[str, Any]) -> torch.nn.Module:
         """Instantiate the wrapper.

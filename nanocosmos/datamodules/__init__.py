@@ -35,6 +35,7 @@ from nanocosmos.datamodules.microns import MICRONSDataModule
 from nanocosmos.datamodules.flyem3d import FLYEM3DDataModule
 from nanocosmos.datamodules.cremi3d import CREMI3DDataModule
 from nanocosmos.datamodules.neurons import NeuronsDataModule
+from nanocosmos.datamodules.joint import JointDataModule
 
 __all__ = [
     "CircuitDataModule",
@@ -43,4 +44,5 @@ __all__ = [
     "FLYEM3DDataModule",
     "CREMI3DDataModule",
     "NeuronsDataModule",
+    "JointDataModule",
 ]
