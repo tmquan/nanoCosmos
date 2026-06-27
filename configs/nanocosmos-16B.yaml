@@ -93,13 +93,13 @@ data:
       # here to scale DAPT toward petascale.
       volumes:
       # --- COSEM ~4 nm small voxel (exact z per volume) ---
-      - vol: jrc_hela-3_4x4x3.24nm_x4000_y0_z4000_volume
+      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x4000_y1000_z3000_volume
+      - vol: jrc_macrophage-2_4x4x3.36nm_x0_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.36, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x4000_y1000_z3000_volume
+      - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.44, 4, 4]
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY incl. the UNSEGMENTED surround ---
@@ -107,7 +107,7 @@ data:
       # the majority is unlabeled 8 nm neuropil -- a large free domain-matched
       # DAPT source.  Crop image-only regions outside the core with:
       #   python scripts/download_flyem3d.py --dataset fib25 --role dapt --origin <out-of-core> --size 512 512 512
-      - vol: flyem3d_8nm_dapt_x4000_y4000_z2000_volume
+      - vol: flyem3d_8nm_dapt_x1024_y1024_z1024_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       # --- optional scale-up: Hemibrain / MaleCNS 8 nm neuropil, image-only ---
