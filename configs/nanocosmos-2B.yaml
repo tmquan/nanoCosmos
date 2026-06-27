@@ -311,7 +311,10 @@ model:
   freeze_vae_encoder: true
   freeze_dit_backbone: 5
   freeze_vae_decoder: true
-  gradient_checkpointing: false
+  # MUST be true: at the epoch-5 DiT thaw the unfrozen 2B backbone adds full
+  # activations + grads + AdamW state; without checkpointing this OOMs (and it
+  # is incompatible with torch.compile, so compile below is off).
+  gradient_checkpointing: true
   vae_input_pm1: true
 
 optimizer:
@@ -430,7 +433,9 @@ training:
   enable_model_summary: true
   deterministic: false
   benchmark: true
-  compile: true
+  # Off: incompatible with gradient_checkpointing (dynamo can't trace the
+  # torch.utils.checkpoint HOP), and reduce-overhead cudagraphs fragment memory.
+  compile: false
   compile_fullgraph: true
   fast_dev_run: false
   profiler: null
