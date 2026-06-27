@@ -181,6 +181,111 @@ data:
       - vol: cremi3d_sample_C+_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
+      # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
+      # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
+      - vol: mitoem2_beta_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_beta_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_beta_train03_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_beta_train04_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_jurkat_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_jurkat_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_macro_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_macro_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_podo_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_podo_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_sperm_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_sperm_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      # 8 nm xy / 30 nm z: Mossy/Pyra/Stem
+      - vol: mitoem2_mossy_train01_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_mossy_train02_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_mossy_train03_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train01_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train02_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train03_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train04_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train05_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train06_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train07_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train08_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train09_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train10_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train11_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train12_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train13_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train14_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train15_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train16_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train17_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_stem_train01_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_stem_train02_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
     sft:
       task: sft
       batch_size: 4
@@ -298,6 +403,51 @@ data:
     root: data/MICRONS
     task: sft
     native_resolution: [40, 8, 8]
+  # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
+  - vol: mitoem2_beta_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_beta_test02_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_beta_test03_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_jurkat_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_macro_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_podo_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_sperm_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_mossy_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+  - vol: mitoem2_mossy_test02_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+  - vol: mitoem2_pyra_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+  - vol: mitoem2_stem_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
 
 model:
   type: joint3d_2b       # -> JointPredict3DModule (Cosmos-Predict 2.5 2B backbone + Joint3DReconSegLoss)

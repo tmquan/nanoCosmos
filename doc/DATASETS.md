@@ -20,6 +20,7 @@ it.
 | CREMI3D    | *Drosophila* brain, ssTEM (A/B/C)         | 4 × 4 × 40            | `cremi3d: [40,4,4]`      | `download_cremi3d.py`       | `data/CREMI3D`   | `cremi3d`                   |
 | FLYEM3D    | FlyEM FIB-SEM (FIB-25 / Hemibrain / MaleCNS) | 8 × 8 × 8 (isotropic) | `flyem3d: [8,8,8]`    | `download_flyem3d.py`       | `data/FLYEM3D`   | `flyem3d` / `joint3d`       |
 | COSEM3D    | OpenOrganelle / COSEM cell FIB-SEM        | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | `download_cosem3d.py`  | `data/COSEM3D`   | `joint3d`                   |
+| MitoEM2    | Mitochondria EM, 8 subsets (Beta/Jurkat/Macro/Mossy/Podo/Pyra/Sperm/Stem) | 16 × 16 × 16 & 8 × 8 × 30 | *(joint3d SSL, per-vol)* | nnU-Net `.nii.gz` → `*_volume.h5` | `data/MitoEM2`   | `joint3d`                   |
 | *(aux)* Zenodo 582636 | Rice grains, X-ray µCT (smoke test) | n/a              | n/a                      | `download_zenodo_582636.py` | `data/zenodo582636` | n/a                      |
 
 `COSEM3D` (4 nm, image-only) and the Hemibrain / MaleCNS members of `FLYEM3D`
@@ -248,6 +249,7 @@ in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
 | **FLYEM3D** · Hemibrain | `flyem3d_hemibrain_8nm[_ssl]_x{X}_y{Y}_z{Z}` | `flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume` | sft: yes / ssl: no | `data/FLYEM3D` |
 | **FLYEM3D** · MaleCNS | `flyem3d_malecns_8nm[_ssl]_x{X}_y{Y}_z{Z}` | `flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume` | sft: yes / ssl: no | `data/FLYEM3D` |
 | **COSEM3D** | `{jrc_id}_{rx}x{ry}x{rz}nm_x{X}_y{Y}_z{Z}` (image only; `--resample-isotropic` → `{jrc_id}_4nm_…`) | `jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume` | no | `data/COSEM3D` |
+| **MitoEM2** | `mitoem2_{subset}_{train,test}{NN}_volume` (image only; converted from nnU-Net `.nii.gz`) | `mitoem2_mossy_train01_volume` / `mitoem2_pyra_test01_volume` | no | `data/MitoEM2` |
 
 Notes on the stem fields:
 - **MICrONS** seg encodes the seg version: image `…_volume.h5`, seg
@@ -256,6 +258,13 @@ Notes on the stem fields:
   (FIB-25 only); `_ssl` = image-only (no seg); the `_xz` / `_yz` / `_p{n}`
   suffixes are FIB-25 orientation / z-phase augmentation variants. Hemibrain /
   MaleCNS carry the dataset name in the stem so they never collide with FIB-25.
+- **MitoEM2** ships as nnU-Net datasets (`Dataset0NN_ME2-*/imagesTr/*.nii.gz`);
+  the images are converted to the standard `mitoem2_{subset}_train{NN}_volume.h5`
+  (key `main`, axes transposed `X,Y,Z` → `Z,Y,X`) and used **image-only in the
+  `ssl` branch**.  The folder's own split is honoured: `imagesTr` → ssl **train**
+  (34 vols), `imagesTs` → ssl **validation** holdout (11 vols, `task: ssl` recon).
+  Two native resolutions: `[16,16,16]` (Beta/Jurkat/Macro/Podo/Sperm) and
+  `[30,8,8]` (Mossy/Pyra/Stem).  Labels (mito/boundary) are unused.
 - **COSEM3D** keeps the upstream `jrc_*` id and its exact (near-cubic) voxel in
   the stem; verify the printed entry, since the per-volume z (3.24 / 3.36 /
   3.44 nm) lands in the `res` tag.

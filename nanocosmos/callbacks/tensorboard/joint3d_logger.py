@@ -1,23 +1,23 @@
 """TensorBoard visualisation for the joint reconstruction + segmentation recipe.
 
 :class:`Joint3DImageLogger` extends :class:`ImageLogger` for the two-branch
-:class:`~nanocosmos.modules.Joint3DModule`.  It reuses the parent's batch-capture
-/ epoch-end / autocast machinery and only overrides the per-epoch render so it
-can branch on ``batch["task"]``:
+:class:`~nanocosmos.modules.Joint3DModule`.  Every epoch it captures the first
+``ssl`` batch AND the first ``sft`` batch and renders BOTH, each under a
+task-namespaced tag ``{stage}/{mode}/{task}/...``:
 
 * **both branches** -- reconstruction panels::
 
-      {stage}/automatic/true/image        the (degraded, on ssl) network input
-      {stage}/automatic/pred/recon        the raw-head small-voxel reconstruction
-      {stage}/automatic/true/recon_target the clean EM target (recon_image)
+      {stage}/automatic/{ssl,sft}/true/image         the (degraded, on ssl) input
+      {stage}/automatic/{ssl,sft}/pred/recon         raw-head small-voxel recon
+      {stage}/automatic/{ssl,sft}/true/recon_target  clean EM target (recon_image)
 
 * **sft only** -- the fine head is pooled to the native label grid (matching
   the loss) and the usual segmentation panels are emitted::
 
-      {stage}/automatic/true/label        native instance labels
-      {stage}/automatic/pred/sem          foreground (sigmoid)
-      {stage}/automatic/pred/label        Mutex-Watershed instances
-      {stage}/automatic/aff/pred/{offset} a few affinity channels
+      {stage}/automatic/sft/true/label        native instance labels
+      {stage}/automatic/sft/pred/sem          foreground (sigmoid)
+      {stage}/automatic/sft/pred/label        Mutex-Watershed instances
+      {stage}/automatic/sft/aff/pred/{offset} a few affinity channels
 
 The ``ssl`` branch is label-free, so it shows only the reconstruction panels.
 """
@@ -47,7 +47,65 @@ def _gray3(panel_2d: torch.Tensor) -> torch.Tensor:
 
 
 class Joint3DImageLogger(ImageLogger):
-    """Task-aware TensorBoard logger for :class:`Joint3DModule`."""
+    """Task-aware TensorBoard logger for :class:`Joint3DModule`.
+
+    Logs **both** branches every epoch: it captures the first ``ssl`` batch and
+    the first ``sft`` batch seen, and renders each under a task-namespaced tag
+    (``{stage}/{mode}/{ssl|sft}/...``).  ``ssl`` shows reconstruction panels
+    only; ``sft`` adds the pooled segmentation panels.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # First batch of EACH task per epoch, keyed by task name.  Replaces the
+        # parent's single first-batch capture so both ssl + sft panels log.
+        self._train_batches: Dict[str, Any] = {}
+        self._val_batches: Dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Per-task batch capture (all ranks).  The round-robin sampler's schedule
+    # is rank-identical, so every rank captures the same task set -> the
+    # epoch-end forwards stay collective-consistent.
+    # ------------------------------------------------------------------
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+        t = self._resolve_task(batch.get("task"))
+        if t not in self._train_batches:
+            self._train_batches[t] = self._detach_batch(batch)
+
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0,
+    ) -> None:
+        t = self._resolve_task(batch.get("task"))
+        if t not in self._val_batches:
+            self._val_batches[t] = self._detach_batch(batch)
+
+    @torch.no_grad()
+    def on_train_epoch_end(self, trainer, pl_module) -> None:
+        self._run_all_tasks(trainer, pl_module, self._train_batches, stage="train")
+        self._train_batches = {}
+
+    @torch.no_grad()
+    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+        self._run_all_tasks(trainer, pl_module, self._val_batches, stage="val")
+        self._val_batches = {}
+
+    def _run_all_tasks(self, trainer, pl_module, batches, *, stage: str) -> None:
+        epoch = trainer.current_epoch
+        if epoch % self.every_n_epochs != 0:
+            return
+        tb = self._get_tb(trainer)  # real on rank 0, None elsewhere
+        was_training = pl_module.training
+        pl_module.eval()
+        try:
+            # Sorted task order -> identical forward sequence on every rank.
+            for task in sorted(batches):
+                self._run_visualization(
+                    tb, trainer, pl_module, batches[task], stage=stage,
+                )
+        finally:
+            if was_training:
+                pl_module.train()
 
     def _run_visualization(self, tb, trainer, pl_module, batch, *, stage: str):
         task = self._resolve_task(batch.get("task"))
@@ -71,7 +129,9 @@ class Joint3DImageLogger(ImageLogger):
             return
 
         crit = pl_module.criterion
-        ctx = TagContext(stage=stage, mode=self.mode)
+        # Namespace every panel by task -> {stage}/{mode}/{ssl|sft}/... so the
+        # ssl and sft renders coexist in TensorBoard instead of overwriting.
+        ctx = TagContext(stage=stage, mode=self.mode, head=task)
         epoch = pl_module.current_epoch
 
         # All panels are upsampled to the FINEST in-plane size (the fine network
