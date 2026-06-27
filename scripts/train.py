@@ -302,6 +302,7 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         CosmosPredict3DModule,
         CosmosTransfer3DModule,
         Joint3DModule,
+        JointPredict3DModule,
         Vista3DModule,
     )
 
@@ -310,13 +311,16 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         "cosmos3nano3d": Cosmos3Nano3DModule,
         "cosmostransfer3d": CosmosTransfer3DModule,
         "cosmospredict3d": CosmosPredict3DModule,
-        # The joint reconstruction + segmentation recipe (Cosmos-3 Nano
-        # backbone + Joint3DReconSegLoss).  See doc/JOINT_TRAINING.md.
+        # The joint reconstruction + segmentation recipe.  ``joint3d`` uses the
+        # Cosmos-3 Nano (16B) backbone; ``joint3d_2b`` uses the Cosmos-Predict
+        # 2.5 (2B) backbone -- same loss / datamodule.  See doc/JOINT_TRAINING.md.
         "joint3d": Joint3DModule,
+        "joint3d_2b": JointPredict3DModule,
         # Legacy / verbose aliases.
         "cosmos3_nano_3d": Cosmos3Nano3DModule,
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
         "cosmos_predict25_3d": CosmosPredict3DModule,
+        "joint_predict3d": JointPredict3DModule,
     }
 
     model_cfg = dict(cfg.get("model", {}))
@@ -628,6 +632,12 @@ def build_trainer(
         deterministic=training_cfg.get("deterministic", False),
         benchmark=training_cfg.get("benchmark", True),
         fast_dev_run=training_cfg.get("fast_dev_run", False),
+        # The joint datamodule uses a custom round-robin ``batch_sampler``
+        # (not a ``BatchSampler`` subclass), so Lightning cannot inject a
+        # ``DistributedSampler``.  Set ``use_distributed_sampler: false`` for
+        # those runs; per-rank data diversity still comes from the dataset's
+        # random per-item patch sampling + Lightning's rank-offset worker seeds.
+        use_distributed_sampler=training_cfg.get("use_distributed_sampler", True),
     )
 
 

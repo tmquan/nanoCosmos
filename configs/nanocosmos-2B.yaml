@@ -1,8 +1,14 @@
 # =====================================================================
-# nanocosmos-16B.yaml  --  resolution-ladder super-resolution + segmentation
+# nanocosmos-2B.yaml  --  resolution-ladder super-resolution + segmentation
 # =====================================================================
+# The 2B sibling of nanocosmos-16B.yaml: identical joint recipe / data /
+# loss, but the backbone is the Cosmos-Predict 2.5 (2B) DiT instead of the
+# Cosmos-3 Nano (16B).  The 2B VAE compresses 8x in xy (vs Nano's 16x), so
+# membranes are sharper but the DiT token grid is ~4x larger; the model is
+# ~8x smaller in params, so it usually fits with a comparable batch.
+#
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
-# ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm, 160^3) a
+# ONE Cosmos-Predict 2.5 (2B) backbone predicts on a fixed FINE grid (4 nm, 160^3) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
 # down to wherever its ground truth lives (factor read from the GT shape).
@@ -28,7 +34,7 @@
 # tests/test_joint.py).
 # =====================================================================
 
-experiment_name: nanocosmos-16B
+experiment_name: nanocosmos-2B
 project_name: nanocosmos
 seed: 42
 logger: tensorboard
@@ -40,10 +46,11 @@ data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 320 x 256 x 256 @ 4 nm = 1.28 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
-  # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
-  # the DiT token grid is (80, 16, 16) = 20,480 tokens (~5x the 256^3 = 4,000).
-  # Memory-heavy on the 16B backbone -- pair with gradient checkpointing and a
-  # small batch; drop toward 256^3 / 320x256x256 if it OOMs.
+  # super-resolution axis).  Cosmos-Predict 2.5 Wan VAE compresses 4x in z, 8x in
+  # xy, so the DiT token grid is (80, 32, 32) = 81,920 tokens (~4x the 16B's 16x-xy
+  # grid).  The 2B backbone is ~8x smaller in params, so it usually fits with
+  # gradient checkpointing and a small batch; drop the patch (e.g. 320x192x192) if
+  # it OOMs.
   patch_size: [320, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -281,8 +288,8 @@ data:
     native_resolution: [30, 6, 6]
 
 model:
-  type: joint3d          # -> Joint3DModule (Cosmos-3 Nano backbone + Joint3DReconSegLoss)
-  variant: Nano
+  type: joint3d_2b       # -> JointPredict3DModule (Cosmos-Predict 2.5 2B backbone + Joint3DReconSegLoss)
+  variant: 2B
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64

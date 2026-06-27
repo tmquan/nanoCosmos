@@ -42,7 +42,7 @@ from nanocosmos.modules.cosmos_2_5_common import BaseCosmosModule
 from nanocosmos.modules.cosmos_3_nano import Cosmos3Nano3DModule
 from nanocosmos.modules.cosmos_predict_2_5 import CosmosPredict3DModule
 from nanocosmos.modules.cosmos_transfer_2_5 import CosmosTransfer3DModule
-from nanocosmos.modules.joint3d import Joint3DModule
+from nanocosmos.modules.joint3d import Joint3DModule, JointPredict3DModule
 from nanocosmos.modules.vista import BaseVistaModule, Vista3DModule
 
 __all__ = [
@@ -53,5 +53,6 @@ __all__ = [
     "CosmosPredict3DModule",
     "CosmosTransfer3DModule",
     "Joint3DModule",
+    "JointPredict3DModule",
     "Vista3DModule",
 ]
