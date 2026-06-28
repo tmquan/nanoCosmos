@@ -76,7 +76,8 @@ Skim of the top level:
 
 ```
 nanocosmos/
-├── configs/             Hydra configs (default → snemi3d → combine)
+├── configs/             Hydra configs (default → snemi3d → combine;
+│                         nanocosmos-16B / nanocosmos-2B = joint SR+seg recipe)
 ├── nanocosmos/            importable package (losses, models, modules,
 │                        datasets, datamodules, transforms, inference,
 │                        preprocessors, metrics, visualizer, callbacks)
@@ -100,7 +101,7 @@ pip install -e ".[cosmos,dev]"
 # Plain SNEMI3D run:
 python scripts/train.py --config-name snemi3d
 
-# Multi-dataset (SNEMI3D + neurons + MICrONS) joint training:
+# Multi-dataset (SNEMI3D + neurons + MICrONS) affinity training:
 python scripts/train.py --config-name combine
 
 # DDP, custom batch size:
@@ -108,6 +109,12 @@ python scripts/train.py --config-name combine data.batch_size=4 training.devices
 
 # Example: train affinities only (drop the sem + raw aux heads).
 python scripts/train.py --config-name combine loss.weight_sem.weight=0.0 loss.weight_raw.weight=0.0
+
+# Joint super-resolution + segmentation (resolution-ladder recipe):
+#   ssl (degraded->clean EM reconstruction) + sft (affinity + sem) on a
+#   shared backbone via Joint3DReconSegLoss; see doc/JOINT_TRAINING.md.
+python scripts/train.py --config-name nanocosmos-16B   # Cosmos-3 Nano backbone
+python scripts/train.py --config-name nanocosmos-2B    # Cosmos-Predict 2.5 (2B)
 ```
 
 ### GPU memory: avoiding slow OOM drift on long runs

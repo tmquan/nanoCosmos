@@ -2,12 +2,13 @@
 Resample a native-resolution patch onto the fixed fine (small-voxel) grid.
 
 The joint recipe (doc/RESOLUTION_LADDER.md) runs the network on a fixed fine
-grid (e.g. 4 nm, 320x256x256).  Each source volume is read at its **native**
+grid (e.g. 4 nm, [200, 256, 256]).  Each source volume is read at its **native**
 voxel size and brought onto that grid by :class:`ToFineGridd`:
 
 * ``image``       -> resampled (trilinear) to the fine grid -- the network input;
 * ``label``       -> **left at native** (the segmentation loss pools the fine
   head back down to it);
+* ``sem_label``   -> (if present) **left at native**, exactly like ``label``;
 * ``recon_image`` -> the clean-EM reconstruction target, placed on the
   *coarser of native / fine* (so it is never finer than the grid the model can
   produce): for a coarse rung (FIB 8 nm) it stays native; for a fine rung whose

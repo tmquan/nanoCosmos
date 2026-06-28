@@ -6,7 +6,7 @@ Feeds :class:`~nanocosmos.modules.Joint3DModule` the batch contract it expects
 ``image``, the native-grid ``label`` (sft), and the ``recon_image`` target.
 
 Geometry (see doc/RESOLUTION_LADDER.md).  The network runs on a fixed fine
-grid (``patch_size`` @ ``pixel_size`` nm, e.g. 320x256x256 @ 4 nm).  Each
+grid (``patch_size`` @ ``pixel_size`` nm, e.g. [200, 256, 256] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
 the fine grid while the label stays native and the recon target sits on the
@@ -20,9 +20,13 @@ which is exactly what ``Joint3DReconSegLoss`` / ``Joint3DModule`` require.
 
 Config schema (``cfg.data``)::
 
-    patch_size: [320, 256, 256]      # fine grid (z, y, x)
+    patch_size: [200, 256, 256]      # fine grid (z, y, x)
     pixel_size: [4, 4, 4]            # fine voxel size nm (cubic)
     degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (ssl)
+    min_foreground: 0.0              # label non-zero gate (sft volumes)
+    ssl_min_foreground: 0.8          # image non-zero gate (ssl volumes)
+    find_boundaries: 1.0             # per-sample boundary-erosion probability
+    boundary_target: semantic        # "semantic" (sem_label only) | "both"
     branches:
       ssl: {batch_size, sample_weight, volumes: [{vol, root, native_resolution}]}
       sft:  {batch_size, sample_weight, volumes: [{vol, seg, root, native_resolution}]}
@@ -132,6 +136,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         val_num_samples: int = 16,
         val_batch_size: int = 1,
         min_foreground: float = 0.0,
+        ssl_min_foreground: float = 0.0,
         find_boundaries: float = 0.0,
         boundary_target: str = "semantic",
         seed: int = 0,
@@ -152,6 +157,10 @@ class Joint3DDataModule(pl.LightningDataModule):
         self.val_num_samples = int(val_num_samples)
         self.val_batch_size = int(val_batch_size)
         self.min_foreground = float(min_foreground)
+        # Image-nonzero gate for the label-less ssl branch: rejects mostly-empty /
+        # zero-padded crops (e.g. MitoEM2 nnU-Net irregular crops padded to a box,
+        # empty COSEM/FLYEM regions) that would otherwise show as black panels.
+        self.ssl_min_foreground = float(ssl_min_foreground)
         # sem-head boundary supervision (sft only).  ``find_boundaries`` = per-
         # sample probability of eroding membrane voxels so the sem head targets
         # thin membranes instead of (near-degenerate) full foreground.
@@ -238,6 +247,7 @@ class Joint3DDataModule(pl.LightningDataModule):
             transform=self._group_transform(task, native_res),
             num_samples=num_samples,
             min_foreground=(self.min_foreground if task == "sft" else 0.0),
+            image_min_foreground=(self.ssl_min_foreground if task == "ssl" else 0.0),
             deterministic=deterministic,
         )
 

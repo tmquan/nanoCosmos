@@ -154,7 +154,7 @@ in depth.
 
 | Field | Slice | Channels | Head output |
 | ----- | ----- | -------- | ----------- |
-| `aff` | `[0, N_AFF)` | `N_AFF` (14) | logit |
+| `aff` | `[0, N_AFF)` | `N_AFF` (config-driven: 14 default, 30 in the joint recipe) | logit |
 | `sem` | `[N_AFF, N_AFF+1)` | 1 | logit |
 | `raw` | `[N_AFF+1, N_AFF+2)` | 1 | linear (target in `[-1, 1]`) |
 
@@ -176,6 +176,14 @@ nearest-neighbour + 11 push long-range offsets), the
 out = criterion(head, {"labels": labels, "raw_image": image})
 # out -> {"loss", "loss/aff", "loss/sem", "loss/raw"}
 ```
+
+**Joint recipe.** The resolution-ladder configs (`nanocosmos-16B.yaml` /
+`nanocosmos-2B.yaml`) wrap this head in `Joint3DReconSegLoss`
+(`nanocosmos/losses/joint3d.py`): a two-task loss with `ssl`
+(degraded→clean EM reconstruction on the `raw` head) and `sft` (the pooled
+affinity + sem segmentation via `AffinityFGLoss`, configured under the
+nested `loss.seg.*` block, with `offsets` of length 30). See
+[`JOINT_TRAINING.md`](./JOINT_TRAINING.md).
 
 | Scalar group | Meaning |
 | ------------ | ------- |

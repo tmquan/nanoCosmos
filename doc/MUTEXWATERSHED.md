@@ -33,7 +33,9 @@ ch  N_AFF + 1    : raw   (1)         linear, L1 reconstruction of input EM
                                      HEAD_CHANNELS = N_AFF + 2
 ```
 
-`N_AFF = len(offsets)` is **config-driven** (`loss.offsets`): the default
+`N_AFF = len(offsets)` is **config-driven** (`loss.offsets` for single-task
+recipes; **`loss.seg.offsets`** for the joint recipe, where the segmentation
+loss is nested under `loss.seg`): the default
 set gives `N_AFF = 14` / `HEAD_CHANNELS = 16`; the flagship 30-offset set
 gives `N_AFF = 30` / `HEAD_CHANNELS = 32`.  Slices are derived from the
 channel count at runtime — `AFF_SLICE = slice(0, N_AFF)`,
@@ -99,7 +101,9 @@ as separation constraints (deep out-of-plane z, compact in-plane axis, and
 mid-range in-plane diagonals).  Pull-first ordering is **required**.
 
 The offset set is now **config-driven**: set `loss.offsets` (a list of
-`[dz, dy, dx]`) and `loss.n_pull` in the YAML.  The head width
+`[dz, dy, dx]`) and `loss.n_pull` in the YAML — or, for the joint recipe,
+`loss.seg.offsets` / `loss.seg.n_pull` (the segmentation loss is nested
+under `loss.seg`).  The head width
 (`head_channels = len(offsets) + 2`), the `{aff, sem, raw}` channel
 slices, the affinity-target builder, the Mutex Watershed, and the
 TensorBoard panel names all derive from the loss's offsets at runtime

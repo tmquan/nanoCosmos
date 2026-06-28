@@ -35,8 +35,10 @@ chain is `default → <dataset> → <project>`.
 | --------------------- | --------------------------------------------------------------------------- |
 | `default.yaml`        | Every knob with a sensible default.  Base for every experiment.             |
 | `snemi3d.yaml`        | SNEMI3D dataset overrides + shared **model/loss** hyperparameters (`cosmos3nano3d`). |
-| `combine.yaml`        | Multi-dataset training (SNEMI3D + neurons + MICrONS).                       |
+| `combine.yaml`        | Multi-dataset affinity training (SNEMI3D + neurons + MICrONS).              |
 | `cosmospredict3d.yaml`| Flattened standalone Cosmos-Predict 2.5 (2B) baseline recipe.               |
+| `nanocosmos-16B.yaml` | Joint SR + segmentation recipe (`dataset: joint3d`, Cosmos-3 Nano backbone). |
+| `nanocosmos-2B.yaml`  | Joint SR + segmentation recipe (`joint3d_2b`, Cosmos-Predict 2.5 2B backbone). |
 | `cosmos3nano3d.yaml`  | Flattened standalone Cosmos3-Nano (16B) recipe.                             |
 
 ---
@@ -51,6 +53,11 @@ applicable or directly: `python scripts/<name>.py`.
 | `scripts/train.py`             | Hydra-driven training loop (Lightning Trainer).   |
 | `scripts/download_snemi3d.py`  | Fetch SNEMI3D volumes via cloudvolume.            |
 | `scripts/download_microns.py`  | Fetch MICrONS volumes + segmentations.            |
+| `scripts/download_cosem3d.py`  | Fetch COSEM3D (4 nm) SSL volumes.                 |
+| `scripts/download_flyem3d.py`  | Fetch FlyEM (FIB-25 / hemibrain / malecns).       |
+| `scripts/download_cremi3d.py`  | Fetch CREMI samples (A/B/C + EM-only +).          |
+| `scripts/download_all.py`      | Run all dataset downloaders.                      |
+| `scripts/convert_mitoem2.py`   | Convert MitoEM2 nnU-Net `.nii.gz` → image-only h5.|
 | `scripts/download_zenodo_582636.py` | Generic Zenodo downloader, currently pointing at record 582636 (X-ray uCT of an assembly of rice grains, used as a 3D instance-segmentation benchmark with densely touching objects). |
 
 ---
@@ -112,6 +119,7 @@ and the loss targets.  No learnable state.
 | `snemi3d.py`    | SNEMI3D datamodule leaf.                                            |
 | `microns.py`    | MICrONS datamodule leaf.                                            |
 | `neurons.py`    | Internal neurons datamodule leaf.                                   |
+| `joint3d.py`    | `Joint3DDataModule` — round-robin ssl/sft branches for the joint recipe. |
 
 ### `nanocosmos/losses/` — affinity + sem + raw loss
 
@@ -120,6 +128,7 @@ and the loss targets.  No learnable state.
 | `_common.py`         | Single source of truth for the head layout: `AFFINITY_OFFSETS` / `N_PULL`, `AFF_SLICE` / `SEM_SLICE` / `RAW_SLICE`, `HEAD_CHANNELS`, the affinity-target / validity-mask builders, and slicing helpers. The head emits raw logits / linear values (no activation in `forward`). |
 | `affinity.py`        | `AffinityFGLoss` — the head's supervisor: masked + offset-weighted (pull/push) affinity composite (BCE + soft-Dice + focal), a `DiceBCEFocalLoss` foreground (`sem`) term, and an L1 `raw` reconstruction term.  Emits `loss/aff`, `loss/sem`, `loss/raw`. |
 | `dice_bce_focal.py`  | `DiceBCEFocalLoss` — composite logit-input supervisor used by `AffinityFGLoss` for the `sem` head.  Logit-stable BCE (`binary_cross_entropy_with_logits`) plus MONAI's `DiceLoss(sigmoid=False)` and a focal path, both on `sigmoid(logits)`; `lambda_{bce,dice,focal}` + `gamma` parameterise the mix. |
+| `joint3d.py`         | `Joint3DReconSegLoss` — the joint recipe loss: `ssl` (degraded→clean EM reconstruction) + `sft` (pooled affinity + sem via `AffinityFGLoss`, plus optional `raw` data-consistency). Weights `weight_rec` / `weight_seg` / `weight_ssl` / `weight_sft`. |
 
 ### `nanocosmos/metrics/` — per-head eval metrics
 

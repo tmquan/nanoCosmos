@@ -1,24 +1,26 @@
 """
 Volume I/O utilities.
 
-A thin façade over :mod:`nanocosmos.preprocessors` that picks the right
-preprocessor by file suffix so callers don't have to.
+Standalone volume reader/writer with suffix-based dispatch to **inline**
+format handlers (h5py / tifffile / nrrd / numpy).  This is independent of
+the :mod:`nanocosmos.preprocessors` package (whose unified dispatch is a
+separate, in-progress path).
 
 Public surface
 --------------
-* :func:`find_folder` -- locate a volume file in a directory by base
+* :func:`find_folder` -- locate a volume *file* in a directory by base
   name (any of the :data:`SUPPORTED_EXTENSIONS`).  **Non-recursive** by
   design: every dataset resolves ``vol`` / ``seg`` keys against the
   flat ``data_root`` directory, so the lookup is just
-  ``root / f"{base}{ext}"``.
+  ``root / f"{base}{ext}"``.  (The name is historical -- it returns a
+  file path, not a folder.)
 * :func:`load_volume` / :func:`save_volume` -- format-agnostic reader
-  / writer; suffix dispatches to a :class:`BasePreprocessor` subclass.
+  / writer; the file suffix selects an inline handler.
 * :func:`ensure_data` -- ``mkdir(parents=True, exist_ok=True)`` helper.
 
-Extending this module: a new format only needs a new
-:class:`BasePreprocessor` subclass; the suffix dispatch here will pick
-it up automatically once the class is registered in
-``preprocessors/__init__.py``.
+Extending this module: add a new suffix branch to :func:`load_volume`
+and :func:`save_volume` (and list the extension in
+:data:`SUPPORTED_EXTENSIONS`).
 """
 
 from pathlib import Path

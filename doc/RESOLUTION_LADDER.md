@@ -57,7 +57,15 @@ back to native for that rung's loss (`< 1` ⇒ that axis is mildly *downsampled*
 fetch** — we do **not** download whole volumes (Hemibrain/MaleCNS are
 peta-voxel; even FIB-25 is ~3.5e11 vox). Especially for SSL a handful of
 crops suffices. `Nx A×B×C` = N crops of that size. **USED_SIZE values below are
-a starting proposal — tune per compute/coverage.**
+a starting proposal — tune per compute/coverage.** The implemented volume
+lists live in `configs/nanocosmos-16B.yaml` / `configs/nanocosmos-2B.yaml`
+(SSL also includes **MitoEM2** and image-only CREMI+ tiles).
+
+> Two sft/ssl data knobs are documented in
+> [`JOINT_TRAINING.md`](./JOINT_TRAINING.md) §4.1–4.2: boundary-aware sem
+> supervision (`find_boundaries` / `boundary_target: semantic` → a separate
+> eroded `sem_label`) and the SSL image-foreground gate (`ssl_min_foreground`,
+> which rejects empty/zero-padded ssl crops).
 
 | rank | volume | (z,y,x) nm | up z·xy | role | AVAIL_SIZE (x×y×z vox) | USED_SIZE (x×y×z vox) |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -145,7 +153,7 @@ every role:
 - **downsample**: their 8 nm neuron labels supervise segmentation by pooling
   the small-voxel prediction back to 8 nm.
 
-SNEMI3D (6 nm xy) lives here too — fine-ish xy, coarse z, labeled.
+SNEMI3D (6 nm xy) lives here too — moderate xy, coarse z (30 nm), labeled.
 
 ### Band C — coarsest → **SFT segmentation** (downsample the prediction)
 CREMI, MICrONS (and FIB / SNEMI / Hemibrain / MaleCNS also contribute here):
@@ -185,7 +193,8 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 ## 5. Plan of record
 
 1. **Census + fine grid.** Adopt §2; fine grid = **4 nm cubic** (§2.1).
-   (Revisit FOV/memory: 160³ @ 4 nm = 0.64 µm context — see §6.)
+   (Revisit FOV/memory: the shipped configs use a `[200, 256, 256]` @ 4 nm
+   patch — see §6.)
 2. **Acquire SSL data.**
    - `scripts/download_cosem3d.py` — 4 nm COSEM3D cubes (`jrc_hela-3`,
      `jrc_macrophage-2`, `jrc_jurkat-1`).
@@ -207,7 +216,8 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 
 ## 6. Open knob (FOV vs resolution)
 
-A 4 nm grid at 160³ sees only 0.64 µm — small context for large neurites.
+A 4 nm grid at 160³ sees only 0.64 µm — small context for large neurites
+(the shipped configs use `[200, 256, 256]`, ~0.8 × 1.0 × 1.0 µm).
 Levers: bigger voxel patch (more memory), non-cubic voxel patch (more z-planes
 since z is synthesized), or a slightly larger-voxel grid (e.g. 6 nm: 0.96 µm
 FOV, only CREMI/COSEM mildly downsampled). Decide alongside the 16B memory

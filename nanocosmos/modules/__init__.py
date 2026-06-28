@@ -24,13 +24,18 @@ Public surface
   ``dit_backbone_lr`` / ``controlnet_lr`` parameter-group split.
 * :class:`BaseVistaModule` -- adds Vista-specific wiring.
 * :class:`Cosmos3Nano3DModule` -- concrete Lightning class for the
-  Cosmos 3 (Nano) omni backbone (16B MoT, no ControlNet).  The default.
+  Cosmos 3 (Nano) omni backbone (16B MoT, no ControlNet).
 * :class:`CosmosPredict3DModule` -- concrete Lightning class for the
   Cosmos-Predict 2.5 backbone (base DiT, no ControlNet).
 * :class:`CosmosTransfer3DModule` -- concrete Lightning class for the
   Cosmos-Transfer 2.5 backbone (base DiT + ControlNet).
 * :class:`Vista3DModule` -- concrete Lightning class for the Vista
   backbone (unified aff/sem/raw head).
+* :class:`Joint3DModule` -- joint reconstruction + segmentation recipe
+  (:class:`~nanocosmos.losses.Joint3DReconSegLoss`) on the Cosmos 3 Nano
+  backbone (``model.type: joint3d``).
+* :class:`JointPredict3DModule` -- the joint recipe on the Cosmos-Predict
+  2.5 2B backbone (``model.type: joint3d_2b`` / ``joint_predict3d``).
 
 Extending this module
 ---------------------

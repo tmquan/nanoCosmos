@@ -55,6 +55,11 @@ data:
   slice_mode: true
   num_samples: null
   find_boundaries: 0.0
+  # Where boundary erosion is applied when find_boundaries > 0:
+  #   both     -> erode the shared instance label (affects sem AND affinity)
+  #   semantic -> erode a separate sem_label for the sem head only (label stays
+  #               pristine for affinity); used by the joint recipe.
+  boundary_target: both
   elastic_prob: 0.0            # probability of 3-D elastic deformation (0 = off)
   elastic_sigma_range: [35, 50]       # Gaussian smoothing σ — high = sparse, smooth warp
   elastic_magnitude_range: [10, 40]   # displacement magnitude range (kept low for gentle warps)

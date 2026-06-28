@@ -1,6 +1,6 @@
 # Nanocosmos Documentation Index
 
-Pick the doc that matches *your* current question.  All eight live in
+Pick the doc that matches *your* current question.  All of them live in
 `doc/`.
 
 | When you're asking ...                                           | Read                                                          |

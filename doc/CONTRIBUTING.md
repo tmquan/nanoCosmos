@@ -132,8 +132,9 @@ data:
 
 ### 1.5 Wire-in the dispatch
 
-`scripts/train.py:get_datamodule` (line 169) has a hard-coded mapping
-from dataset name to datamodule class.  Add your entry:
+`scripts/train.py:build_datamodule` (~line 235) has a hard-coded mapping
+from dataset name to datamodule class (the joint recipe `dataset: joint3d`
+is a separate branch that builds `Joint3DDataModule`).  Add your entry:
 
 ```python
 datamodule_classes = {

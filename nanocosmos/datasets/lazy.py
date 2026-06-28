@@ -214,11 +214,20 @@ class LazyVolDataset(Dataset):
         num_samples: Virtual epoch length (random patches per epoch).
         normalize: Whether to normalize images to [0, 1] using per-volume
             min/max (pre-computed from metadata, not full load).
+        deterministic: When True, seed per-sample RNG by index so crops /
+            volume picks are reproducible (used for validation groups).
         min_foreground: Minimum fraction of non-zero voxels in the label
             patch.  When > 0, patches below this threshold are rejected
             and re-sampled (up to ``max_foreground_retries`` attempts).
+            Only applies to volumes that have a label (segmentation).
+        image_min_foreground: Minimum fraction of non-zero voxels in the
+            *image* patch, used to gate **label-less** volumes (e.g. the
+            SSL branch).  When > 0, mostly-empty / zero-padded crops are
+            rejected and re-sampled.  No effect on labeled volumes (those
+            use ``min_foreground``).
         max_foreground_retries: Maximum re-sampling attempts before
-            accepting whatever patch was drawn.
+            falling back to the best-seen crop (highest foreground fraction
+            across the attempts).
     """
 
     def __init__(
@@ -231,6 +240,7 @@ class LazyVolDataset(Dataset):
         normalize: bool = True,
         deterministic: bool = False,
         min_foreground: float = 0.0,
+        image_min_foreground: float = 0.0,
         max_foreground_retries: int = 50,
     ) -> None:
         super().__init__()
@@ -241,6 +251,7 @@ class LazyVolDataset(Dataset):
         self.num_samples = num_samples
         self.normalize = normalize
         self.min_foreground = float(min_foreground)
+        self.image_min_foreground = float(image_min_foreground)
         self.max_foreground_retries = int(max_foreground_retries)
 
         self._handles: List[_VolumeHandle] = []
@@ -259,9 +270,11 @@ class LazyVolDataset(Dataset):
         total = sum(np.prod(h.shape) for h in self._handles)
         logger.info(
             "LazyVolDataset: %d volumes, %s total voxels, "
-            "patch_size=%s, num_samples=%d, min_fg=%.0f%%, ~%.1f MB metadata",
+            "patch_size=%s, num_samples=%d, min_fg=%.0f%%, img_min_fg=%.0f%%, "
+            "~%.1f MB metadata",
             len(self._handles), f"{total:,}", patch_size, num_samples,
             self.min_foreground * 100,
+            self.image_min_foreground * 100,
             len(self._handles) * 0.001,
         )
 
@@ -279,6 +292,20 @@ class LazyVolDataset(Dataset):
 
             img_key = _resolve_hdf5_key(img_path) if img_path.suffix.lower() in (".h5", ".hdf5") else None
             shape = _get_shape(img_path, img_key)
+
+            # Reject volumes smaller than the patch on any spatial axis: a
+            # crop there would silently return an undersized patch (no
+            # zero-padding in the lazy read path), breaking downstream
+            # shape contracts.  Skip with a clear warning instead.
+            spatial = (shape[1:] if len(shape) == len(self.patch_size) + 1
+                       else shape)
+            if any(s < p for s, p in zip(spatial, self.patch_size)):
+                logger.warning(
+                    "Skipping volume %s: spatial shape %s is smaller than "
+                    "patch_size %s on some axis.",
+                    vol_name, tuple(spatial), tuple(self.patch_size),
+                )
+                continue
 
             seg_name = vol_spec.get("seg")
             label_path = None
@@ -427,23 +454,41 @@ class LazyVolDataset(Dataset):
 
     def _check_foreground(
         self, handle: _VolumeHandle, crop_slices: Tuple[slice, ...],
-    ) -> Tuple[bool, Optional[np.ndarray]]:
-        """Check whether the label patch has enough foreground.
+    ) -> Tuple[bool, Optional[np.ndarray], Optional[np.ndarray], float]:
+        """Check whether a crop has enough foreground.
 
-        Returns ``(ok, label)``.  The label is returned alongside the
-        boolean so ``__getitem__`` can reuse the I/O it just paid for,
-        avoiding a second read of the same chunk when ``min_foreground``
-        is active (once here, once in the read path below).
+        Returns ``(ok, label, image, frac)``.  The decoded ``label`` /
+        ``image`` is returned alongside the boolean so ``__getitem__`` can
+        reuse the I/O it just paid for instead of decoding the same chunk
+        twice, and ``frac`` (the measured foreground fraction) lets the
+        caller keep the best-seen crop when all retries are exhausted.
+
+        * **Labeled volumes** are gated on the *label* non-zero fraction
+          (``min_foreground``); ``image`` is returned as ``None``.
+        * **Label-less volumes** (e.g. SSL) are gated on the *image*
+          non-zero fraction (``image_min_foreground``) so mostly-empty /
+          zero-padded crops are rejected; ``label`` is returned as ``None``.
+
+        When no gate is active ``frac`` is ``1.0`` (the crop trivially
+        passes) and no extra I/O is performed.
         """
-        if handle.label_path is None:
-            return True, None
-        if self.min_foreground <= 0:
-            return True, None
-        label = _read_patch(
-            handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
+        if handle.label_path is not None:
+            if self.min_foreground <= 0:
+                return True, None, None, 1.0
+            label = _read_patch(
+                handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
+            )
+            fg_frac = float(np.count_nonzero(label)) / label.size
+            return fg_frac >= self.min_foreground, label, None, fg_frac
+
+        # Label-less volume: optional image-nonzero gate (rejects empty crops).
+        if self.image_min_foreground <= 0:
+            return True, None, None, 1.0
+        image = _read_patch(
+            handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
         )
-        fg_frac = float(np.count_nonzero(label)) / label.size
-        return fg_frac >= self.min_foreground, label
+        nz_frac = float(np.count_nonzero(image)) / image.size
+        return nz_frac >= self.image_min_foreground, None, image, nz_frac
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
         seed = index if self.deterministic else index + int(torch.randint(0, 2**31, (1,)).item())
@@ -457,22 +502,42 @@ class LazyVolDataset(Dataset):
         else:
             full_slices = crop_slices
 
-        # Re-sample crops until the label patch passes the foreground
-        # check; carry the successful label read forward so we don't
-        # decode the same chunk again below.
+        # Re-sample crops until the patch passes the foreground gate
+        # (label non-zero fraction for labeled volumes; image non-zero
+        # fraction for label-less / SSL volumes).  Carry the successful
+        # read forward so we don't decode the same chunk again below.  If
+        # every retry fails, fall back to the *best-seen* crop (highest
+        # foreground) rather than whatever was drawn last, and restore its
+        # slices so image/label stay consistent.
         cached_label: Optional[np.ndarray] = None
+        cached_image: Optional[np.ndarray] = None
+        best: Optional[Tuple[float, Tuple[slice, ...],
+                             Optional[np.ndarray], Optional[np.ndarray]]] = None
         for _ in range(self.max_foreground_retries):
-            ok, cached_label = self._check_foreground(handle, full_slices)
+            ok, cached_label, cached_image, frac = self._check_foreground(handle, full_slices)
             if ok:
                 break
+            if best is None or frac > best[0]:
+                best = (frac, full_slices, cached_label, cached_image)
             crop_slices = self._random_patch_slices(spatial, rng)
             full_slices = ((slice(None),) + crop_slices
                            if len(handle.shape) > len(spatial)
                            else crop_slices)
+        else:
+            if best is not None:
+                frac, full_slices, cached_label, cached_image = best
+                logger.warning(
+                    "Foreground gate exhausted %d retries for %s; "
+                    "accepting best-seen crop (foreground=%.2f).",
+                    self.max_foreground_retries, handle.name, frac,
+                )
 
-        image = _read_patch(
-            handle.image_path, full_slices, handle.image_key, dtype=np.float32,
-        )
+        if cached_image is not None:
+            image = cached_image
+        else:
+            image = _read_patch(
+                handle.image_path, full_slices, handle.image_key, dtype=np.float32,
+            )
 
         if self.normalize and handle.name in self._norm_params:
             vmin, vmax = self._norm_params[handle.name]

@@ -37,6 +37,8 @@ flowchart LR
     MOD --> WRAP["model wrapper\n(forward)"]:::wrap
     WRAP --> HEAD["affinity + sem + raw head\naff(N_AFF) | sem | raw"]:::heads
     HEAD --> LOSS["AffinityFGLoss"]:::loss
+    %% The joint recipe (model.type: joint3d / joint3d_2b) uses the parallel
+    %% Joint3DDataModule / Joint3DModule / Joint3DReconSegLoss stack instead.
     LOSS --> METRICS["loss + Mutex Watershed\ninstance metrics"]:::metric
     METRICS --> TB[("TensorBoard /\nW&B logs")]:::tb
     CB -.|on_batch_end\non_epoch_end|.-> TB
@@ -60,8 +62,9 @@ Everything below zooms into one piece of this diagram.
 
 ## 1. CLI entry point
 
-`scripts/train.py:main` (`@hydra.main` wrapper at line 537) is the only
-entry point; everything else is called from it.
+`scripts/train.py:main` (`@hydra.main` wrapper at ~line 802) is the only
+entry point; everything else is called from it.  (Line numbers in this
+doc are approximate — anchor on the function names.)
 
 What happens, in order:
 
@@ -80,7 +83,7 @@ What happens, in order:
 | 11   | `593-599`  | `run_fit_with_recovery(...)` wraps `trainer.fit(...)` and writes a `crash_recovery.ckpt` if anything throws. |
 | 12   | `601-610`  | Save `final_model.ckpt` on rank 0.                                          |
 
-`_install_runtime_patches()` (line `75`) is called explicitly from
+`_install_runtime_patches()` (~line 128) is called explicitly from
 `main` (no longer at import time) so `import scripts.train` from a
 notebook or test does not silently mutate the global `torch` module
 or warning filters.  Inside it:
@@ -97,7 +100,7 @@ or warning filters.  Inside it:
 
 ## 2. DataModule construction
 
-`scripts/train.py:build_datamodule` (line 189):
+`scripts/train.py:build_datamodule` (~line 237):
 
 ```mermaid
 flowchart LR
@@ -131,8 +134,10 @@ lazily.
 
 ## 3. Lightning module construction
 
-`scripts/train.py:build_module` (line 222) maps `cfg.model.type` to
+`scripts/train.py:build_module` (~line 303) maps `cfg.model.type` to
 `CosmosPredict3DModule` / `CosmosTransfer3DModule` / `Cosmos3Nano3DModule`
+(and the joint `Joint3DModule` / `JointPredict3DModule` for
+`model.type: joint3d` / `joint3d_2b`)
 / `Vista3DModule` and forwards four config sub-dicts:
 
 ```python
@@ -165,7 +170,7 @@ What `BaseCircuitModule.__init__` does
 
 ## 4. Callbacks
 
-`scripts/train.py:setup_callbacks` (line 291) is a flat list of
+`scripts/train.py:setup_callbacks` (~line 403) is a flat list of
 "if `callbacks.<name>.enabled` then add it" guards.  The default set is:
 
 | Callback                    | Source                                                            | Why                                                                  |
@@ -220,7 +225,7 @@ Channel layout is owned by `nanocosmos.losses._common`:
 | ----- | ----- | -------- | ----------- | ----------- |
 | aff | `[0, N_AFF)` | `N_AFF` (14) | logit | masked logit-stable BCE + soft-Dice + focal vs `affinity_target_from_offsets` |
 | sem | `[N_AFF, N_AFF+1)` | 1 | logit | Dice + BCE + Focal (`DiceBCEFocalLoss`) vs `labels > 0` |
-| raw | `[N_AFF+1, N_AFF+2)` | 1 | linear | L1 reconstruction of the input EM (target in `[-1, 1]`) |
+| raw | `[N_AFF+1, N_AFF+2)` | 1 | linear | L1 reconstruction of the input EM (target in `[-1, 1]`).  In the **joint** recipe the `raw` head instead reconstructs the small-voxel EM (super-resolution) and is pooled down for sft data-consistency — see `JOINT_TRAINING.md`. |
 
 ### 5.2 What `AffinityFGLoss` returns
 

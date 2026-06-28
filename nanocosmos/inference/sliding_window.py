@@ -42,7 +42,9 @@ def sliding_window_inference(
         stride: Patch stride.  Defaults to ``patch_size // 2``.
         aggregation: ``"gaussian"``, ``"average"``, or ``"max"``.
         batch_size: Number of patches per forward pass.
-        device: Inference device.
+        device: Inference device.  The volume is moved here automatically;
+            the **caller must move the model to** ``device`` first
+            (e.g. ``model.to(device)``).
         sigma_scale: Gaussian sigma as a fraction of the smallest patch dim.
         progress: Show a tqdm progress bar when available.
 
@@ -147,4 +149,4 @@ def sliding_window_inference(
     return output
 
 
-__all__ = ["sliding_window_inference"]
+__all__ = ["sliding_window_inference", "create_gaussian_weight"]

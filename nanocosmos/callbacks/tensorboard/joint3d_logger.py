@@ -9,12 +9,14 @@ task-namespaced tag ``{stage}/{mode}/{task}/...``:
 
       {stage}/automatic/{ssl,sft}/true/image         the (degraded, on ssl) input
       {stage}/automatic/{ssl,sft}/pred/recon         raw-head small-voxel recon
-      {stage}/automatic/{ssl,sft}/true/recon_target  clean EM target (recon_image)
+      {stage}/automatic/ssl/true/recon_target        clean EM target (recon_image)
+      # ssl only: on sft recon_target is a clone of true/image, so it is skipped
 
 * **sft only** -- the fine head is pooled to the native label grid (matching
   the loss) and the usual segmentation panels are emitted::
 
       {stage}/automatic/sft/true/label        native instance labels
+      {stage}/automatic/sft/true/sem          sem target (eroded sem_label > 0)
       {stage}/automatic/sft/pred/sem          foreground (sigmoid)
       {stage}/automatic/sft/pred/label        Mutex-Watershed instances
       {stage}/automatic/sft/aff/pred/{offset} a few affinity channels

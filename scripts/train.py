@@ -6,10 +6,12 @@ Loads a Hydra config, builds the datamodule + Lightning module + trainer,
 then calls ``trainer.fit(...)``.
 
 The default Hydra config name is ``default`` (see ``configs/default.yaml``)
-which runs SNEMI3D-shaped data with all four loss heads.  Recipes:
+which runs SNEMI3D-shaped data with the unified aff/sem/raw head.  Recipes:
 
-* ``--config-name snemi3d``   -- SNEMI3D only, three-head recipe.
-* ``--config-name combine``   -- multi-dataset SNEMI3D + neurons + MICrONS.
+* ``--config-name snemi3d``       -- SNEMI3D only, single-task affinity recipe.
+* ``--config-name combine``       -- multi-dataset SNEMI3D + neurons + MICrONS.
+* ``--config-name nanocosmos-16B``-- joint SR + segmentation (Cosmos-3 Nano).
+* ``--config-name nanocosmos-2B`` -- joint SR + segmentation (Cosmos-Predict 2B).
 
 Examples
 --------
@@ -271,6 +273,7 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             val_num_samples=int(d.get("val_num_samples", 16)),
             val_batch_size=int(d.get("val_batch_size", 1)),
             min_foreground=float(d.get("min_foreground", 0.0)),
+            ssl_min_foreground=float(d.get("ssl_min_foreground", 0.0)),
             find_boundaries=float(d.get("find_boundaries", 0.0)),
             boundary_target=str(d.get("boundary_target", "semantic")),
             seed=int(cfg.get("seed", 0)),
@@ -615,6 +618,12 @@ def build_trainer(
 ) -> pl.Trainer:
     """Construct the :class:`pl.Trainer` from ``cfg.training``."""
     training_cfg = cfg.training
+    # The joint datamodule uses a custom round-robin ``batch_sampler`` that is
+    # not a ``BatchSampler`` subclass, so Lightning cannot inject a
+    # ``DistributedSampler`` -- default ``use_distributed_sampler`` to False for
+    # it (still overridable from the config) to avoid a hard crash on DDP.
+    _ds_type = str(cfg.get("data", {}).get("dataset", "")).lower()
+    _default_uds = False if _ds_type == "joint3d" else True
     return pl.Trainer(
         max_epochs=training_cfg.get("max_epochs", 100),
         accelerator=training_cfg.get("accelerator", "auto"),
@@ -637,12 +646,12 @@ def build_trainer(
         deterministic=training_cfg.get("deterministic", False),
         benchmark=training_cfg.get("benchmark", True),
         fast_dev_run=training_cfg.get("fast_dev_run", False),
-        # The joint datamodule uses a custom round-robin ``batch_sampler``
-        # (not a ``BatchSampler`` subclass), so Lightning cannot inject a
-        # ``DistributedSampler``.  Set ``use_distributed_sampler: false`` for
-        # those runs; per-rank data diversity still comes from the dataset's
-        # random per-item patch sampling + Lightning's rank-offset worker seeds.
-        use_distributed_sampler=training_cfg.get("use_distributed_sampler", True),
+        # ``use_distributed_sampler`` defaults to False for the joint recipe
+        # (see ``_default_uds`` above): its custom round-robin batch_sampler is
+        # not a ``BatchSampler`` subclass, so Lightning cannot inject a
+        # ``DistributedSampler``.  Per-rank data diversity still comes from the
+        # dataset's random per-item patch sampling + rank-offset worker seeds.
+        use_distributed_sampler=training_cfg.get("use_distributed_sampler", _default_uds),
     )
 
 

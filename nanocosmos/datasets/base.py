@@ -17,10 +17,12 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
     """
     Abstract base class for connectomics datasets.
 
-    Datasets receive a ``volumes`` list — each item is a dict with at least
-    ``vol`` and ``seg`` keys (basenames or paths).  The dataset loads
-    everything in the list without any splitting logic.  The datamodule
-    is responsible for choosing which volumes go to train / val / test.
+    Datasets receive a ``volumes`` list — each item is a dict with a ``vol``
+    key and, for labeled volumes, a ``seg`` key (basenames or paths).
+    ``seg`` is optional: label-less volumes (e.g. SSL / lazy image-only
+    sources) omit it.  The dataset loads everything in the list without any
+    splitting logic.  The datamodule is responsible for choosing which
+    volumes go to train / val / test.
 
     All connectomics datasets must implement the following properties:
     - paper: Reference or citation metadata (string)

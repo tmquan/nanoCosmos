@@ -55,14 +55,16 @@ data:
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
-  resolution_zoom_prob: 0.0
   num_workers: 8
-  cache_rate: 0.0
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 8
   find_boundaries: 1.0
   boundary_target: semantic
+  # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
+  # SSL branch never trains/visualizes black patches.  Label branches use the
+  # label-based min_foreground instead; this only affects label-less ssl volumes.
+  ssl_min_foreground: 0.4
 
   # ---- realistic large-voxel degradation for the SSL branch ----
   # (nanocosmos.transforms.RandResolutionDegraded) -- the free
@@ -456,7 +458,7 @@ model:
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64
-  dropout: 0.5
+  dropout: 0.5                 # matches the 16B recipe (was 0.5, an overfit-debug value)
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
@@ -587,7 +589,6 @@ training:
   # Off: incompatible with gradient_checkpointing (dynamo can't trace the
   # torch.utils.checkpoint HOP), and reduce-overhead cudagraphs fragment memory.
   compile: false
-  compile_fullgraph: true
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null

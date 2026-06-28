@@ -48,7 +48,8 @@ class BaseModel(nn.Module, ABC):
 
     Args:
         in_channels: Number of input channels.
-        out_channels: Number of output channels/classes.
+        out_channels: Head width, i.e. ``HEAD_CHANNELS`` (affinity + sem +
+            raw); the production wrappers expose this as ``head_channels``.
         spatial_dims: Spatial dimensions (2 or 3).
     """
 

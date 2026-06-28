@@ -408,20 +408,30 @@ class BaseCircuitModule(pl.LightningModule):
         # Score the sem head against the same (possibly boundary-eroded)
         # foreground it is trained on; falls back to the instance labels.
         sem_source = targets.get("sem_label", targets["labels"])
+        # Exclude ignored voxels (matching how the loss masks them) so the
+        # metric agrees with the training objective.  ``sem_gt`` carries the
+        # ignore sentinel at masked voxels so the MONAI metrics drop them.
+        ignore_index = int(getattr(self.criterion, "ignore_index", -100))
+        valid = sem_source != ignore_index
         sem_gt = (sem_source > 0).long()
+        sem_gt = torch.where(valid, sem_gt, torch.full_like(sem_gt, ignore_index))
         metric = f"{prefix}/sem/metric"
+        correct = (sem_pred == sem_gt).float() * valid.float()
+        denom = valid.float().sum().clamp_min(1.0)
         self._accum(
             f"{metric}/acc",
-            reduce((sem_pred == sem_gt).float(), "b ... -> ", "mean"),
+            reduce(correct, "b ... -> ", "sum") / denom,
             bs,
         )
         self._accum(
             f"{metric}/iou",
-            compute_per_batch_iou(sem_pred, sem_gt, num_classes=2), bs,
+            compute_per_batch_iou(sem_pred, sem_gt, num_classes=2,
+                                  ignore_index=ignore_index), bs,
         )
         self._accum(
             f"{metric}/dice",
-            compute_per_batch_dice(sem_pred, sem_gt, num_classes=2), bs,
+            compute_per_batch_dice(sem_pred, sem_gt, num_classes=2,
+                                   ignore_index=ignore_index), bs,
         )
 
     def _accumulate_instance_metrics(

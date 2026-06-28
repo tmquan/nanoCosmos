@@ -25,7 +25,7 @@ resolution, and the exact script that downloads (or converts) it.
 
 `COSEM3D` (4 nm), `MitoEM2` (8–16 nm), and the Hemibrain / MaleCNS members of
 `FLYEM3D` (8 nm) are the image-only `ssl` rungs of the **joint super-resolution
-recipe** (`configs/nanocosmos-16B.yaml` / `nanocosmos-2B.yaml`,
+recipe** (`configs/nanocosmos-16B.yaml` / `configs/nanocosmos-2B.yaml`,
 `data.dataset: joint3d`); see [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
 
 All scripts live in `scripts/` and write the on-disk convention described

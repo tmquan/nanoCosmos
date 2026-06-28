@@ -239,7 +239,8 @@ def compute_per_point_ted(
         ignore_background: Exclude background (label 0).
 
     Returns:
-        TED score (non-negative integer).  0 = perfect match.
+        TED score: a non-negative float (an integer-valued edit count
+        returned as ``float``).  0 = perfect match.
     """
     pred_flat, true_flat = _prepare_flat_labels(pred_labels, true_labels, ignore_background)
     if len(pred_flat) == 0:

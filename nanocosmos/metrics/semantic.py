@@ -65,9 +65,14 @@ def compute_per_point_dice(
     ignore_index: int = -100,
     eps: float = 1e-7,
 ) -> float:
-    """Mean Dice coefficient across foreground classes for a single sample."""
+    """Mean Dice coefficient across foreground classes for a single sample.
+
+    Uses the same foreground-only policy as :func:`compute_per_point_iou`
+    (``include_background=False``, ``ignore_empty=True``) so the logged Dice
+    and IoU are directly comparable.
+    """
     p_oh, t_oh = _to_onehot_pair(pred.cpu(), target.cpu(), num_classes, ignore_index)
-    metric = DiceMetric(include_background=True, reduction="mean", ignore_empty=False)
+    metric = DiceMetric(include_background=False, reduction="mean", ignore_empty=True)
     result = metric(p_oh, t_oh)
     val = result.nanmean().item()
     return val if val == val else 0.0  # handle NaN

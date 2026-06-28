@@ -25,15 +25,17 @@ class ImageLogger(pl.Callback):
     Logs visualisations for both **training** and **validation** batches
     using **automatic** mode (image-only forward).
 
-    Lifecycle (per epoch, rank-0 only)::
+    Lifecycle (per epoch)::
 
         on_{train,validation}_batch_end(batch_idx == 0)
-            -> cache first batch on CPU (self._{train,val}_batch)
+            -> cache first batch on CPU (self._{train,val}_batch)   # all ranks
 
         on_{train,validation}_epoch_end
             -> eval mode + autocast + no_grad
             -> forward(images) -> [B, HEAD_CHANNELS, ...] unified head
-            -> _log_predictions(tb, ctx, ...)   # heads.py orchestrator
+               # all ranks run the forward (FSDP/DDP collectives must fire
+               # on every rank); only rank 0 writes to TensorBoard
+            -> _log_predictions(tb, ctx, ...)   # heads.py orchestrator (rank 0)
 
     All tags live under ``{stage}/{mode}/...`` where
     ``stage`` ∈ {``train``, ``val``} and ``mode`` = ``"automatic"``.
@@ -54,9 +56,9 @@ class ImageLogger(pl.Callback):
 
     This matches the scalar hierarchy emitted by
     :class:`nanocosmos.modules.base.BaseCircuitModule`
-    (``{stage}/automatic/{head}/loss[/<component>]`` and
-    ``{stage}/automatic/{head}/metric/<name>``) so each head's images
-    and scalars collapse into the same TensorBoard group.
+    (``{stage}/automatic/loss[/{aff,sem,recon}]`` and
+    ``{stage}/automatic/sem/metric/<name>``) so the images and scalars
+    collapse into the same TensorBoard group.
 
     Args:
         every_n_epochs: log every *n* epochs (default 1).

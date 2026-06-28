@@ -22,9 +22,9 @@ Companion docs: [`WALKTHROUGH.md`](./WALKTHROUGH.md),
 **Symptom.** "How is Lightning loading my checkpoint without a
 `safe_globals` warning when I have new objects in callback state?"
 
-**Where.** `scripts/train.py::_install_runtime_patches` (line 75).
+**Where.** `scripts/train.py::_install_runtime_patches` (~line 126).
 This helper rebinds `torch.load` to a wrapper that forces
-`weights_only=False`.  It is **called from `main()` (line 538)**, not
+`weights_only=False`.  It is **called from `main()` (~line 794)**, not
 at import time, so `import scripts.train` from a notebook or test no
 longer mutates the global `torch` module silently.
 
@@ -551,7 +551,31 @@ validation instance GT / fg-mask keep the **pristine** ``label``.
 
 **Contract.** When no ``sem_label`` is present (legacy / `both`), the
 loss and metric fall back to ``labels`` — byte-identical to before. The
-`sem_label` must be forwarded by ``scripts/train.py``
-(`_build_datamodule_kwargs`) for the config knob to take effect.
+datamodule **produces** ``sem_label`` in its sft transform pipeline and
+passes it through the batch; ``scripts/train.py`` only forwards the config
+knobs ``find_boundaries`` / ``boundary_target`` (and ``ssl_min_foreground``)
+to the datamodule for the mechanism to take effect.
 
 **See also.** Entry #34 (per-volume vs global `find_boundaries`).
+
+---
+
+## #47 — Black SSL panels / empty ssl crops? Gate on image foreground.
+
+**Symptom.** The joint recipe's `ssl/true/image` TensorBoard panel is
+sometimes fully black, and the SSL reconstruction loss wastes steps on
+empty patches.
+
+**Cause.** Label-based `min_foreground` does nothing for `ssl` volumes —
+they have no labels (`LazyVolDataset` returns "pass" before any check),
+and the joint datamodule forces `min_foreground=0` for `ssl`. The empty
+crops come from zero-padding (e.g. MitoEM2 nnU-Net irregular crops padded
+to a box, empty COSEM/FLYEM regions).
+
+**Fix.** Set `data.ssl_min_foreground` (shipped value `0.8`). This is an
+**image** non-zero gate applied only to label-less volumes; crops below the
+threshold are re-sampled (best-seen kept after `max_foreground_retries`).
+Labeled `sft` volumes keep using `min_foreground`.
+
+**See also.** Entry #46 (boundary erosion) and the `boundary_target:
+semantic` sem-supervision contract above.

@@ -35,8 +35,8 @@ this also gives per-branch batch-size / weighting control).  The roles
     averages the small sub-voxels" downsample on every axis (z *and* xy), the
     anti-aliased counterpart of a single ``grid_sample`` tap, accepting any
     (fractional) factor -- then :class:`~nanocosmos.losses.AffinityFGLoss`.
-    **Plus a data-consistency term on the ``raw`` head**: the 32-ch head
-    always carries ``raw``, so on sft batches we also pool the predicted
+    **Plus a data-consistency term on the ``raw`` head**: the unified head
+    (``N_AFF + 2`` channels) always carries ``raw``, so on sft batches we also pool the predicted
     small-voxel ``raw`` down to the ORIGINAL large-voxel EM and match it
     (``recon_image`` here is that large-voxel EM).  This keeps the raw head
     trained on sft and enforces that the super-resolved reconstruction agrees
@@ -267,6 +267,13 @@ class Joint3DReconSegLoss(nn.Module):
         if cached is not None:
             sub_targets["_cached_targets"] = cached
         if sem_label is not None:
+            if sem_label.shape[-3:] != labels.shape[-3:]:
+                raise ValueError(
+                    "sem_label spatial shape "
+                    f"{tuple(sem_label.shape[-3:])} must match labels "
+                    f"{tuple(labels.shape[-3:])} (sem_label stays on the "
+                    "native label grid; the head is pooled to match)."
+                )
             sub_targets["sem_label"] = sem_label
         out = self.seg(head, sub_targets)
         # Drop the inner total (``loss``); this module rebuilds the total.
@@ -309,8 +316,11 @@ class Joint3DReconSegLoss(nn.Module):
                 carries ``labels`` at the native grid -- the pool factor is
                 read from the label shape, so no voxel-count key is needed --
                 and optionally ``recon_image`` (the original large-voxel EM)
-                for the ``raw`` data-consistency term.  ``_cached_targets``
-                (from :meth:`build_targets`) is used when present.
+                for the ``raw`` data-consistency term, and optionally
+                ``sem_label`` (boundary-eroded foreground on the label grid;
+                supervises the sem head only -- ``boundary_target: semantic``).
+                ``_cached_targets`` (from :meth:`build_targets`) is used when
+                present.
 
         Returns:
             ``ssl`` -> ``{"loss", "loss/recon"}``;
@@ -355,7 +365,7 @@ class Joint3DReconSegLoss(nn.Module):
                 for k, v in seg.items():
                     out[k] = v
                     total = total + self.weight_seg * v
-            # Data-consistency on the ``raw`` head (the 32-ch head always
+            # Data-consistency on the ``raw`` head (the unified head always
             # carries it).  Without this the raw channel is UNTRAINED on sft
             # batches.  Pool the predicted small-voxel ``raw`` down to the
             # ORIGINAL large-voxel EM and match it: the super-resolved

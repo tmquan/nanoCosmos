@@ -27,6 +27,8 @@ Public surface
 * :class:`RandTransposeXYd`             -- random Y<->X transpose.
 * :class:`RandResolutionZoomd`          -- random resolution zoom.
 * :class:`RandMissingSliced`            -- CREMI-style missing z-sections.
+* :class:`RandResolutionDegraded`       -- SSL large-voxel degradation.
+* :class:`ToFineGridd`                  -- resample a native patch to the fine grid.
 
 Elastic deformation uses MONAI's :class:`Rand3DElasticd` directly --
 it's configured by the datamodule and not re-exported here.

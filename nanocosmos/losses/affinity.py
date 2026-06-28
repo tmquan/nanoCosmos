@@ -162,8 +162,9 @@ class AffinityFGLoss(nn.Module):
             agglomerator.
         background: Label value treated as background when building the
             affinity target (its rows are zeroed).  ``None`` disables.
-        ignore_index: Label value masked out of the foreground target
-            (those voxels contribute as background in the sem target).
+        ignore_index: Label value masked out of the sem (foreground) target.
+            Those voxels are *excluded* from the sem loss via the validity
+            mask (``mask=0``); they do not contribute as background.
     """
 
     # Total head width -- set per-instance from the configured offset set
@@ -565,7 +566,10 @@ class AffinityFGLoss(nn.Module):
             f"n_pull={self.n_pull}, "
             f"weight_aff={self.weight_aff}, weight_sem={self.weight_sem}, "
             f"weight_raw={self.weight_raw}, "
+            f"pull_weight={self.pull_weight}, push_weight={self.push_weight}, "
             f"class_balance={self.class_balance}, "
+            f"class_balance_clip={self.class_balance_clip}, "
+            f"focal_alpha={self.focal_alpha}, "
             f"dice_two_sided={self.dice_two_sided})"
         )
 

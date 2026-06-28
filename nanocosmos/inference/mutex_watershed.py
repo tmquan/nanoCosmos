@@ -14,7 +14,7 @@ Algorithm (single pass, Kruskal-style with mutual-exclusion constraints):
 * Long-range offsets are **push**: the edge priority is ``1 - a``
   (low affinity -> strong "must separate"); these are *mutex* edges.
 * Process all edges in descending priority order with a union-find:
-  - an pull edge merges its two clusters **unless** they are
+  - a pull edge merges its two clusters **unless** they are
     already linked by an active mutex;
   - a push edge adds a mutex between its two clusters **unless**
     they are already merged.
@@ -23,10 +23,18 @@ Reference:
     S. Wolf, C. Pape, A. Bailoni, et al. "The Mutex Watershed: Efficient,
     Parameter-Free Image Partitioning." ECCV/CVPR 2018.
 
-No external dependency (``affogato`` / ``elf``) is required -- the core
-loop is JIT-compiled with numba over flat numpy arrays.  The mutex
-constraints are stored as per-root singly-linked lists in flat int64
-arrays (O(1) splice on union), so the whole pass stays in nopython mode.
+No external dependency (``affogato`` / ``elf``) is required.  Three
+backends are provided:
+
+* CPU exact (``mws_np``) -- the sequential Kruskal MWS above, JIT-compiled
+  with numba over flat numpy arrays.  The mutex constraints are stored as
+  per-root singly-linked lists in flat int64 arrays (O(1) splice on union),
+  so the whole pass stays in nopython mode.
+* GPU approximate (``mws_th`` default on CUDA; optional ``mws_cp`` with
+  cupy) -- a bucketed Boruvka-style relaxation; faster but an approximation
+  of the exact sequential result.
+
+``backend: auto`` selects the GPU path on CUDA and the CPU path otherwise.
 
 Cost note: the edge count is ``~n_pull * |fg| + (push
 edges)``.  For large EM crops keep the push ``strides`` coarse

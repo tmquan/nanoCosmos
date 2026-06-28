@@ -83,8 +83,8 @@ All branches **backprop jointly** into the shared backbone (no detach): the
 segmentation gradient shapes the reconstruction and vice-versa.
 
 ```
-total = w_ssl · ( w_recon · L1_recon )                              # ssl
-      + w_sft  · ( w_seg · (aff + sem) [+ w_recon · L1_dataconsist]) # sft
+total = weight_ssl · ( weight_rec · L1_recon )                                  # ssl
+      + weight_sft · ( weight_seg · (aff + sem) [+ weight_rec · L1_dataconsist]) # sft
 ```
 
 ---
@@ -98,6 +98,7 @@ total = w_ssl · ( w_recon · L1_recon )                              # ssl
 | `task` | all | `"ssl"` or `"sft"` (one per batch) |
 | `recon_image` | ssl (req), sft (opt) | clean EM recon target on its own grid; `raw` is pooled to match. ssl: clean small-voxel EM (main SR). sft: the **original large-voxel EM** → `raw` data-consistency. |
 | `labels` | sft | instance ids at the **native** grid; the head is pooled to `labels.shape[-3:]` |
+| `sem_label` | sft (opt) | boundary-eroded foreground (same native grid as `labels`) that supervises the **sem head only** — see §4.1 |
 | `_cached_targets` | sft | from `loss.build_targets(labels)` (precomputed affinity target) |
 
 - **SSL** sample (COSEM 4 nm, unlabeled FlyEM 8 nm, or MitoEM2 8–16 nm — all
@@ -107,6 +108,37 @@ total = w_ssl · ( w_recon · L1_recon )                              # ssl
   `labels` kept on the **native** grid; the loss pools the prediction to the
   label grid (factor 1 when native == small-voxel). Optionally pass the
   original native EM as `recon_image` for the raw data-consistency term.
+
+---
+
+## 4.1 Boundary-aware sem supervision (`find_boundaries` / `boundary_target`)
+
+Without help, the `sem` head's target (`labels > 0`) is almost all-foreground
+after `min_foreground` cropping — a near-degenerate "predict 1 everywhere"
+objective. Two `data` knobs fix this on the **sft** branch:
+
+- `find_boundaries` — per-sample probability of eroding membrane voxels (the
+  shipped configs use `1.0` = always).
+- `boundary_target` —
+  - `semantic` (joint default): the datamodule copies `label → sem_label` and
+    erodes the membranes **only** in `sem_label`. The sem head learns thin
+    membrane gaps; the instance `label` stays **pristine** so the affinity
+    target is unaffected.
+  - `both`: erode the shared `label` (affects sem **and** affinity).
+
+Erosion runs on the **native** label grid with the group's native resolution,
+so the anisotropy guard (xy-only when z is ≥2× coarser) applies per dataset.
+The sem loss, the val sem metric, and the `true/sem` TensorBoard panel all use
+`sem_label` when present, falling back to `labels` otherwise.
+
+## 4.2 SSL foreground gate (`ssl_min_foreground`)
+
+The label-less `ssl` branch can sample mostly-empty / zero-padded crops (e.g.
+MitoEM2 nnU-Net irregular crops padded to a box) that show up as black panels.
+`ssl_min_foreground` (shipped value `0.8`) is an **image** non-zero gate applied
+only to label-less volumes in `LazyVolDataset`: crops below the threshold are
+re-sampled (best-seen kept on exhaustion). Labeled volumes keep using the
+label-based `min_foreground`.
 
 ---
 

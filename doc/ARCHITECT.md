@@ -15,7 +15,7 @@ The wrappers live under `nanocosmos/models/`:
    scaffolding with Transfer via `nanocosmos/models/cosmos_2_5_common/`;
    for its budget take §1 and drop the ControlNet row.
 2. [`CosmosTransfer3DWrapper`](#1-cosmostransfer3dwrapper) — Cosmos-Transfer 2.5: the same data flow **plus** a ControlNet residual branch (§1).
-3. `Cosmos3Nano3DWrapper` — Cosmos 3 (Nano) 16B omni transformer + Wan2.2 VAE; trained under FSDP (`nanocosmos/models/cosmos_3_nano/`).  The shipped `snemi3d.yaml` / `default.yaml` default (`model.type: cosmos3nano3d`, variant `Nano`).
+3. `Cosmos3Nano3DWrapper` — Cosmos 3 (Nano) 16B omni transformer + Wan2.2 VAE (`nanocosmos/models/cosmos_3_nano/`).  The shipped `snemi3d.yaml` / `default.yaml` default (`model.type: cosmos3nano3d`, variant `Nano`).  Shipped joint configs use DDP + gradient checkpointing; FSDP is supported (opt-in, intended for the 16B joint recipe).
 4. [`Vista3DWrapper`](#2-vista3dwrapper) — EM → SegResNetDS2 → head (fast local iteration).
 
 Channel counts mirror `configs/default.yaml`. Parameter counts are

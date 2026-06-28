@@ -5,9 +5,9 @@ Four end-to-end backbone wrappers live here:
 
 * :class:`CosmosPredict3DWrapper` -- Cosmos-Predict 2.5 (base DiT +
   VAE, no ControlNet) with the affinity + sem + raw head
-  (``HEAD_CHANNELS``).  The default backbone.  Shares all scaffolding
-  with the Cosmos 2.5 family via
-  :mod:`nanocosmos.models.cosmos_2_5_common`.
+  (``HEAD_CHANNELS``).  Backbone of the 2B joint recipe
+  (``nanocosmos-2B.yaml``).  Shares all scaffolding with the Cosmos 2.5
+  family via :mod:`nanocosmos.models.cosmos_2_5_common`.
 * :class:`CosmosTransfer3DWrapper` -- Cosmos-Transfer 2.5 (base DiT +
   ControlNet residual branch + VAE) with the same head.
 * :class:`Cosmos3Nano3DWrapper` -- Cosmos 3 (Nano) 16B omni
