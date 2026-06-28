@@ -192,6 +192,19 @@ image-only `cremi3d_sample_A+_volume`, …).
   *eLife* 9:e57443 (FIB-SEM); MaleCNS — Berg, S. et al. (2025), *bioRxiv*
   2025.10.09.680999 (eFIB-SEM, 8 nm isotropic).
 
+- **Joint-recipe SSL crop set (image-only).** Each 8 nm source —
+  FIB-25 surround, Hemibrain, MaleCNS — contributes **4 train + 1 val**
+  `1024³` crops (12 train + 3 val total), listed in
+  `configs/nanocosmos-{16B,2B}.yaml` (`data.branches.ssl` / `val_volumes`).
+  All are verified non-empty. **Caveat:** Hemibrain / MaleCNS tissue does
+  **not** fill its bounding box, so corner / off-tissue origins (e.g.
+  `x4000_y4000_z4000`) download as all-zero tiles (CloudVolume
+  `fill_missing=True`). Pick origins inside the imaged region (Hemibrain
+  ~`x12–24k`; MaleCNS ~`x16–28k, y20–30k, z20–36k`) and confirm a non-zero
+  central crop before adding it. The `data.ssl_min_foreground` gate rejects
+  mostly-empty crops at train time, but empty *volumes* should still be
+  removed from the config.
+
 Recommended: fetch the native cube **once**, then generate all variants
 locally with `--from-local` (no re-download).
 

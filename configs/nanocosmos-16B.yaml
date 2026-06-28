@@ -133,19 +133,21 @@ data:
         root: data/COSEM3D
         native_resolution: [3.44, 4, 4]
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
-      - vol: flyem3d_8nm_ssl_x1024_y1024_z1024_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
+      # 4 train crops per source (1 more held out per source in val_volumes);
+      # all verified non-empty (empty corner tiles dropped).
       - vol: flyem3d_8nm_ssl_x1024_y4096_z4096_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       - vol: flyem3d_8nm_ssl_x4096_y1024_z4096_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      # --- Hemibrain 8 nm neuropil, image-only ---
-      - vol: flyem3d_hemibrain_8nm_ssl_x4000_y4000_z4000_volume
+      - vol: flyem3d_8nm_ssl_x2700_y2700_z3500_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+      - vol: flyem3d_8nm_ssl_x3000_y3000_z5000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      # --- Hemibrain 8 nm neuropil, image-only ---
       - vol: flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
@@ -155,17 +157,20 @@ data:
       - vol: flyem3d_hemibrain_8nm_ssl_x20000_y20000_z20000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+      - vol: flyem3d_hemibrain_8nm_ssl_x24000_y24000_z24000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
       # --- MaleCNS 8 nm neuropil, image-only ---
-      - vol: flyem3d_malecns_8nm_ssl_x4000_y4000_z4000_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_ssl_x12000_y12000_z12000_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
       - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       - vol: flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       # --- CREMI 40x4x4 padded test volumes, IMAGE-ONLY (no public labels) ---
@@ -376,16 +381,16 @@ data:
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.44, 4, 4]
-  # FLYEM3D: 1 ssl volume per source (fib25-surround / hemibrain / malecns).
+  # FLYEM3D: 1 ssl holdout per source (fib25-surround / hemibrain / malecns), non-empty.
   - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
-  - vol: flyem3d_hemibrain_8nm_ssl_x28000_y24000_z30000_volume
+  - vol: flyem3d_hemibrain_8nm_ssl_x16000_y16000_z16000_volume
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
-  - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
+  - vol: flyem3d_malecns_8nm_ssl_x16000_y20000_z24000_volume
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
