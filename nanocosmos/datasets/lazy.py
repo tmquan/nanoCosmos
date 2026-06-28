@@ -221,10 +221,11 @@ class LazyVolDataset(Dataset):
             and re-sampled (up to ``max_foreground_retries`` attempts).
             Only applies to volumes that have a label (segmentation).
         image_min_foreground: Minimum fraction of non-zero voxels in the
-            *image* patch, used to gate **label-less** volumes (e.g. the
-            SSL branch).  When > 0, mostly-empty / zero-padded crops are
-            rejected and re-sampled.  No effect on labeled volumes (those
-            use ``min_foreground``).
+            *image* patch.  For **label-less** volumes (e.g. SSL) it is the
+            sole gate.  For **labeled** volumes it is an *additional* gate
+            applied on top of ``min_foreground`` (the crop must pass both),
+            so zero-padded EM is rejected alongside background-heavy labels.
+            When > 0, failing crops are re-sampled.
         max_foreground_retries: Maximum re-sampling attempts before
             falling back to the best-seen crop (highest foreground fraction
             across the attempts).
@@ -464,22 +465,37 @@ class LazyVolDataset(Dataset):
         caller keep the best-seen crop when all retries are exhausted.
 
         * **Labeled volumes** are gated on the *label* non-zero fraction
-          (``min_foreground``); ``image`` is returned as ``None``.
+          (``min_foreground``) AND, when ``image_min_foreground`` > 0, the
+          *image* non-zero fraction -- a crop must pass BOTH (rejects
+          background-heavy label crops and zero-padded EM).
         * **Label-less volumes** (e.g. SSL) are gated on the *image*
           non-zero fraction (``image_min_foreground``) so mostly-empty /
           zero-padded crops are rejected; ``label`` is returned as ``None``.
 
-        When no gate is active ``frac`` is ``1.0`` (the crop trivially
-        passes) and no extra I/O is performed.
+        ``frac`` is the limiting (minimum) measured fraction across the
+        active gates, so the best-seen fallback keeps the densest crop.
+        When no gate is active ``frac`` is ``1.0`` and no extra I/O is done.
         """
         if handle.label_path is not None:
-            if self.min_foreground <= 0:
+            if self.min_foreground <= 0 and self.image_min_foreground <= 0:
                 return True, None, None, 1.0
-            label = _read_patch(
-                handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
-            )
-            fg_frac = float(np.count_nonzero(label)) / label.size
-            return fg_frac >= self.min_foreground, label, None, fg_frac
+            label = None
+            image = None
+            label_frac = 1.0
+            image_frac = 1.0
+            if self.min_foreground > 0:
+                label = _read_patch(
+                    handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
+                )
+                label_frac = float(np.count_nonzero(label)) / label.size
+            if self.image_min_foreground > 0:
+                image = _read_patch(
+                    handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
+                )
+                image_frac = float(np.count_nonzero(image)) / image.size
+            ok = (label_frac >= self.min_foreground
+                  and image_frac >= self.image_min_foreground)
+            return ok, label, image, min(label_frac, image_frac)
 
         # Label-less volume: optional image-nonzero gate (rejects empty crops).
         if self.image_min_foreground <= 0:
@@ -503,8 +519,9 @@ class LazyVolDataset(Dataset):
             full_slices = crop_slices
 
         # Re-sample crops until the patch passes the foreground gate
-        # (label non-zero fraction for labeled volumes; image non-zero
-        # fraction for label-less / SSL volumes).  Carry the successful
+        # (labeled volumes: label fg, plus image non-zero when
+        # ``image_min_foreground`` > 0 -- both required; label-less / SSL
+        # volumes: image non-zero fraction).  Carry the successful
         # read forward so we don't decode the same chunk again below.  If
         # every retry fails, fall back to the *best-seen* crop (highest
         # foreground) rather than whatever was drawn last, and restore its

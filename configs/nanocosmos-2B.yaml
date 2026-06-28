@@ -61,10 +61,13 @@ data:
   prefetch_factor: 8
   find_boundaries: 1.0
   boundary_target: semantic
+  # sft crop gate: require BOTH the labeled-foreground fraction AND the non-zero
+  # EM fraction >= this value, so background-heavy / unlabeled crops and
+  # zero-padded EM are rejected (best-seen crop kept after max retries).
+  sft_min_foreground: 0.8
   # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
-  # SSL branch never trains/visualizes black patches.  Label branches use the
-  # label-based min_foreground instead; this only affects label-less ssl volumes.
-  ssl_min_foreground: 0.4
+  # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
+  ssl_min_foreground: 0.8
 
   # ---- realistic large-voxel degradation for the SSL branch ----
   # (nanocosmos.transforms.RandResolutionDegraded) -- the free

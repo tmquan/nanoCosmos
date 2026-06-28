@@ -137,8 +137,17 @@ The label-less `ssl` branch can sample mostly-empty / zero-padded crops (e.g.
 MitoEM2 nnU-Net irregular crops padded to a box) that show up as black panels.
 `ssl_min_foreground` (shipped value `0.8`) is an **image** non-zero gate applied
 only to label-less volumes in `LazyVolDataset`: crops below the threshold are
-re-sampled (best-seen kept on exhaustion). Labeled volumes keep using the
-label-based `min_foreground`.
+re-sampled (best-seen kept on exhaustion).
+
+For the **sft** branch, `sft_min_foreground` (shipped `0.8`) is a **dual** gate:
+a crop must have BOTH its label-foreground fraction AND its image non-zero
+fraction `>=` the threshold. The label half rejects background-heavy / unlabeled
+crops (e.g. sparse MICrONS regions that render as half-black `true/label` /
+`true/sem` panels); the image half rejects zero-padded EM. As with ssl, the
+best-seen crop is kept once `max_foreground_retries` is exhausted, so genuinely
+sparse volumes degrade gracefully rather than looping. (The older label-only
+`min_foreground` still works and is used as the fallback when
+`sft_min_foreground` is unset.)
 
 ---
 

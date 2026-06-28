@@ -23,7 +23,7 @@ Config schema (``cfg.data``)::
     patch_size: [200, 256, 256]      # fine grid (z, y, x)
     pixel_size: [4, 4, 4]            # fine voxel size nm (cubic)
     degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (ssl)
-    min_foreground: 0.0              # label non-zero gate (sft volumes)
+    sft_min_foreground: 0.8          # sft gate: BOTH label fg AND image non-zero
     ssl_min_foreground: 0.8          # image non-zero gate (ssl volumes)
     find_boundaries: 1.0             # per-sample boundary-erosion probability
     boundary_target: semantic        # "semantic" (sem_label only) | "both"
@@ -136,6 +136,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         val_num_samples: int = 16,
         val_batch_size: int = 1,
         min_foreground: float = 0.0,
+        sft_min_foreground: float = 0.0,
         ssl_min_foreground: float = 0.0,
         find_boundaries: float = 0.0,
         boundary_target: str = "semantic",
@@ -157,6 +158,10 @@ class Joint3DDataModule(pl.LightningDataModule):
         self.val_num_samples = int(val_num_samples)
         self.val_batch_size = int(val_batch_size)
         self.min_foreground = float(min_foreground)
+        # sft crop gate: require BOTH label foreground >= t AND image non-zero >= t
+        # (rejects background-heavy / unlabeled crops and zero-padded EM).  Falls
+        # back to the legacy label-only ``min_foreground`` when unset.
+        self.sft_min_foreground = float(sft_min_foreground) or float(min_foreground)
         # Image-nonzero gate for the label-less ssl branch: rejects mostly-empty /
         # zero-padded crops (e.g. MitoEM2 nnU-Net irregular crops padded to a box,
         # empty COSEM/FLYEM regions) that would otherwise show as black panels.
@@ -246,8 +251,13 @@ class Joint3DDataModule(pl.LightningDataModule):
             patch_size=native_patch,
             transform=self._group_transform(task, native_res),
             num_samples=num_samples,
-            min_foreground=(self.min_foreground if task == "sft" else 0.0),
-            image_min_foreground=(self.ssl_min_foreground if task == "ssl" else 0.0),
+            # sft: gate on BOTH label and image at sft_min_foreground.
+            # ssl: image-only gate (label-less) at ssl_min_foreground.
+            min_foreground=(self.sft_min_foreground if task == "sft" else 0.0),
+            image_min_foreground=(
+                self.sft_min_foreground if task == "sft"
+                else (self.ssl_min_foreground if task == "ssl" else 0.0)
+            ),
             deterministic=deterministic,
         )
 
