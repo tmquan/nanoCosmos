@@ -38,11 +38,21 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytorch_lightning as pl
 import torch
-from monai.transforms import Compose, EnsureChannelFirstd, EnsureTyped
+from monai.transforms import (
+    Compose,
+    CopyItemsd,
+    EnsureChannelFirstd,
+    EnsureTyped,
+)
 from torch.utils.data import ConcatDataset, DataLoader, Sampler
 
 from nanocosmos.datasets.lazy import LazyVolDataset
-from nanocosmos.transforms import Labeld, RandResolutionDegraded, ToFineGridd
+from nanocosmos.transforms import (
+    FindBoundariesd,
+    Labeld,
+    RandResolutionDegraded,
+    ToFineGridd,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +132,8 @@ class Joint3DDataModule(pl.LightningDataModule):
         val_num_samples: int = 16,
         val_batch_size: int = 1,
         min_foreground: float = 0.0,
+        find_boundaries: float = 0.0,
+        boundary_target: str = "semantic",
         seed: int = 0,
     ) -> None:
         super().__init__()
@@ -140,6 +152,18 @@ class Joint3DDataModule(pl.LightningDataModule):
         self.val_num_samples = int(val_num_samples)
         self.val_batch_size = int(val_batch_size)
         self.min_foreground = float(min_foreground)
+        # sem-head boundary supervision (sft only).  ``find_boundaries`` = per-
+        # sample probability of eroding membrane voxels so the sem head targets
+        # thin membranes instead of (near-degenerate) full foreground.
+        # ``boundary_target``: "semantic" -> a separate eroded ``sem_label`` for
+        # the sem head only (instance ``label`` stays pristine for affinity);
+        # "both" -> erode the shared ``label`` (sem AND affinity targets).
+        self.find_boundaries = float(find_boundaries)
+        self.boundary_target = str(boundary_target)
+        if self.boundary_target not in ("both", "semantic"):
+            raise ValueError(
+                f"boundary_target must be 'both' or 'semantic'; got {boundary_target!r}."
+            )
         self.seed = int(seed)
 
         self._train_groups: List[Tuple[int, int, int]] = []
@@ -164,15 +188,38 @@ class Joint3DDataModule(pl.LightningDataModule):
                 ),
                 EnsureTyped(keys=["image", "recon_image"]),
             ])
-        return Compose([
+        # sft pipeline.  Optional boundary erosion makes the sem head target thin
+        # membranes instead of near-degenerate full foreground.  Erosion runs on
+        # the NATIVE label grid using this group's native resolution, so
+        # FindBoundariesd's anisotropy guard (xy-only when z is >2x coarser)
+        # applies per dataset.
+        sft_tf: List[Any] = [
             EnsureChannelFirstd(keys=["image", "label"], channel_dim="no_channel"),
             Labeld(keys=["label"], spatial_dims=3),
+        ]
+        out_keys = ["image", "label", "recon_image"]
+        if self.find_boundaries > 0:
+            if self.boundary_target == "both":
+                sft_tf.append(FindBoundariesd(
+                    keys=["label"], prob=self.find_boundaries, pixel_size=native_res,
+                ))
+            else:  # "semantic": eroded sem_label only; instance label stays pristine
+                sft_tf += [
+                    CopyItemsd(keys=["label"], times=1, names=["sem_label"]),
+                    FindBoundariesd(
+                        keys=["sem_label"], prob=self.find_boundaries,
+                        pixel_size=native_res,
+                    ),
+                ]
+                out_keys.append("sem_label")
+        sft_tf += [
             ToFineGridd(
                 image_size=self.fine_patch, recon_size=recon_size,
                 set_recon_from_image=True, task="sft",
             ),
-            EnsureTyped(keys=["image", "label", "recon_image"]),
-        ])
+            EnsureTyped(keys=out_keys),
+        ]
+        return Compose(sft_tf)
 
     def _build_group(
         self,

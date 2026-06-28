@@ -76,8 +76,8 @@ data:
     missing_prob: 0.3           # missing / duplicated sections
     max_missing: 2
     missing_fill: zero
-    noise_prob: 0.5             # section-dependent gaussian noise
-    noise_std: 0.05
+    noise_prob: 0.3             # section-dependent gaussian noise (gentled)
+    noise_std: 0.01
     contrast_prob: 0.5          # section-dependent gamma jitter
     contrast_gamma: [0.8, 1.25]
     up_mode: trilinear
@@ -558,7 +558,7 @@ training:
     gate_with_sem: true
     sem_gate_threshold: 0.5
     grow_boundaries: true
-    grow_max_distance: 2.0
+    grow_max_distance: 4.0
   max_epochs: 101
   accelerator: auto
   devices: auto

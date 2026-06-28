@@ -271,6 +271,8 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             val_num_samples=int(d.get("val_num_samples", 16)),
             val_batch_size=int(d.get("val_batch_size", 1)),
             min_foreground=float(d.get("min_foreground", 0.0)),
+            find_boundaries=float(d.get("find_boundaries", 0.0)),
+            boundary_target=str(d.get("boundary_target", "semantic")),
             seed=int(cfg.get("seed", 0)),
         )
 

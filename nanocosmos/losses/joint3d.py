@@ -255,11 +255,19 @@ class Joint3DReconSegLoss(nn.Module):
         head: torch.Tensor,
         labels: torch.Tensor,
         cached: Optional[Dict[str, torch.Tensor]],
+        sem_label: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Run the inner affinity+sem loss on ``head`` at the label grid."""
+        """Run the inner affinity+sem loss on ``head`` at the label grid.
+
+        ``sem_label`` (the boundary-eroded foreground from the datamodule's
+        ``boundary_target: semantic`` mode) supervises the sem head only; the
+        affinity target always uses the pristine instance ``labels``.
+        """
         sub_targets: Dict[str, Any] = {"labels": labels}
         if cached is not None:
             sub_targets["_cached_targets"] = cached
+        if sem_label is not None:
+            sub_targets["sem_label"] = sem_label
         out = self.seg(head, sub_targets)
         # Drop the inner total (``loss``); this module rebuilds the total.
         return {k: v for k, v in out.items() if k != "loss"}
@@ -343,7 +351,7 @@ class Joint3DReconSegLoss(nn.Module):
             labels = targets["labels"]
             if self.weight_seg > 0:
                 seg_head = self._pool_to(head, labels.shape[-3:])
-                seg = self._seg_terms(seg_head, labels, cached)
+                seg = self._seg_terms(seg_head, labels, cached, targets.get("sem_label"))
                 for k, v in seg.items():
                     out[k] = v
                     total = total + self.weight_seg * v

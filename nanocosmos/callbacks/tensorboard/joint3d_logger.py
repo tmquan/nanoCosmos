@@ -147,8 +147,11 @@ class Joint3DImageLogger(ImageLogger):
         tb.add_images(ctx.tag("pred/recon"),
                       _resize_2d(_gray3(_to_2d(raw)), target_hw),
                       global_step=epoch)
+        # The clean recon target only differs from true/image on the ssl branch
+        # (where the input was degraded).  On sft the recon target is a clone of
+        # the input, so logging it would just duplicate true/image -> skip it.
         recon_t = batch.get("recon_image")
-        if recon_t is not None:
+        if recon_t is not None and task == "ssl":
             recon_t = recon_t.to(pl_module.device)
             if recon_t.dim() == self.spatial_dims + 1:
                 recon_t = rearrange(recon_t, "b ... -> b 1 ...")
@@ -183,6 +186,24 @@ class Joint3DImageLogger(ImageLogger):
             if target_hw else _label_to_rgb(labels_2d.long()),
             global_step=epoch,
         )
+
+        # Ground-truth foreground the sem head is trained on.  Uses the eroded
+        # ``sem_label`` (boundary_target: semantic) when present so the panel
+        # matches the actual target -- thin membrane gaps; else the instance
+        # foreground.
+        sem_src = batch.get("sem_label")
+        if sem_src is not None:
+            sem_src = sem_src.to(pl_module.device)
+            if sem_src.dim() == self.spatial_dims + 2:
+                sem_src = rearrange(sem_src, "b 1 ... -> b ...")
+            sem_src = sem_src[:n]
+        else:
+            sem_src = labels
+        gt_sem = rearrange((sem_src > 0).float(), "b ... -> b 1 ...")
+        gt_sem_panel = _gray3(_to_2d(gt_sem))
+        if target_hw:
+            gt_sem_panel = _resize_2d(gt_sem_panel, target_hw)
+        tb.add_images(ctx.tag("true/sem"), gt_sem_panel, global_step=epoch)
 
         # Foreground (sem) prediction.
         sem = pooled[:, crit.sem_slice].sigmoid()
