@@ -508,6 +508,15 @@ model:
   # (per-row) dynamic scaling is the most accuracy-robust training recipe.
   fp8: true
   fp8_recipe: rowwise
+  # Residual Wan VAE decode temporal chunk size (latent frames per decoder pass
+  # after the mandatory single-frame first chunk).  The old per-frame decode
+  # (chunk=1) ran the conv3d with temporal dim 1 -> poor GPU utilisation + one
+  # kernel-launch storm per frame (the real step bottleneck, not the DiT).
+  # Decoding in chunks runs the conv3d over a real temporal axis (verified
+  # bit-identical to per-frame) -> far fewer launches and much better
+  # utilisation.  Larger = faster but more activation memory per checkpointed
+  # chunk; raise toward your spare VRAM, lower if it OOMs.
+  decode_chunk: 8
   vae_input_pm1: true
 
 optimizer:

@@ -48,26 +48,26 @@ from nanocosmos.models.cosmos_3_common.wrapper_base import _BaseCosmos25Wrapper
 logger = logging.getLogger(__name__)
 
 
-def _checkpointed_decode_frame(
+def _checkpointed_decode_chunk(
     forward_fn: Callable[..., torch.Tensor],
-    frame: torch.Tensor,
+    chunk_x: torch.Tensor,
     entry_cache: List[Any],
     first_chunk: bool,
 ) -> Tuple[torch.Tensor, List[Any]]:
-    """Run one residual-Wan decode frame under activation checkpointing.
+    """Run one residual-Wan decode chunk (>=1 latent frames) under checkpointing.
 
     The Wan decoder threads a stateful causal-conv cache (a mix of tensors and
     ``None`` / ``"Rep"`` sentinels) plus a positional ``feat_idx`` counter
-    through every conv.  Activation checkpointing re-runs the frame in backward,
+    through every conv.  Activation checkpointing re-runs the chunk in backward,
     so that state must be reproduced *exactly* or the recompute desyncs (wrong
     ``feat_idx`` -> ``IndexError``; wrong sentinel -> temporal-size mismatch).
 
     We therefore pass only the cache **tensors** through ``checkpoint`` -- so
-    gradients flow across frames AND the tensors are saved for a bit-exact
+    gradients flow across chunks AND the tensors are saved for a bit-exact
     recompute -- and carry the non-tensor sentinel *structure* via a plain
     closure, re-merging the two inside the checkpointed function.  ``feat_idx``
     is reset to ``[0]`` inside the function so recompute starts from the same
-    counter.  Returns ``(frame_output, updated_cache)``.
+    counter.  Returns ``(chunk_output, updated_cache)``.
     """
     struct: List[Any] = ["__T__" if torch.is_tensor(c) else c for c in entry_cache]
     tensor_vals = [c for c in entry_cache if torch.is_tensor(c)]
@@ -90,7 +90,7 @@ def _checkpointed_decode_frame(
         return (out, *[c for c in cache if torch.is_tensor(c)])
 
     results = torch.utils.checkpoint.checkpoint(
-        run, frame, *tensor_vals, use_reentrant=False,
+        run, chunk_x, *tensor_vals, use_reentrant=False,
     )
     out = results[0]
     new_tensors = list(results[1:])
@@ -778,29 +778,47 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
                     feat_idx=feat_idx,
                     first_chunk=first_chunk,
                 )
-            # Activation-checkpoint each frame in training: the un-checkpointed
-            # loop retains every frame's full-resolution decoder activations for
-            # backward (the dominant memory cost of this recipe).  Gated on
-            # autograd being enabled (``torch.utils.checkpoint`` cannot wrap the
-            # ``inference_mode`` tensors Lightning uses for eval) and on
-            # gradient checkpointing being active.
+            # Decode in temporal CHUNKS, not one frame at a time.  The residual
+            # Wan VAE's causal temporal upsampling requires only the FIRST chunk
+            # to be a single latent frame (the causal boundary -- it is not
+            # temporally upsampled); every subsequent frame can be decoded in
+            # arbitrarily large chunks with bit-identical output (verified).
+            # Running the conv3d over a real temporal dim (``chunk`` frames)
+            # instead of ``t=1`` massively improves GPU utilisation and cuts
+            # kernel launches / Python iterations ~``chunk``x -- the per-frame
+            # loop was the decode bottleneck.
+            #
+            # Each chunk is activation-checkpointed (the un-checkpointed decode
+            # retains every chunk's full-res activations -> OOM), so peak memory
+            # ~ ONE chunk's decode activations.  ``model.decode_chunk`` thus
+            # trades speed for memory: raise it to fill spare VRAM, lower it if
+            # it OOMs.  Checkpointing is gated on autograd being enabled
+            # (``torch.utils.checkpoint`` cannot wrap eval ``inference_mode``
+            # tensors) and on ``decode`` being a selected checkpoint target.
             use_ckpt = (
                 getattr(self, "_ckpt_decode", False)
                 and torch.is_grad_enabled()
             )
+            total_frames = x.shape[2]
+            chunk = max(1, int(getattr(self, "_decode_chunk", 16)))
             feat_map: List[Any] = [None] * cache_len
             decoded: Optional[torch.Tensor] = None
-            for i in range(x.shape[2]):
-                frame = x[:, :, i : i + 1, :, :]
-                first = i == 0
+            i = 0
+            first = True
+            while i < total_frames:
+                # First chunk MUST be a single frame (causal boundary); the
+                # rest go ``chunk`` frames at a time.
+                step = 1 if first else chunk
+                j = min(i + step, total_frames)
+                sl = x[:, :, i:j, :, :]
                 if use_ckpt:
-                    out_i, feat_map = _checkpointed_decode_frame(
-                        original_forward, frame, feat_map, first,
+                    out_i, feat_map = _checkpointed_decode_chunk(
+                        original_forward, sl, feat_map, first,
                     )
                 else:
                     conv_idx = [0]
                     out_i = original_forward(
-                        frame,
+                        sl,
                         feat_cache=feat_map,
                         feat_idx=conv_idx,
                         first_chunk=first,
@@ -809,6 +827,8 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
                     out_i if decoded is None
                     else torch.cat([decoded, out_i], dim=2)
                 )
+                i = j
+                first = False
             return decoded
 
         decoder.forward = _cached_chunked_forward

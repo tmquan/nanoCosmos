@@ -124,6 +124,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         highres_skip: bool = False,
         highres_skip_channels: int = 8,
         vae_input_pm1: bool = True,
+        decode_chunk: int = 16,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -159,6 +160,11 @@ class _BaseCosmos25Wrapper(nn.Module):
         # [-1, 1] inputs.  When True, scale the VAE-encode input [0,1]->[-1,1]
         # so it matches the VAE's pretrained distribution.
         self._vae_input_pm1 = bool(vae_input_pm1)
+        # Temporal chunk size for the residual Wan VAE decode (frames per
+        # decoder pass after the mandatory single-frame first chunk).  Larger =
+        # faster (better conv3d utilisation, fewer launches) but more activation
+        # memory per checkpointed chunk.  See ``_cached_chunked_forward``.
+        self._decode_chunk = max(1, int(decode_chunk))
 
         self._dtype = {
             "bf16": torch.bfloat16,

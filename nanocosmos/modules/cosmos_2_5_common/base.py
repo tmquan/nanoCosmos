@@ -120,6 +120,7 @@ class BaseCosmosModule(BaseCircuitModule):
             cache_dir=model_config.get("cache_dir"),
             hf_token=model_config.get("hf_token"),
             dropout=model_config.get("dropout", 0.0),
+            decode_chunk=model_config.get("decode_chunk", 16),
             **self._extra_model_kwargs(model_config),
         )
         # Optional FP8 (Blackwell+) on the DiT's matmul-heavy Linear layers.
