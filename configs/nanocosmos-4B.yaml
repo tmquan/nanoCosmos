@@ -501,7 +501,7 @@ model:
   # ONLY the mandatory per-frame VAE-`decode` checkpointing (what keeps us off
   # OOM at the full patch) and run the DiT + head WITHOUT recompute for speed.
   # Set to `true` to checkpoint everything (max memory saving, slower).
-  gradient_checkpointing: [decode]
+  gradient_checkpointing: [decode, dit]
   # FP8 (Blackwell+) on the DiT's Linear layers via torchao float8 module-swap
   # -- faster matmuls + lower DiT memory (so the DiT can run un-checkpointed
   # above).  Decoupled from Lightning precision; conv VAE stays BF16.  Rowwise
