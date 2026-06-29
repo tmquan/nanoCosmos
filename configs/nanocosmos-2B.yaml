@@ -46,12 +46,12 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 200 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # 400 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos-Predict 2.5 Wan VAE compresses 4x in z, 8x in
-  # xy, so the DiT token grid is (50, 32, 32) = 51,200 tokens (~4x the 16B's 16x-xy
+  # xy, so the DiT token grid is (50, 32, 32) = 51,400 tokens (~4x the 16B's 16x-xy
   # grid).  The 2B backbone is ~8x smaller in params; drop the patch
   # (e.g. 160x256x256) if it OOMs.
-  patch_size: [200, 256, 256]
+  patch_size: [400, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
