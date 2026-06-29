@@ -27,15 +27,18 @@ logger = logging.getLogger(__name__)
 #
 # 1. Numerically delicate / small: embeddings, norms, latent in/out
 #    projections, timestep MLPs, task / vocab heads.
-# 2. Joint-attention CONDITIONING stream (MMDiT ``add_*`` / ``to_add_out`` /
-#    ``context_*``): this model drives only the generator (video/latent) tower
-#    and feeds NULL conditioning, so the conditioning stream carries ~1 token.
-#    FP8 ``_scaled_mm`` requires every GEMM dim (including the dynamic token
-#    dim) to be divisible by 16, so a 1-token stream fails
-#    ("trailing dimension ... divisible by 16 but got ... (Nx1)").  These
-#    projections are tiny anyway -- FP8 buys nothing there -- so keep them BF16.
-#    The big token-parallel ``self_attn.to_{q,k,v,out}`` + MLP linears (N =
-#    batch * latent_tokens, 16-aligned) stay in FP8.
+# 2. The Cosmos3 MoT "understanding" (reasoner/text) stream.  Per
+#    ``diffusers/models/transformers/transformer_cosmos3.py``, the joint
+#    attention projects the *understanding* sequence with ``to_q/to_k/to_v/
+#    to_out`` and the *generation* (video/latent) sequence with
+#    ``add_q_proj/add_k_proj/add_v_proj/to_add_out``.  We drive only the
+#    generator and feed NULL conditioning, so the understanding stream carries
+#    ~1 token.  FP8 ``_scaled_mm`` requires every GEMM dim (incl. the dynamic
+#    token dim) to be divisible by 16, so a 1-token stream fails
+#    ("trailing dimension ... divisible by 16 but got ... (Nx1)").  So keep the
+#    understanding-stream attention (``to_*``) AND its MLP (``.mlp.``) in BF16;
+#    the big token-parallel GENERATION linears -- ``add_*`` / ``to_add_out`` and
+#    ``mlp_moe_gen.*`` (N = total video latent tokens, 16-aligned) -- get FP8.
 _FP8_EXCLUDE_SUBSTRINGS = (
     "embed",        # x_embedder / t_embedder / pos_embed / patch_embed ...
     "proj_in",
@@ -46,12 +49,13 @@ _FP8_EXCLUDE_SUBSTRINGS = (
     "final",
     "lm_head",
     "time",         # timestep / time_embedder MLPs
-    # MMDiT conditioning-stream projections (small / 1-token -> not 16-aligned).
-    "add_q",
-    "add_k",
-    "add_v",
-    "add_out",
-    "to_add_out",
+    # Understanding-stream attention projections (small / ~1-token).  NOTE:
+    # "to_out" does NOT match the generation "to_add_out" (no "to_out"
+    # substring there), so the gen output projection still gets FP8.
+    "to_q",
+    "to_k",
+    "to_v",
+    "to_out",
     "context",
 )
 
