@@ -96,7 +96,7 @@ data:
   branches:
     ssl:
       task: ssl
-      batch_size: 2
+      batch_size: 4
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
       # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
@@ -299,7 +299,7 @@ data:
         native_resolution: [30, 8, 8]
     sft:
       task: sft
-      batch_size: 2
+      batch_size: 4
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
       # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
@@ -367,7 +367,7 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
 
-  val_batch_size: 2
+  val_batch_size: 4
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
   # SNEMI3D AC4 (labeled holdout).
@@ -477,6 +477,7 @@ model:
   # is incompatible with torch.compile, so compile below is off).
   gradient_checkpointing: false
   vae_input_pm1: true
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
 
 optimizer:
   lr: 0.0002
@@ -596,8 +597,8 @@ training:
   benchmark: true
   # Off: incompatible with gradient_checkpointing (dynamo can't trace the
   # torch.utils.checkpoint HOP), and reduce-overhead cudagraphs fragment memory.
-  compile: true
-  compile_fullgraph: true
+  compile: false 
+  compile_fullgraph: false 
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null

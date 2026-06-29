@@ -129,11 +129,18 @@ class _DecoderAdapter3D(nn.Module):
         highres_skip: bool = False,
         skip_channels: int = 8,
         image_channels: int = 1,
+        symmetrize_z: bool = False,
     ) -> None:
         super().__init__()
         self._has_pretrained = vae_decoder is not None
         self.head_channels = int(head_channels)
         self.highres_skip = bool(highres_skip)
+        # Make the frozen, *causal* Wan decoder body non-causal along z by
+        # averaging the forward decode with a z-flipped decode (mirrors the
+        # encoder-side ``vae_symmetrize_z``).  Only the pretrained Wan body is
+        # causal; the random-init ``_ProgressiveUpsampler3D`` fallback is not,
+        # so this is a no-op there.  See :meth:`_decode_body`.
+        self._symmetrize_z = bool(symmetrize_z)
 
         # Will be populated by ``_replace_conv_out`` when a pretrained
         # decoder is provided; stays ``None`` for the random-init
@@ -277,6 +284,15 @@ class _DecoderAdapter3D(nn.Module):
         # docstring).  Consumers sigmoid the aff / sem channels themselves.
         return self.head(decoded)
 
+    def _run_body(self, latent: torch.Tensor) -> torch.Tensor:
+        """One pretrained ``decoder_body`` pass, unwrapping tuple/sample outputs."""
+        decoded = self.decoder_body(latent)
+        if isinstance(decoded, (tuple, list)):
+            decoded = decoded[0]
+        if hasattr(decoded, "sample"):
+            decoded = decoded.sample
+        return decoded
+
     def _decode_body(
         self, features: torch.Tensor, target_size: tuple,
     ) -> torch.Tensor:
@@ -287,15 +303,22 @@ class _DecoderAdapter3D(nn.Module):
         unified head consumes.  Shared between :meth:`forward` and
         :meth:`wan_reconstruct` so both paths see identical body
         activations on the same call.
+
+        When ``symmetrize_z`` is set, the *frozen* Wan body is run twice --
+        forward and z-flipped -- and averaged, so the causal temporal decode is
+        symmetrised along the EM depth axis (the learned ``to_latent`` / head
+        run once each and are untouched).  Costs a second decode.
         """
         if self._has_pretrained:
             latent = self.to_latent(features)
             body_dtype = next(self.decoder_body.parameters()).dtype
-            decoded = self.decoder_body(latent.to(body_dtype))
-            if isinstance(decoded, (tuple, list)):
-                decoded = decoded[0]
-            if hasattr(decoded, "sample"):
-                decoded = decoded.sample
+            lat = latent.to(body_dtype)
+            if self._symmetrize_z:
+                fwd = self._run_body(lat)
+                rev = torch.flip(self._run_body(torch.flip(lat, dims=(-3,))), dims=(-3,))
+                decoded = 0.5 * (fwd + rev)
+            else:
+                decoded = self._run_body(lat)
             decoded = decoded.to(features.dtype)
         else:
             decoded = self.decoder_body(features)

@@ -579,3 +579,40 @@ Labeled `sft` volumes keep using `min_foreground`.
 
 **See also.** Entry #46 (boundary erosion) and the `boundary_target:
 semantic` sem-supervision contract above.
+
+---
+
+## 47. The Wan VAE is *causal* in z; `vae_symmetrize_z` makes it non-causal
+
+**Symptom.** The `true/wan_decoder` panel (or the learned features) show a
+faint **z-direction asymmetry** — e.g. a first-section boundary effect or
+slight drift along depth — even though EM sections have no time ordering.
+
+**Where.** `nanocosmos/models/cosmos_2_5_common/wrapper_base.py::_encode_to_latent`
+(+ `_encode_latent_once`); the underlying cause is diffusers'
+`AutoencoderKLWan` / `WanCausalConv3d`, whose temporal padding is **past-only**
+(`(..., 2*pad, 0)`). nanoCosmos maps the EM **depth (z) axis onto the model's
+video/time axis**, so that causal padding imposes a direction on z that does
+not physically exist. This applies to **every** Wan-VAE backbone (Cosmos-Predict
+2.5 *and* Cosmos 3 / Edge); it is not Edge-specific.
+
+**Intent.** `model.vae_symmetrize_z: true` averages a forward pass with a
+z-flipped pass — `y = 0.5*(f(u) + flip_z(f(flip_z(u))))` — cancelling the
+directional bias **without retraining** (frozen-VAE safe). It is applied on
+**both** sides of the frozen Wan VAE:
+
+* **encoder** latent — `_encode_to_latent` / `_encode_latent_once`;
+* **decoder** body — `_DecoderAdapter3D._decode_body` (only the frozen Wan
+  `decoder_body` is doubled; the learned `to_latent` / `head` run once).
+
+Costs one extra encode **and** one extra decode per step, and is skipped for
+the conv-downsample / `_ProgressiveUpsampler3D` fallback (already non-causal).
+This makes the *frozen* tokenizer effectively non-causal; for a truly
+non-causal VAE (symmetric conv padding) you would instead fine-tune the VAE —
+see the option discussion (A symmetrise / B symmetric padding + fine-tune / C
+retrain).
+
+**Remediation / caveat.** Default is **off** (2B / 16B recipes unchanged);
+`nanocosmos-4B.yaml` ships it **on**. Because it shifts the latent
+distribution, it is a **fresh-run** setting: a checkpoint trained with it OFF
+will not resume cleanly with it ON.

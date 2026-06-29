@@ -329,6 +329,7 @@ model:
   # the latent distribution -> fresh-run setting (old [0,1] checkpoints will
   # not resume cleanly with it on).
   vae_input_pm1: true
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
 
   # What to freeze.  Cosmos 3 has no ControlNet residual branch to
   # absorb the trainable load, so leaving the omni transformer

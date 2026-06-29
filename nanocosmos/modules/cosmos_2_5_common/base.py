@@ -121,6 +121,7 @@ class BaseCosmosModule(BaseCircuitModule):
             hf_token=model_config.get("hf_token"),
             dropout=model_config.get("dropout", 0.0),
             decode_chunk=model_config.get("decode_chunk", 16),
+            vae_symmetrize_z=model_config.get("vae_symmetrize_z", False),
             **self._extra_model_kwargs(model_config),
         )
         # Optional FP8 (Blackwell+) on the DiT's matmul-heavy Linear layers.

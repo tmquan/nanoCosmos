@@ -124,6 +124,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         highres_skip: bool = False,
         highres_skip_channels: int = 8,
         vae_input_pm1: bool = True,
+        vae_symmetrize_z: bool = False,
         decode_chunk: int = 16,
         **kwargs: Any,
     ) -> None:
@@ -160,6 +161,18 @@ class _BaseCosmos25Wrapper(nn.Module):
         # [-1, 1] inputs.  When True, scale the VAE-encode input [0,1]->[-1,1]
         # so it matches the VAE's pretrained distribution.
         self._vae_input_pm1 = bool(vae_input_pm1)
+        # Treat the EM depth (z) axis as NON-causal.  The Wan VAE is a *causal*
+        # video tokenizer (causal temporal padding in ``WanCausalConv3d``), but
+        # EM z-sections have no past->future direction.  When True, symmetrise
+        # the frozen Wan VAE over z -- on BOTH sides -- by averaging the forward
+        # pass with a z-flipped pass: the encoder latent (see
+        # :meth:`_encode_to_latent`) and the frozen decoder body (see
+        # ``_DecoderAdapter3D._decode_body``).  Cancels the directional bias
+        # WITHOUT retraining (frozen-VAE safe); costs one extra encode + one
+        # extra decode.  This shifts the latent distribution, so it is a
+        # fresh-run setting (a checkpoint trained with it OFF will not resume
+        # cleanly with it ON).
+        self._vae_symmetrize_z = bool(vae_symmetrize_z)
         # Temporal chunk size for the residual Wan VAE decode (frames per
         # decoder pass after the mandatory single-frame first chunk).  Larger =
         # faster (better conv3d utilisation, fewer launches) but more activation
@@ -252,6 +265,7 @@ class _BaseCosmos25Wrapper(nn.Module):
             highres_skip=highres_skip,
             skip_channels=highres_skip_channels,
             image_channels=in_channels,
+            symmetrize_z=self._vae_symmetrize_z,
         )
         if self.decoder_adapter.to_latent is not None:
             self.decoder_adapter.to_latent.float()
@@ -665,7 +679,36 @@ class _BaseCosmos25Wrapper(nn.Module):
     # ------------------------------------------------------------------
 
     def _encode_to_latent(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode pixel-space volume ``[B, 3, D, H, W]`` to latent grid."""
+        """Encode a pixel-space volume ``[B, 3, D, H, W]`` to the latent grid.
+
+        When ``vae_symmetrize_z`` is set (and a real pretrained VAE is present),
+        the causal Wan tokenizer is made effectively NON-causal along the EM
+        depth (z) axis by averaging the forward latent with a z-flipped pass::
+
+            z = 0.5 * ( enc(x) + flip_z( enc( flip_z(x) ) ) )
+
+        ``z`` is the network's temporal axis here (EM depth ↔ video time), and
+        ``WanCausalConv3d`` pads it causally (past-only).  EM sections have no
+        past→future direction, so this averaging cancels that directional bias
+        with no weight changes (frozen-VAE safe), at the cost of a second
+        encode.  The conv-downsample fallback (no pretrained VAE) is already
+        non-causal, so symmetrisation is skipped there.
+        """
+        if not getattr(self, "_vae_symmetrize_z", False):
+            return self._encode_latent_once(x)
+        has_vae = (hasattr(self, "_vae_ref") and self._vae_ref) or (
+            self.vae_encoder is not None
+        )
+        if not has_vae:  # conv fallback is already non-causal -> no-op
+            return self._encode_latent_once(x)
+        # Depth (z) is dim -3 of ``[B, C, D, H, W]`` and of the latent grid.
+        z_fwd = self._encode_latent_once(x)
+        z_rev = self._encode_latent_once(torch.flip(x, dims=(-3,)))
+        z_rev = torch.flip(z_rev, dims=(-3,))
+        return 0.5 * (z_fwd + z_rev)
+
+    def _encode_latent_once(self, x: torch.Tensor) -> torch.Tensor:
+        """Single VAE encode of ``[B, 3, D, H, W]`` -> latent grid (causal)."""
         if hasattr(self, "_vae_ref") and self._vae_ref:
             vae = self._vae_ref[0]
             # Device co-location.  ``_vae_ref`` holds the VAE as an

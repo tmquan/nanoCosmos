@@ -501,11 +501,16 @@ model:
   # ONLY the mandatory per-frame VAE-`decode` checkpointing (what keeps us off
   # OOM at the full patch) and run the DiT + head WITHOUT recompute for speed.
   # Set to `true` to checkpoint everything (max memory saving, slower).
-  gradient_checkpointing: [decode, dit]
+  gradient_checkpointing: [dit]
   # FP8 (Blackwell+) on the DiT's Linear layers via torchao float8 module-swap
   # -- faster matmuls + lower DiT memory (so the DiT can run un-checkpointed
   # above).  Decoupled from Lightning precision; conv VAE stays BF16.  Rowwise
   # (per-row) dynamic scaling is the most accuracy-robust training recipe.
+  # FP8 disabled: on B300 (sm_10.3) / CUDA 13 / torch 2.12 the torchao
+  # rowwise _scaled_mm path SIGSEGV'd at first use, and FP8 gave no measurable
+  # speedup anyway (the DiT matmuls are NOT the bottleneck -- the conv VAE
+  # decode is, and FP8 can't accelerate conv3d).  Re-enable only after the
+  # decode bottleneck is addressed and the kernel/compat issue is resolved.
   fp8: true
   fp8_recipe: rowwise
   # Residual Wan VAE decode temporal chunk size (latent frames per decoder pass
@@ -516,8 +521,15 @@ model:
   # bit-identical to per-frame) -> far fewer launches and much better
   # utilisation.  Larger = faster but more activation memory per checkpointed
   # chunk; raise toward your spare VRAM, lower if it OOMs.
-  decode_chunk: 8
+  decode_chunk: 16
   vae_input_pm1: true
+  # Treat the EM depth (z) axis as NON-causal.  The Wan2.2 VAE is a causal
+  # video tokenizer (past-only temporal padding), but EM z-sections have no
+  # time direction; symmetrise the encoder latent over z by averaging the
+  # forward encode with a z-flipped encode (frozen-VAE safe, +1 VAE encode).
+  # FRESH-RUN setting: it shifts the latent distribution, so a checkpoint
+  # trained with it OFF will not resume cleanly with it ON.
+  vae_symmetrize_z: true
 
 optimizer:
   lr: 0.0002                # Cosmos 3 generator SFT base LR (2e-4)

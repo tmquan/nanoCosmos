@@ -86,6 +86,7 @@ model:
   head_channels: 16
   feature_size: 64
   dropout: 0.2
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
   # If true, the wrapper will auto-pull pretrained weights from HuggingFace
   # on first instantiation:
   #   cosmos3nano3d    -> nvidia/Cosmos3-Nano        (16B omni MoT; BF16 only)
