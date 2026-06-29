@@ -31,6 +31,11 @@ pytorch-lightning==2.6.1
 torchmetrics==1.0.3
 monai==1.5.2
 einops==0.8.2
+# FP8 training on Blackwell+ (B200/B300): torchao float8 module-swap converts
+# the DiT's Linear layers to FP8 (see nanocosmos.models.cosmos_2_5_common.fp8),
+# enabled via ``model.fp8: true``.  Optional -- the code falls back to BF16 if
+# torchao is missing.
+torchao==0.17.0
 
 # GPU acceleration (CUDA 13 wheels on NVIDIA's index).
 # Enables:

@@ -115,7 +115,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         freeze_dit_backbone: Union[bool, int] = False,
         freeze_vae_decoder: bool = False,
         freeze_vae_encoder: bool = True,
-        gradient_checkpointing: bool = False,
+        gradient_checkpointing: Union[bool, List[str]] = False,
         feature_layers: Optional[List[int]] = None,
         cache_dir: Optional[str] = None,
         hf_token: Optional[str] = None,
@@ -177,7 +177,28 @@ class _BaseCosmos25Wrapper(nn.Module):
         self._dit_thaw_epoch: Optional[int] = thaw_epoch
         self._freeze_vae_decoder = freeze_vae_decoder
         self._freeze_vae_encoder = freeze_vae_encoder
-        self._gradient_checkpointing = gradient_checkpointing
+        # ``gradient_checkpointing`` accepts a bool (all targets) or a list of
+        # targets among {"dit", "decode", "head"} so recompute can be traded
+        # against memory per component.  ``True`` -> all three; ``False`` /
+        # ``[]`` -> none.  On Blackwell with a large memory budget, e.g.
+        # ``["decode"]`` keeps the (mandatory) per-frame VAE-decode
+        # checkpointing while running the DiT + head without recompute.
+        if gradient_checkpointing is True:
+            ckpt_targets = {"dit", "decode", "head"}
+        elif not gradient_checkpointing:
+            ckpt_targets = set()
+        else:
+            ckpt_targets = {str(t).strip().lower() for t in gradient_checkpointing}
+            unknown = ckpt_targets - {"dit", "decode", "head"}
+            if unknown:
+                raise ValueError(
+                    f"Unknown gradient_checkpointing targets {sorted(unknown)}; "
+                    "choose from 'dit', 'decode', 'head'."
+                )
+        self._ckpt_dit = "dit" in ckpt_targets
+        self._ckpt_decode = "decode" in ckpt_targets
+        self._ckpt_head = "head" in ckpt_targets
+        self._gradient_checkpointing = bool(ckpt_targets)
 
         if feature_layers is not None:
             self._feature_layers = sorted(feature_layers)
@@ -245,7 +266,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         self._make_params_contiguous()
 
-        if gradient_checkpointing:
+        if self._gradient_checkpointing:
             self.enable_gradient_checkpointing()
 
         logger.info(
@@ -1113,12 +1134,18 @@ class _BaseCosmos25Wrapper(nn.Module):
     def enable_decoder_gradient_checkpointing(self, _log: bool = True) -> None:
         """Checkpoint the full-res VAE decoder body + task head.
 
-        The task head is always checkpointed.  The decoder body is
-        checkpointed at block granularity unless ``_skip_decoder_body_checkpoint``
-        is set (the residual Wan2.2 path, which checkpoints per frame instead).
+        The task head is checkpointed when ``head`` is a selected target.  The
+        decoder body is checkpointed at block granularity when ``decode`` is a
+        selected target, unless ``_skip_decoder_body_checkpoint`` is set (the
+        residual Wan2.2 path, which checkpoints per frame in its own decode
+        wrapper instead -- gated there on ``_ckpt_decode``).
         """
-        modules = list(self._decoder_head_modules())
-        if not getattr(self, "_skip_decoder_body_checkpoint", False):
+        modules: List[nn.Module] = []
+        if getattr(self, "_ckpt_head", True):
+            modules += self._decoder_head_modules()
+        if getattr(self, "_ckpt_decode", True) and not getattr(
+            self, "_skip_decoder_body_checkpoint", False,
+        ):
             modules += self._decoder_body_modules()
         for m in modules:
             self._wrap_forward_with_checkpoint(m)
@@ -1141,33 +1168,33 @@ class _BaseCosmos25Wrapper(nn.Module):
         transformer blocks and the full-resolution Wan VAE decoder body +
         task head (the dominant memory consumer for this recipe).
         """
-        if hasattr(self.dit, "enable_gradient_checkpointing"):
-            self.dit.enable_gradient_checkpointing()
-            self._gradient_checkpointing = True
-            if _log:
-                logger.info("Gradient checkpointing enabled (diffusers API).")
-        else:
-            block_container = None
-            for attr in ("transformer_blocks", "blocks", "layers"):
-                if hasattr(self.dit, attr):
-                    block_container = getattr(self.dit, attr)
-                    break
-
-            if block_container is None:
-                logger.warning(
-                    "Cannot find transformer block container on %s -- "
-                    "DiT gradient checkpointing not applied.",
-                    type(self.dit).__name__,
-                )
-            else:
-                for block in block_container:
-                    self._wrap_forward_with_checkpoint(block)
-                self._gradient_checkpointing = True
+        self._gradient_checkpointing = True
+        if getattr(self, "_ckpt_dit", True):
+            if hasattr(self.dit, "enable_gradient_checkpointing"):
+                self.dit.enable_gradient_checkpointing()
                 if _log:
-                    logger.info(
-                        "Gradient checkpointing enabled (manual, %d blocks).",
-                        len(block_container),
+                    logger.info("Gradient checkpointing enabled (diffusers API).")
+            else:
+                block_container = None
+                for attr in ("transformer_blocks", "blocks", "layers"):
+                    if hasattr(self.dit, attr):
+                        block_container = getattr(self.dit, attr)
+                        break
+
+                if block_container is None:
+                    logger.warning(
+                        "Cannot find transformer block container on %s -- "
+                        "DiT gradient checkpointing not applied.",
+                        type(self.dit).__name__,
                     )
+                else:
+                    for block in block_container:
+                        self._wrap_forward_with_checkpoint(block)
+                    if _log:
+                        logger.info(
+                            "Gradient checkpointing enabled (manual, %d blocks).",
+                            len(block_container),
+                        )
 
         # The DiT APIs above never touch the VAE decoder; checkpoint it too.
         self.enable_decoder_gradient_checkpointing(_log=_log)

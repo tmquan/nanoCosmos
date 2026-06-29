@@ -62,11 +62,11 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 200 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # 400 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
   # the DiT token grid is (50, 16, 16) = 12,800 tokens.  Lighter than the 16B on
   # the ~2B Edge backbone -- pair with gradient checkpointing; you can usually
-  # raise the batch.  Drop the patch (e.g. 200x256x256) if it OOMs.
+  # raise the batch.  Drop the patch (e.g. 400x256x256) if it OOMs.
   patch_size: [400, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -496,10 +496,18 @@ model:
   # train the DiT from epoch 0.
   freeze_dit_backbone: false
   freeze_vae_decoder: true
-  # 4B is ~8x smaller than 16B; gradient checkpointing is still ON because the
-  # latent_patch_size 2->1 repatch grows the DiT sequence length ~4x (the
-  # tightest memory point).  Turn off to allow torch.compile if it fits.
-  gradient_checkpointing: true
+  # Gradient checkpointing is now per-component: a bool (all) or a list of
+  # targets among {dit, decode, head}.  On B300 (large memory budget) we keep
+  # ONLY the mandatory per-frame VAE-`decode` checkpointing (what keeps us off
+  # OOM at the full patch) and run the DiT + head WITHOUT recompute for speed.
+  # Set to `true` to checkpoint everything (max memory saving, slower).
+  gradient_checkpointing: [decode]
+  # FP8 (Blackwell+) on the DiT's Linear layers via torchao float8 module-swap
+  # -- faster matmuls + lower DiT memory (so the DiT can run un-checkpointed
+  # above).  Decoupled from Lightning precision; conv VAE stays BF16.  Rowwise
+  # (per-row) dynamic scaling is the most accuracy-robust training recipe.
+  fp8: true
+  fp8_recipe: rowwise
   vae_input_pm1: true
 
 optimizer:

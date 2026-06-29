@@ -785,7 +785,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
             # ``inference_mode`` tensors Lightning uses for eval) and on
             # gradient checkpointing being active.
             use_ckpt = (
-                getattr(self, "_gradient_checkpointing", False)
+                getattr(self, "_ckpt_decode", False)
                 and torch.is_grad_enabled()
             )
             feat_map: List[Any] = [None] * cache_len
