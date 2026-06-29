@@ -475,7 +475,7 @@ model:
   # MUST be true: at the epoch-5 DiT thaw the unfrozen 2B backbone adds full
   # activations + grads + AdamW state; without checkpointing this OOMs (and it
   # is incompatible with torch.compile, so compile below is off).
-  gradient_checkpointing: false
+  gradient_checkpointing: true
   vae_input_pm1: true
   vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
 
