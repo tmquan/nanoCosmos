@@ -1047,79 +1047,154 @@ class _BaseCosmos25Wrapper(nn.Module):
         else:
             yield
 
-    def enable_gradient_checkpointing(self, _log: bool = True) -> None:
-        """Enable activation checkpointing on DiT transformer blocks.
+    @staticmethod
+    def _wrap_forward_with_checkpoint(module: nn.Module) -> None:
+        """Wrap ``module.forward`` so its activations are recomputed in backward.
 
-        Trades ~20-30% slower forward for ~40% lower activation memory,
-        allowing larger batch sizes or patch sizes.
+        Idempotent: a module already wrapped (carrying ``_original_forward``)
+        is left untouched.  The wrapper is a no-op when autograd is disabled
+        (e.g. Lightning's ``torch.inference_mode`` eval), because
+        ``torch.utils.checkpoint`` cannot wrap inference tensors.
+        """
+        if getattr(module, "_original_forward", None) is not None:
+            return
+        original_forward = module.forward
+
+        def ckpt_forward(*args, **kwargs):
+            if not torch.is_grad_enabled():
+                return original_forward(*args, **kwargs)
+            return torch.utils.checkpoint.checkpoint(
+                original_forward, *args, use_reentrant=False, **kwargs,
+            )
+
+        module.forward = ckpt_forward
+        module._original_forward = original_forward
+
+    @staticmethod
+    def _unwrap_forward(module: nn.Module) -> None:
+        """Restore a module's original forward wrapped by
+        :meth:`_wrap_forward_with_checkpoint`."""
+        if getattr(module, "_original_forward", None) is not None:
+            module.forward = module._original_forward
+            module._original_forward = None
+
+    def _decoder_head_modules(self) -> List[nn.Module]:
+        """The full-resolution unified task head (no causal-conv cache)."""
+        adapter = getattr(self, "decoder_adapter", None)
+        head = getattr(adapter, "head", None) if adapter is not None else None
+        return [head] if isinstance(head, nn.Module) else []
+
+    def _decoder_body_modules(self) -> List[nn.Module]:
+        """The VAE decoder body's upsampling sub-blocks.
+
+        Block-level checkpointing of these is correct only when the body is
+        driven by a single ``feat_cache=None`` call (the non-residual Cosmos 2.5
+        Wan VAE).  The residual Wan2.2 VAE (Cosmos 3) instead decodes
+        frame-by-frame through a stateful causal-conv cache that block-level
+        checkpointing desyncs, so that path sets
+        ``_skip_decoder_body_checkpoint`` and checkpoints per frame in its own
+        decode wrapper instead.
+        """
+        adapter = getattr(self, "decoder_adapter", None)
+        body = getattr(adapter, "decoder_body", None) if adapter is not None else None
+        modules: List[nn.Module] = []
+        if isinstance(body, nn.Module):
+            mid = getattr(body, "mid_block", None)
+            if isinstance(mid, nn.Module):
+                modules.append(mid)
+            # WanDecoder3d -> up_blocks; standalone _ProgressiveUpsampler3D -> stages.
+            for attr in ("up_blocks", "up", "stages"):
+                container = getattr(body, attr, None)
+                if container is not None:
+                    modules.extend(b for b in container if isinstance(b, nn.Module))
+                    break
+        return modules
+
+    def enable_decoder_gradient_checkpointing(self, _log: bool = True) -> None:
+        """Checkpoint the full-res VAE decoder body + task head.
+
+        The task head is always checkpointed.  The decoder body is
+        checkpointed at block granularity unless ``_skip_decoder_body_checkpoint``
+        is set (the residual Wan2.2 path, which checkpoints per frame instead).
+        """
+        modules = list(self._decoder_head_modules())
+        if not getattr(self, "_skip_decoder_body_checkpoint", False):
+            modules += self._decoder_body_modules()
+        for m in modules:
+            self._wrap_forward_with_checkpoint(m)
+        if _log and modules:
+            logger.info(
+                "Decoder gradient checkpointing enabled (%d modules).",
+                len(modules),
+            )
+
+    def disable_decoder_gradient_checkpointing(self, _log: bool = True) -> None:
+        """Restore the decoder body + task head forwards."""
+        for m in (self._decoder_head_modules() + self._decoder_body_modules()):
+            self._unwrap_forward(m)
+
+    def enable_gradient_checkpointing(self, _log: bool = True) -> None:
+        """Enable activation checkpointing on DiT blocks + the VAE decoder.
+
+        Trades ~20-30% slower forward for much lower activation memory,
+        allowing larger batch sizes or patch sizes.  Covers both the DiT
+        transformer blocks and the full-resolution Wan VAE decoder body +
+        task head (the dominant memory consumer for this recipe).
         """
         if hasattr(self.dit, "enable_gradient_checkpointing"):
             self.dit.enable_gradient_checkpointing()
             self._gradient_checkpointing = True
             if _log:
                 logger.info("Gradient checkpointing enabled (diffusers API).")
-            return
+        else:
+            block_container = None
+            for attr in ("transformer_blocks", "blocks", "layers"):
+                if hasattr(self.dit, attr):
+                    block_container = getattr(self.dit, attr)
+                    break
 
-        block_container = None
-        for attr in ("transformer_blocks", "blocks", "layers"):
-            if hasattr(self.dit, attr):
-                block_container = getattr(self.dit, attr)
-                break
-
-        if block_container is None:
-            logger.warning(
-                "Cannot find transformer block container on %s -- "
-                "gradient checkpointing not applied.",
-                type(self.dit).__name__,
-            )
-            return
-
-        for block in block_container:
-            original_forward = block.forward
-
-            def _make_ckpt_forward(fwd):
-                def ckpt_forward(*args, **kwargs):
-                    if not torch.is_grad_enabled():
-                        return fwd(*args, **kwargs)
-                    return torch.utils.checkpoint.checkpoint(
-                        fwd, *args, use_reentrant=False, **kwargs,
+            if block_container is None:
+                logger.warning(
+                    "Cannot find transformer block container on %s -- "
+                    "DiT gradient checkpointing not applied.",
+                    type(self.dit).__name__,
+                )
+            else:
+                for block in block_container:
+                    self._wrap_forward_with_checkpoint(block)
+                self._gradient_checkpointing = True
+                if _log:
+                    logger.info(
+                        "Gradient checkpointing enabled (manual, %d blocks).",
+                        len(block_container),
                     )
-                return ckpt_forward
 
-            block.forward = _make_ckpt_forward(original_forward)
-            block._original_forward = original_forward
-
-        self._gradient_checkpointing = True
-        if _log:
-            logger.info(
-                "Gradient checkpointing enabled (manual, %d blocks).",
-                len(block_container),
-            )
+        # The DiT APIs above never touch the VAE decoder; checkpoint it too.
+        self.enable_decoder_gradient_checkpointing(_log=_log)
 
     def disable_gradient_checkpointing(self, _log: bool = True) -> None:
-        """Disable activation checkpointing, restoring original block forwards."""
+        """Disable activation checkpointing, restoring original forwards."""
         if hasattr(self.dit, "disable_gradient_checkpointing"):
             self.dit.disable_gradient_checkpointing()
             self._gradient_checkpointing = False
             if _log:
                 logger.info("Gradient checkpointing disabled (diffusers API).")
-            return
+        else:
+            block_container = None
+            for attr in ("transformer_blocks", "blocks", "layers"):
+                if hasattr(self.dit, attr):
+                    block_container = getattr(self.dit, attr)
+                    break
 
-        block_container = None
-        for attr in ("transformer_blocks", "blocks", "layers"):
-            if hasattr(self.dit, attr):
-                block_container = getattr(self.dit, attr)
-                break
+            if block_container is not None:
+                for block in block_container:
+                    self._unwrap_forward(block)
 
-        if block_container is not None:
-            for block in block_container:
-                if hasattr(block, "_original_forward"):
-                    block.forward = block._original_forward
-                    del block._original_forward
+            self._gradient_checkpointing = False
+            if _log:
+                logger.info("Gradient checkpointing disabled.")
 
-        self._gradient_checkpointing = False
-        if _log:
-            logger.info("Gradient checkpointing disabled.")
+        self.disable_decoder_gradient_checkpointing(_log=_log)
 
     # ------------------------------------------------------------------
     # Utilities

@@ -37,14 +37,72 @@ References:
 """
 
 import logging
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 
 from nanocosmos.models.cosmos_3_common.wrapper_base import _BaseCosmos25Wrapper
 
 logger = logging.getLogger(__name__)
+
+
+def _checkpointed_decode_frame(
+    forward_fn: Callable[..., torch.Tensor],
+    frame: torch.Tensor,
+    entry_cache: List[Any],
+    first_chunk: bool,
+) -> Tuple[torch.Tensor, List[Any]]:
+    """Run one residual-Wan decode frame under activation checkpointing.
+
+    The Wan decoder threads a stateful causal-conv cache (a mix of tensors and
+    ``None`` / ``"Rep"`` sentinels) plus a positional ``feat_idx`` counter
+    through every conv.  Activation checkpointing re-runs the frame in backward,
+    so that state must be reproduced *exactly* or the recompute desyncs (wrong
+    ``feat_idx`` -> ``IndexError``; wrong sentinel -> temporal-size mismatch).
+
+    We therefore pass only the cache **tensors** through ``checkpoint`` -- so
+    gradients flow across frames AND the tensors are saved for a bit-exact
+    recompute -- and carry the non-tensor sentinel *structure* via a plain
+    closure, re-merging the two inside the checkpointed function.  ``feat_idx``
+    is reset to ``[0]`` inside the function so recompute starts from the same
+    counter.  Returns ``(frame_output, updated_cache)``.
+    """
+    struct: List[Any] = ["__T__" if torch.is_tensor(c) else c for c in entry_cache]
+    tensor_vals = [c for c in entry_cache if torch.is_tensor(c)]
+    holder: dict = {}
+
+    def run(fr: torch.Tensor, *tvals: torch.Tensor):
+        cache: List[Any] = list(struct)
+        ti = 0
+        for k, slot in enumerate(cache):
+            if slot == "__T__":
+                cache[k] = tvals[ti]
+                ti += 1
+        conv_idx = [0]
+        out = forward_fn(
+            fr, feat_cache=cache, feat_idx=conv_idx, first_chunk=first_chunk,
+        )
+        holder["struct"] = [
+            "__T__" if torch.is_tensor(c) else c for c in cache
+        ]
+        return (out, *[c for c in cache if torch.is_tensor(c)])
+
+    results = torch.utils.checkpoint.checkpoint(
+        run, frame, *tensor_vals, use_reentrant=False,
+    )
+    out = results[0]
+    new_tensors = list(results[1:])
+    updated_cache: List[Any] = []
+    ti = 0
+    for slot in holder["struct"]:
+        if slot == "__T__":
+            updated_cache.append(new_tensors[ti])
+            ti += 1
+        else:
+            updated_cache.append(slot)
+    return out, updated_cache
 
 
 class _CacheTolerantIdentity(nn.Module):
@@ -677,6 +735,16 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         if decoder is None or not hasattr(decoder, "forward"):
             return
 
+        # Block-level decoder-body checkpointing (set up by the base
+        # ``enable_gradient_checkpointing``) is INCOMPATIBLE with the residual
+        # VAE's stateful frame-by-frame cached decode below -- recompute would
+        # desync the causal-conv cache / ``feat_idx`` counter.  Opt out of it
+        # and undo any wrappers already applied; this path checkpoints per
+        # frame instead (see ``_cached_chunked_forward``).
+        self._skip_decoder_body_checkpoint = True
+        for m in self._decoder_body_modules():
+            self._unwrap_forward(m)
+
         # Cache length: one slot per causal conv plus one for the (already
         # swapped-to-Identity) ``conv_out`` site, which its forward still
         # indexes unconditionally.  (Class checked by name to avoid importing
@@ -710,16 +778,33 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
                     feat_idx=feat_idx,
                     first_chunk=first_chunk,
                 )
+            # Activation-checkpoint each frame in training: the un-checkpointed
+            # loop retains every frame's full-resolution decoder activations for
+            # backward (the dominant memory cost of this recipe).  Gated on
+            # autograd being enabled (``torch.utils.checkpoint`` cannot wrap the
+            # ``inference_mode`` tensors Lightning uses for eval) and on
+            # gradient checkpointing being active.
+            use_ckpt = (
+                getattr(self, "_gradient_checkpointing", False)
+                and torch.is_grad_enabled()
+            )
             feat_map: List[Any] = [None] * cache_len
             decoded: Optional[torch.Tensor] = None
             for i in range(x.shape[2]):
-                conv_idx = [0]
-                out_i = original_forward(
-                    x[:, :, i : i + 1, :, :],
-                    feat_cache=feat_map,
-                    feat_idx=conv_idx,
-                    first_chunk=(i == 0),
-                )
+                frame = x[:, :, i : i + 1, :, :]
+                first = i == 0
+                if use_ckpt:
+                    out_i, feat_map = _checkpointed_decode_frame(
+                        original_forward, frame, feat_map, first,
+                    )
+                else:
+                    conv_idx = [0]
+                    out_i = original_forward(
+                        frame,
+                        feat_cache=feat_map,
+                        feat_idx=conv_idx,
+                        first_chunk=first,
+                    )
                 decoded = (
                     out_i if decoded is None
                     else torch.cat([decoded, out_i], dim=2)
