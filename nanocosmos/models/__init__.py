@@ -30,14 +30,21 @@ by :data:`nanocosmos.losses.HEAD_LAYOUT`.
 """
 
 from nanocosmos.models.base import BaseModel
-from nanocosmos.models.cosmos_3_nano import Cosmos3Nano3DWrapper
+from nanocosmos.models.cosmos_3_common import Cosmos3OmniWrapper
+from nanocosmos.models.cosmos_3_edge import Cosmos3EdgeWrapper
+from nanocosmos.models.cosmos_3_nano import Cosmos3Nano3DWrapper, Cosmos3NanoWrapper
+from nanocosmos.models.cosmos_3_super import Cosmos3SuperWrapper
 from nanocosmos.models.cosmos_predict_2_5 import CosmosPredict3DWrapper
 from nanocosmos.models.cosmos_transfer_2_5 import CosmosTransfer3DWrapper
 from nanocosmos.models.vista import Vista3DWrapper
 
 __all__ = [
     "BaseModel",
+    "Cosmos3OmniWrapper",
+    "Cosmos3EdgeWrapper",
+    "Cosmos3NanoWrapper",
     "Cosmos3Nano3DWrapper",
+    "Cosmos3SuperWrapper",
     "CosmosPredict3DWrapper",
     "CosmosTransfer3DWrapper",
     "Vista3DWrapper",

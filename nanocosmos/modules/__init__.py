@@ -44,20 +44,32 @@ See ``doc/CONTRIBUTING.md`` "How to add a new model architecture".
 
 from nanocosmos.modules.base import BaseCircuitModule
 from nanocosmos.modules.cosmos_2_5_common import BaseCosmosModule
-from nanocosmos.modules.cosmos_3_nano import Cosmos3Nano3DModule
+from nanocosmos.modules.cosmos_3_edge import Cosmos3EdgeModule
+from nanocosmos.modules.cosmos_3_nano import Cosmos3Nano3DModule, Cosmos3NanoModule
+from nanocosmos.modules.cosmos_3_super import Cosmos3SuperModule
 from nanocosmos.modules.cosmos_predict_2_5 import CosmosPredict3DModule
 from nanocosmos.modules.cosmos_transfer_2_5 import CosmosTransfer3DModule
-from nanocosmos.modules.joint3d import Joint3DModule, JointPredict3DModule
+from nanocosmos.modules.joint3d import (
+    Joint3DModule,
+    JointEdge3DModule,
+    JointPredict3DModule,
+    JointSuper3DModule,
+)
 from nanocosmos.modules.vista import BaseVistaModule, Vista3DModule
 
 __all__ = [
     "BaseCircuitModule",
     "BaseCosmosModule",
     "BaseVistaModule",
+    "Cosmos3EdgeModule",
+    "Cosmos3NanoModule",
     "Cosmos3Nano3DModule",
+    "Cosmos3SuperModule",
     "CosmosPredict3DModule",
     "CosmosTransfer3DModule",
     "Joint3DModule",
+    "JointEdge3DModule",
     "JointPredict3DModule",
+    "JointSuper3DModule",
     "Vista3DModule",
 ]

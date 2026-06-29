@@ -1,0 +1,646 @@
+# =====================================================================
+# nanocosmos-4B.yaml  --  resolution-ladder super-resolution + segmentation
+# =====================================================================
+# The 4B sibling of nanocosmos-16B.yaml: IDENTICAL joint recipe / data / loss /
+# training, swapped to the Cosmos3-Edge (4B) backbone instead of Cosmos3-Nano
+# (16B).  Cosmos3-Edge is NVIDIA's on-device tier (Jetson) and is ANNOUNCED BUT
+# NOT YET RELEASED on HuggingFace (Cosmos 3 technical report, arXiv 2606.02800),
+# so we approximate it by REDUCING the released Cosmos3-Nano:
+#
+#   * model.type = joint3d_edge -> JointEdge3DModule (Cosmos3EdgeWrapper).
+#   * variant = EDGE: hidden 2048 / 28 layers / 16 heads / 8 kv / head_dim 128 /
+#     intermediate 6144 (paper geometry; FFN width inferred at the family's MLP
+#     ratio 3.0).  ~2B dense generator tower (4B total counting both MoT towers).
+#   * pretrained = true -> download Cosmos3-Nano, then Cosmos3EdgeWrapper reduces
+#     the loaded Nano omni transformer to the Edge geometry (evenly-spaced depth
+#     36->28 + per-matrix top-left truncation, weights partially copied) and
+#     reuses Nano's Wan2.2-TI2V VAE UNCHANGED.  Set pretrained=false to skip the
+#     warm start and train the Edge geometry from scratch (standalone DiT +
+#     learned conv tokenizer, no Wan2.2 VAE).
+#
+# The VAE is the SAME Wan2.2-TI2V VAE as Nano (16x spatial / 4x temporal, z=48),
+# so the fine grid, token grid, data ladder and loss are identical to the 16B
+# config.  The ~8x smaller backbone usually fits a larger batch -- bump it if
+# memory allows.
+#
+# The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
+# ONE Cosmos3-Edge backbone predicts on a fixed FINE grid (4 nm, 200x256x256) a
+# single head that is the reconstructed fine EM (raw) AND the fine-grid
+# segmentation (aff + sem).  EVERY supervision term pools the fine prediction
+# down to wherever its ground truth lives (factor read from the GT shape).
+# Two branches (roles STACK by dataset), routed per task-homogeneous batch by
+# Joint3DReconSegLoss:
+#
+#   ssl   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
+#          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
+#          (small voxel) + unlabeled FlyEM (FIB-25/Hemibrain/MaleCNS) + CREMI
+#          padded + MitoEM2 (image-only mito EM).  Label-free.
+#   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
+#          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
+#          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.
+#
+# Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
+# Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
+# RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
+# is the only "resampling" and it is derived from the native label shape.
+#
+# Implemented + tested end-to-end: multi-task datamodule
+# (nanocosmos/datamodules/joint3d.py), Lightning module
+# (nanocosmos/modules/joint3d.py), joint loss (nanocosmos/losses/joint3d.py),
+# and degradation transform (nanocosmos/transforms/degrade.py).  See
+# tests/test_joint*.py.
+# =====================================================================
+
+experiment_name: nanocosmos-4B
+project_name: nanocosmos
+seed: 42
+logger: tensorboard
+ckpt_path: null
+ckpt_path_skip_prefixes: []
+ckpt_path_only_prefixes: null
+
+data:
+  dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
+  # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
+  # 200 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
+  # the DiT token grid is (50, 16, 16) = 12,800 tokens.  Lighter than the 16B on
+  # the ~2B Edge backbone -- pair with gradient checkpointing; you can usually
+  # raise the batch.  Drop the patch (e.g. 160x256x256) if it OOMs.
+  patch_size: [200, 256, 256]
+  pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
+  # No resolution jitter (clean recipe); the only resampling is the per-volume
+  # pool to the native label grid, derived from the label shape.
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 8
+  find_boundaries: 1.0
+  boundary_target: semantic
+  # sft crop gate: require BOTH the labeled-foreground fraction AND the non-zero
+  # EM fraction >= this value, so background-heavy / unlabeled crops and
+  # zero-padded EM are rejected (best-seen crop kept after max retries).
+  sft_min_foreground: 0.8
+  # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
+  # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
+  ssl_min_foreground: 0.8
+
+  # ---- realistic large-voxel degradation for the SSL branch ----
+  # (nanocosmos.transforms.RandResolutionDegraded) -- the free
+  # large-voxel -> small-voxel pair.
+  degrade:
+    # Simulated section thickness zf = large_voxel_z / fine(4 nm).  Spans 8 nm (FIB)
+    # .. 40 nm (CREMI/MICrONS) sections, i.e. zf 2 .. 10, log-uniform.
+    zf_range: [2.0, 10.0]
+    jitter_prob: 0.5            # per-section in-plane misalignment (grid_sample)
+    max_jitter: 2.0             # +/- voxels
+    missing_prob: 0.3           # missing / duplicated sections
+    max_missing: 2
+    missing_fill: zero
+    noise_prob: 0.3             # section-dependent gaussian noise (gentled)
+    noise_std: 0.01
+    contrast_prob: 0.5          # section-dependent gamma jitter
+    contrast_gamma: [0.8, 1.25]
+    up_mode: trilinear
+
+  # ---- the resolution ladder, as two task branches; the multi-task sampler
+  # yields task-homogeneous batches and interleaves them round-robin
+  # (sample_weight tunes the mix).  Each volume declares its NATIVE resolution
+  # (z, y, x nm); the datamodule resamples the image onto the 4 nm fine grid
+  # for the network input and keeps the labels on their native grid, so the
+  # loss pool factor = native/fine is derived from the label shape. ----
+  branches:
+    ssl:
+      task: ssl
+      batch_size: 1
+      sample_weight: 1.0
+      # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
+      # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
+      # volumes -- domain-matched EM that reconstructs for free.
+      # RandResolutionDegraded synthesises the (degraded -> clean) pair.  Add
+      # OpenOrganelle volumes here to scale SSL toward petascale.
+      volumes:
+      # --- COSEM ~4 nm small voxel (exact z per volume), all tiles ---
+      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z8192_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z0_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_macrophage-2_4x4x3.36nm_x0_y0_z0_volume
+        root: data/COSEM3D
+        native_resolution: [3.36, 4, 4]
+      - vol: jrc_macrophage-2_4x4x3.36nm_x0_y0_z8192_volume
+        root: data/COSEM3D
+        native_resolution: [3.36, 4, 4]
+      - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z0_volume
+        root: data/COSEM3D
+        native_resolution: [3.36, 4, 4]
+      - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
+        root: data/COSEM3D
+        native_resolution: [3.36, 4, 4]
+      - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z0_volume
+        root: data/COSEM3D
+        native_resolution: [3.44, 4, 4]
+      - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z6512_volume
+        root: data/COSEM3D
+        native_resolution: [3.44, 4, 4]
+      - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z0_volume
+        root: data/COSEM3D
+        native_resolution: [3.44, 4, 4]
+      - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z4096_volume
+        root: data/COSEM3D
+        native_resolution: [3.44, 4, 4]
+      # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
+      # 4 train crops per source (1 more held out per source in val_volumes);
+      # all verified non-empty (empty corner tiles dropped).
+      - vol: flyem3d_8nm_ssl_x1024_y4096_z4096_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_8nm_ssl_x4096_y1024_z4096_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_8nm_ssl_x2700_y2700_z3500_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_8nm_ssl_x3000_y3000_z5000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      # --- Hemibrain 8 nm neuropil, image-only ---
+      - vol: flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_hemibrain_8nm_ssl_x16000_y30000_z36000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_hemibrain_8nm_ssl_x20000_y20000_z20000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_hemibrain_8nm_ssl_x24000_y24000_z24000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      # --- MaleCNS 8 nm neuropil, image-only ---
+      - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      # --- CREMI 40x4x4 padded test volumes, IMAGE-ONLY (no public labels) ---
+      - vol: cremi3d_sample_A+_volume
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: cremi3d_sample_B+_volume
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: cremi3d_sample_C+_volume
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
+      # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
+      - vol: mitoem2_beta_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_beta_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_beta_train03_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_beta_train04_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_jurkat_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_jurkat_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_macro_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_macro_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_podo_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_podo_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_sperm_train01_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      - vol: mitoem2_sperm_train02_volume
+        root: data/MitoEM2
+        native_resolution: [16, 16, 16]
+      # 8 nm xy / 30 nm z: Mossy/Pyra/Stem
+      - vol: mitoem2_mossy_train01_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_mossy_train02_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_mossy_train03_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train01_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train02_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train03_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train04_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train05_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train06_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train07_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train08_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train09_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train10_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train11_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train12_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train13_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train14_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train15_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train16_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_pyra_train17_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_stem_train01_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+      - vol: mitoem2_stem_train02_volume
+        root: data/MitoEM2
+        native_resolution: [30, 8, 8]
+    sft:
+      task: sft
+      batch_size: 1
+      sample_weight: 2.0
+      # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
+      # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
+      # volume's native label grid, then AffinityFGLoss.
+      volumes:
+      - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
+        seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
+        root: data/FLYEM3D
+        native_resolution: [8, 8, 8]
+      - vol: neurons_5000x2900x300_x3000_y7200_z950_volume # SNEMI3D 30x6x6
+        seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
+        root: data/SNEMI3D
+        native_resolution: [30, 6, 6]
+      - vol: cremi3d_sample_A_volume                       # CREMI 40x4x4
+        seg: cremi3d_sample_A_segmentation
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: cremi3d_sample_B_volume
+        seg: cremi3d_sample_B_segmentation
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      - vol: cremi3d_sample_C_volume
+        seg: cremi3d_sample_C_segmentation
+        root: data/CREMI3D
+        native_resolution: [40, 4, 4]
+      # --- MICrONS 40x8x8, all labeled crops ---
+      - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
+        seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
+        seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
+        seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
+        seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
+        seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
+        seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
+        seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
+        seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
+        seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
+        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+
+  val_batch_size: 1
+  # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
+  val_volumes:
+  # SNEMI3D AC4 (labeled holdout).
+  - vol: AC4_inputs
+    seg: AC4_labels
+    root: data/SNEMI3D
+    task: sft
+    native_resolution: [30, 6, 6]
+  # --- 20% holdout of the divisible-by-5 datasets (image-only COSEM/FLYEM ->
+  #     ssl recon validation) ---
+  - vol: jrc_hela-3_4x4x3.24nm_x8192_y0_z0_volume
+    root: data/COSEM3D
+    task: ssl
+    native_resolution: [3.24, 4, 4]
+  - vol: jrc_macrophage-2_4x4x3.36nm_x7952_y0_z0_volume
+    root: data/COSEM3D
+    task: ssl
+    native_resolution: [3.36, 4, 4]
+  - vol: jrc_jurkat-1_4x4x3.44nm_x7952_y0_z0_volume
+    root: data/COSEM3D
+    task: ssl
+    native_resolution: [3.44, 4, 4]
+  # FLYEM3D: 1 ssl holdout per source (fib25-surround / hemibrain / malecns), non-empty.
+  - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
+    root: data/FLYEM3D
+    task: ssl
+    native_resolution: [8, 8, 8]
+  - vol: flyem3d_hemibrain_8nm_ssl_x16000_y16000_z16000_volume
+    root: data/FLYEM3D
+    task: ssl
+    native_resolution: [8, 8, 8]
+  - vol: flyem3d_malecns_8nm_ssl_x16000_y20000_z24000_volume
+    root: data/FLYEM3D
+    task: ssl
+    native_resolution: [8, 8, 8]
+  # MICrONS: 2 of 12 labeled crops (sft instance-metric validation).
+  - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
+    root: data/MICRONS
+    task: sft
+    native_resolution: [40, 8, 8]
+  - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+    seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
+    root: data/MICRONS
+    task: sft
+    native_resolution: [40, 8, 8]
+  # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
+  - vol: mitoem2_beta_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_beta_test02_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_beta_test03_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_jurkat_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_macro_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_podo_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_sperm_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_mossy_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+  - vol: mitoem2_mossy_test02_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+  - vol: mitoem2_pyra_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+  - vol: mitoem2_stem_test01_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [30, 8, 8]
+
+model:
+  type: joint3d_edge     # -> JointEdge3DModule (Cosmos3-Edge 4B backbone + Joint3DReconSegLoss)
+  variant: EDGE
+  in_channels: 1
+  head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
+  feature_size: 64
+  dropout: 0.0
+  # true: download Cosmos3-Nano and REDUCE it to the Edge geometry (warm start,
+  # Wan2.2 VAE reused).  false: random-init the Edge DiT from scratch (standalone
+  # tokenizer, no Wan2.2 VAE) -- only do this if you intend to train the 4B
+  # backbone end-to-end from zero.
+  pretrained: true
+  dtype: bf16
+  freeze_vae_encoder: true
+  # The reduced backbone is a perturbed (truncated) warm start, not a clean
+  # pretrained checkpoint, so it benefits from training sooner than Nano's
+  # 5-epoch freeze.  Keep a short head-warmup freeze, then thaw; lower to 0 to
+  # train the DiT from epoch 0.
+  freeze_dit_backbone: 3
+  freeze_vae_decoder: true
+  # 4B is ~8x smaller than 16B; gradient checkpointing is still ON because the
+  # latent_patch_size 2->1 repatch grows the DiT sequence length ~4x (the
+  # tightest memory point).  Turn off to allow torch.compile if it fits.
+  gradient_checkpointing: true
+  vae_input_pm1: true
+
+optimizer:
+  lr: 0.0002
+  weight_decay: 0.0001
+  betas: [0.9, 0.99]
+  scheduler:
+    type: cosine_warmup
+    T_max: 101
+    eta_min: 6.0e-05
+    warmup_epochs: 5
+  dit_backbone_lr: 1.0e-04
+
+# Joint3DReconSegLoss: branch weights + the inner segmentation (AffinityFGLoss)
+# config.  ``weight_raw`` of the inner loss is forced to 0 -- the EM
+# reconstruction term is owned by the joint loss (``weight_rec``) so it can
+# target the clean EM and skip / switch grids per branch.
+loss:
+  type: joint3d
+  recon_loss: l1
+  weight_rec: 1.0
+  weight_seg: 1.0
+  # Per-branch multipliers (independent of draw frequency).
+  weight_ssl: 10. # 1.0
+  weight_sft: 1.0
+  seg:
+    ignore_index: -100
+    background: -1
+    n_pull: 5
+    offsets:
+    - [-1, 0, 0]
+    - [0, -1, 0]
+    - [0, 0, -1]
+    - [0, -1, -1]
+    - [0, 1, -1]
+    - [-2, 0, 0]
+    - [-3, 0, 0]
+    - [-4, 0, 0]
+    - [-5, 0, 0]
+    - [-8, 0, 0]
+    - [0, -2, 0]
+    - [0, 0, -2]
+    - [0, -4, 0]
+    - [0, 0, -4]
+    - [0, -8, 0]
+    - [0, 0, -8]
+    - [0, -16, 0]
+    - [0, 0, -16]
+    - [0, -32, 0]
+    - [0, 0, -32]
+    - [0, -2, -2]
+    - [0, 2, -2]
+    - [0, -4, -4]
+    - [0, 4, -4]
+    - [0, -8, -8]
+    - [0, 8, -8]
+    - [0, -16, -16]
+    - [0, 16, -16]
+    - [0, -32, -32]
+    - [0, 32, -32]
+    weight_aff:
+      weight: 1.0
+      lambda_bce: 1.0
+      lambda_dice: 1.0
+      lambda_focal: 1.0
+      gamma: 3.0
+      pull_weight: 1.0
+      push_weight: 3.0
+      mask_to_foreground: true
+      class_balance: auto
+      class_balance_clip: 10.0
+      dice_two_sided: true
+    weight_sem:
+      weight: 1.0
+      lambda_bce: 1.0
+      lambda_dice: 1.0
+      lambda_focal: 1.0
+      gamma: 3.0
+      class_balance: auto
+      class_balance_clip: 10.0
+      dice_two_sided: true
+
+training:
+  mutex_watershed:
+    strides: [1, 1, 1]
+    size_filter: 50
+    backend: auto
+    buckets: 16
+    max_push_edges: null
+    gate_with_sem: true
+    sem_gate_threshold: 0.5
+    grow_boundaries: true
+    grow_max_distance: 4.0
+  max_epochs: 101
+  accelerator: auto
+  devices: auto
+  strategy: ddp
+  # Joint datamodule uses a custom round-robin batch_sampler -> Lightning
+  # cannot auto-inject a DistributedSampler; the sampler + random per-item
+  # patch sampling handle per-rank data spread instead.
+  use_distributed_sampler: false
+  precision: bf16-true
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  limit_train_batches: 1000
+  limit_val_batches: 200
+  check_val_every_n_epoch: 20
+  num_sanity_val_steps: 2
+  log_every_n_steps: 100
+  enable_progress_bar: true
+  enable_model_summary: true
+  deterministic: false
+  benchmark: true
+  compile: false
+  compile_fullgraph: false
+  fast_dev_run: false
+  profiler: null
+  resume_from_checkpoint: null
+
+callbacks:
+  checkpoint:
+    enabled: true
+    dirpath: null
+    filename: '{epoch:02d}-{val/automatic/loss:.4f}'
+    save_top_k: 3
+    monitor: val/automatic/loss
+    mode: min
+    save_last: true
+    verbose: true
+  early_stopping:
+    enabled: false
+  lr_monitor:
+    enabled: true
+  image_logger:
+    enabled: true
+    every_n_epochs: 1
+    max_images: 8
+  cuda_empty_cache_before_val: true
+  memory_logger:
+    enabled: true
+    log_every_n_steps: null
+
+output_dir: outputs

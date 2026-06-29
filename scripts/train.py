@@ -304,26 +304,38 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
 def build_module(cfg: DictConfig) -> pl.LightningModule:
     """Instantiate the Lightning module selected by ``cfg.model.type``."""
     from nanocosmos.modules import (
+        Cosmos3EdgeModule,
         Cosmos3Nano3DModule,
+        Cosmos3SuperModule,
         CosmosPredict3DModule,
         CosmosTransfer3DModule,
         Joint3DModule,
+        JointEdge3DModule,
         JointPredict3DModule,
+        JointSuper3DModule,
         Vista3DModule,
     )
 
     module_classes = {
         "vista3d": Vista3DModule,
+        "cosmos3edge3d": Cosmos3EdgeModule,
         "cosmos3nano3d": Cosmos3Nano3DModule,
+        "cosmos3super3d": Cosmos3SuperModule,
         "cosmostransfer3d": CosmosTransfer3DModule,
         "cosmospredict3d": CosmosPredict3DModule,
         # The joint reconstruction + segmentation recipe.  ``joint3d`` uses the
-        # Cosmos-3 Nano (16B) backbone; ``joint3d_2b`` uses the Cosmos-Predict
-        # 2.5 (2B) backbone -- same loss / datamodule.  See doc/JOINT_TRAINING.md.
+        # Cosmos-3 Nano (16B) backbone; ``joint3d_edge`` the Cosmos3-Edge (4B,
+        # reduced-from-Nano) backbone; ``joint3d_super`` the Cosmos3-Super (64B)
+        # backbone; ``joint3d_2b`` the Cosmos-Predict 2.5 (2B) backbone -- all
+        # share the same loss / datamodule.  See doc/JOINT_TRAINING.md.
         "joint3d": Joint3DModule,
+        "joint3d_edge": JointEdge3DModule,
+        "joint3d_super": JointSuper3DModule,
         "joint3d_2b": JointPredict3DModule,
         # Legacy / verbose aliases.
         "cosmos3_nano_3d": Cosmos3Nano3DModule,
+        "cosmos3_edge_3d": Cosmos3EdgeModule,
+        "cosmos3_super_3d": Cosmos3SuperModule,
         "cosmos_transfer25_3d": CosmosTransfer3DModule,
         "cosmos_predict25_3d": CosmosPredict3DModule,
         "joint_predict3d": JointPredict3DModule,

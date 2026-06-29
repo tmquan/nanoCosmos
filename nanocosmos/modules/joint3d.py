@@ -33,6 +33,8 @@ import torch
 from einops import rearrange
 
 from nanocosmos.losses import SSL, Joint3DReconSegLoss
+from nanocosmos.models.cosmos_3_edge import Cosmos3EdgeWrapper
+from nanocosmos.models.cosmos_3_super import Cosmos3SuperWrapper
 from nanocosmos.models.cosmos_predict_2_5 import CosmosPredict3DWrapper
 from nanocosmos.modules.cosmos_3_nano.module import Cosmos3Nano3DModule
 
@@ -146,4 +148,29 @@ class JointPredict3DModule(Joint3DModule):
     _model_cls = CosmosPredict3DWrapper
 
 
-__all__ = ["Joint3DModule", "JointPredict3DModule"]
+class JointEdge3DModule(Joint3DModule):
+    """Cosmos3-**Edge** (4B) backbone trained with the joint recon + seg loss.
+
+    Identical recipe to :class:`Joint3DModule` (the Nano joint module); the only
+    difference is the backbone -- the 4B Cosmos3-Edge omni transformer, which is
+    warm-started by reducing the released Nano checkpoint (see
+    :class:`~nanocosmos.models.cosmos_3_edge.Cosmos3EdgeWrapper`) or random-init
+    when ``model.pretrained=false``.  Edge shares Nano's Wan2.2 VAE (16x spatial
+    / 4x temporal), so the data / loss / pooling recipe is unchanged.
+    """
+
+    _model_cls = Cosmos3EdgeWrapper
+
+
+class JointSuper3DModule(Joint3DModule):
+    """Cosmos3-**Super** (64B) backbone trained with the joint recon + seg loss."""
+
+    _model_cls = Cosmos3SuperWrapper
+
+
+__all__ = [
+    "Joint3DModule",
+    "JointPredict3DModule",
+    "JointEdge3DModule",
+    "JointSuper3DModule",
+]
