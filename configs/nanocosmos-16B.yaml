@@ -582,6 +582,7 @@ training:
   deterministic: false
   benchmark: true
   compile: false
+  compile_fullgraph: false
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null

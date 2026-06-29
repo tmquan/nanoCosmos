@@ -48,7 +48,7 @@ data:
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 400 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos-Predict 2.5 Wan VAE compresses 4x in z, 8x in
-  # xy, so the DiT token grid is (50, 32, 32) = 51,400 tokens (~4x the 16B's 16x-xy
+  # xy, so the DiT token grid is (50, 32, 32) = 51,256 tokens (~4x the 16B's 16x-xy
   # grid).  The 2B backbone is ~8x smaller in params; drop the patch
   # (e.g. 160x256x256) if it OOMs.
   patch_size: [400, 256, 256]
@@ -96,7 +96,7 @@ data:
   branches:
     ssl:
       task: ssl
-      batch_size: 4
+      batch_size: 2
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
       # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
@@ -299,7 +299,7 @@ data:
         native_resolution: [30, 8, 8]
     sft:
       task: sft
-      batch_size: 4
+      batch_size: 2
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
       # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
@@ -367,7 +367,7 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
 
-  val_batch_size: 4
+  val_batch_size: 2
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
   # SNEMI3D AC4 (labeled holdout).
@@ -475,7 +475,7 @@ model:
   # MUST be true: at the epoch-5 DiT thaw the unfrozen 2B backbone adds full
   # activations + grads + AdamW state; without checkpointing this OOMs (and it
   # is incompatible with torch.compile, so compile below is off).
-  gradient_checkpointing: true
+  gradient_checkpointing: false
   vae_input_pm1: true
 
 optimizer:
@@ -596,7 +596,8 @@ training:
   benchmark: true
   # Off: incompatible with gradient_checkpointing (dynamo can't trace the
   # torch.utils.checkpoint HOP), and reduce-overhead cudagraphs fragment memory.
-  compile: false
+  compile: true
+  compile_fullgraph: true
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null
