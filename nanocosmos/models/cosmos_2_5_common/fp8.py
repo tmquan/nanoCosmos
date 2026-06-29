@@ -23,7 +23,19 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 # Substrings (matched against the module's FQN relative to the DiT) that keep a
-# Linear in BF16: embeddings, norms, latent in/out projections, task heads.
+# Linear in BF16.  Two categories:
+#
+# 1. Numerically delicate / small: embeddings, norms, latent in/out
+#    projections, timestep MLPs, task / vocab heads.
+# 2. Joint-attention CONDITIONING stream (MMDiT ``add_*`` / ``to_add_out`` /
+#    ``context_*``): this model drives only the generator (video/latent) tower
+#    and feeds NULL conditioning, so the conditioning stream carries ~1 token.
+#    FP8 ``_scaled_mm`` requires every GEMM dim (including the dynamic token
+#    dim) to be divisible by 16, so a 1-token stream fails
+#    ("trailing dimension ... divisible by 16 but got ... (Nx1)").  These
+#    projections are tiny anyway -- FP8 buys nothing there -- so keep them BF16.
+#    The big token-parallel ``self_attn.to_{q,k,v,out}`` + MLP linears (N =
+#    batch * latent_tokens, 16-aligned) stay in FP8.
 _FP8_EXCLUDE_SUBSTRINGS = (
     "embed",        # x_embedder / t_embedder / pos_embed / patch_embed ...
     "proj_in",
@@ -34,6 +46,13 @@ _FP8_EXCLUDE_SUBSTRINGS = (
     "final",
     "lm_head",
     "time",         # timestep / time_embedder MLPs
+    # MMDiT conditioning-stream projections (small / 1-token -> not 16-aligned).
+    "add_q",
+    "add_k",
+    "add_v",
+    "add_out",
+    "to_add_out",
+    "context",
 )
 
 
