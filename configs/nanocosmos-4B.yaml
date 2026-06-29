@@ -482,7 +482,7 @@ model:
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64
-  dropout: 0.0
+  dropout: 0.5
   # true: download Cosmos3-Nano and REDUCE it to the Edge geometry (warm start,
   # Wan2.2 VAE reused).  false: random-init the Edge DiT from scratch (standalone
   # tokenizer, no Wan2.2 VAE) -- only do this if you intend to train the 4B
