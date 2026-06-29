@@ -63,6 +63,13 @@ def _default_filter(module: nn.Module, fqn: str) -> bool:
     name = fqn.lower()
     if any(s in name for s in _FP8_EXCLUDE_SUBSTRINGS):
         return False
+    # Mixture-of-Transformers: each modality has its own MLP.  We drive only the
+    # generator (video) tower, so the reasoner-tower MLP (``.mlp.``) runs on the
+    # ~1-token null-conditioning stream and is NOT 16-aligned; only the
+    # generator MLP (``.mlp_moe_gen.``) is token-parallel.  Match ``.mlp.``
+    # exactly so ``.mlp_moe_gen.`` is preserved.
+    if ".mlp." in name and "moe_gen" not in name:
+        return False
     # FP8 tensor cores require the contraction/output dims to be 16-aligned.
     if (module.in_features % 16 != 0) or (module.out_features % 16 != 0):
         return False
