@@ -597,8 +597,8 @@ training:
   benchmark: true
   # Off: incompatible with gradient_checkpointing (dynamo can't trace the
   # torch.utils.checkpoint HOP), and reduce-overhead cudagraphs fragment memory.
-  compile: false 
-  compile_fullgraph: false 
+  compile: true 
+  compile_fullgraph: true 
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null
