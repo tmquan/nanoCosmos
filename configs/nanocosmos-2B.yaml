@@ -466,7 +466,7 @@ model:
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64
-  dropout: 0.5                 # matches the 16B recipe (was 0.5, an overfit-debug value)
+  dropout: 0.0                 # matches the 16B recipe (was 0.5, an overfit-debug value)
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
