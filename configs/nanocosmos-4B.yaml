@@ -503,9 +503,14 @@ model:
   vae_input_pm1: true
 
 optimizer:
-  lr: 0.0002
-  weight_decay: 0.0001
-  betas: [0.9, 0.99]
+  lr: 0.0002                # Cosmos 3 generator SFT base LR (2e-4)
+  # Cosmos 3 generator SFT uses NO weight decay (the framework recipe default
+  # is 0.0); aligned here from the historical 1e-4.
+  weight_decay: 0.0
+  betas: [0.9, 0.99]        # Cosmos 3 generator recipe (beta2=0.99)
+  # bf16 AdamW epsilon: the Cosmos 3 framework recipe prefers 1e-6 over the
+  # PyTorch 1e-8 default to avoid underflow in the squared-gradient denominator.
+  eps: 1.0e-06
   scheduler:
     type: cosine_warmup
     T_max: 101
