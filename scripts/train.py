@@ -279,7 +279,10 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             find_boundaries=float(d.get("find_boundaries", 0.0)),
             boundary_target=str(d.get("boundary_target", "semantic")),
             balance=str(d.get("balance", "resolution")),
-            subset_weights=OmegaConf.to_container(d.get("subset_weights", {}), resolve=True) or {},
+            subset_weights=(
+                OmegaConf.to_container(d.get("subset_weights"), resolve=True)
+                if d.get("subset_weights") is not None else {}
+            ),
             seed=int(cfg.get("seed", 0)),
         )
 
