@@ -2,8 +2,8 @@
 Cosmos 2.5 Lightning-module base for 3-D volumetric segmentation.
 
 Specialisation of :class:`~nanocosmos.modules.base.BaseCircuitModule`
-shared by every Cosmos 2.5 backbone (Predict, Transfer, ...).  The
-base ``BaseCircuitModule`` owns training, evaluation and logging;
+for the Cosmos 2.5 backbone (Cosmos-Predict).  The base
+``BaseCircuitModule`` owns training, evaluation and logging;
 this module adds:
 
 * HuggingFace token handling (kept out of ``save_hyperparameters``)
@@ -14,19 +14,16 @@ this module adds:
   via :func:`torch._foreach_norm` rather than one per parameter --
   see :meth:`BaseCosmosModule.configure_gradient_clipping`)
 * backbone-specific AdamW learning rate and param-group split
-  (backbone vs ControlNet vs heads) in
-  :meth:`configure_optimizers` -- the ``model.controlnet.*`` group
-  is naturally empty for backbones without a ControlNet branch
-  (e.g. Cosmos-Predict) and is filtered out before AdamW sees it.
+  (``model.dit.*`` at ``dit_backbone_lr`` vs everything else at ``lr``)
+  in :meth:`configure_optimizers`; empty groups are filtered out
+  before AdamW sees them.
 
 Only the **automatic** training mode is supported (predict from the
 volume alone).  Point-prompt / proofread training is a Vista-only path.
 
-Subclasses with architecture-specific model kwargs (e.g.
-Cosmos-Transfer's ``controlnet_revision`` / ``freeze_controlnet``)
-override :meth:`_extra_model_kwargs` to add them; the base
-``_build_model`` only forwards the kwargs the shared
-``_BaseCosmos25Wrapper`` accepts.
+Subclasses with architecture-specific model kwargs override
+:meth:`_extra_model_kwargs` to add them; the base ``_build_model`` only
+forwards the kwargs the shared ``_BaseCosmos25Wrapper`` accepts.
 """
 
 import logging
@@ -143,9 +140,8 @@ class BaseCosmosModule(BaseCircuitModule):
     ) -> Dict[str, Any]:
         """Subclass hook: forward arch-specific kwargs to ``_model_cls``.
 
-        Cosmos-Transfer overrides this to add ``controlnet_revision``
-        and ``freeze_controlnet``; Cosmos-Predict has no extras and
-        inherits the empty-dict default.
+        Cosmos-Predict has no extras and inherits the empty-dict default;
+        a future backbone with extra constructor kwargs would override this.
         """
         return {}
 
