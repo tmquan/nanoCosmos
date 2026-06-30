@@ -444,6 +444,34 @@ class LazyVolDataset(Dataset):
         vmin, vmax = params
         return (vmax - vmin) if vmax > vmin else 1.0
 
+    @staticmethod
+    def _content_fraction(
+        img01: np.ndarray, std_thr: float, block: Tuple[int, int, int] = (4, 16, 16),
+    ) -> float:
+        """Fraction of local blocks whose intensity std exceeds ``std_thr``.
+
+        ``img01`` is the crop normalised to [0, 1].  The crop is tiled into
+        ``block``-sized (z, y, x) bricks; a brick counts as "content" when its
+        std clears ``std_thr``.  This localises the contrast test so a crop that
+        is mostly flat (resin / empty embedding) scores low even if one corner
+        is textured.  Falls back to a single global-std test when the crop is
+        smaller than one block on any axis.
+        """
+        if img01.ndim > 3:                       # drop a leading channel dim
+            img01 = img01.reshape(img01.shape[-3:])
+        z, y, x = img01.shape[-3:]
+        bz, by, bx = min(block[0], z), min(block[1], y), min(block[2], x)
+        z2, y2, x2 = z - (z % bz), y - (y % by), x - (x % bx)
+        if z2 == 0 or y2 == 0 or x2 == 0:
+            return float(img01.std() >= std_thr)
+        bricks = (
+            img01[:z2, :y2, :x2]
+            .reshape(z2 // bz, bz, y2 // by, by, x2 // bx, bx)
+            .transpose(0, 2, 4, 1, 3, 5)
+            .reshape(-1, bz * by * bx)
+        )
+        return float(np.mean(bricks.std(axis=1) >= std_thr))
+
     def __len__(self) -> int:
         return self.num_samples
 
@@ -525,28 +553,32 @@ class LazyVolDataset(Dataset):
                   and image_frac >= self.image_min_foreground)
             return ok, label, image, min(label_frac, image_frac)
 
-        # Label-less volume: optional image-nonzero gate (rejects empty
-        # crops) AND/OR a contrast gate (rejects flat, structureless resin).
+        # Label-less volume: optional image gate.
         if self.image_min_foreground <= 0 and self.image_min_std <= 0:
             return True, None, None, 1.0
         image = _read_patch(
             handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
         )
-        ok = True
-        # Best-seen score: when the contrast gate is active rank by std
-        # (so the fallback keeps the most-textured crop), else by non-zero
-        # fraction.  Both are measured on the normalised [0, 1] scale.
-        score = 1.0
-        if self.image_min_foreground > 0:
-            nz_frac = float(np.count_nonzero(image)) / image.size
-            ok = ok and nz_frac >= self.image_min_foreground
-            score = nz_frac
         if self.image_min_std > 0:
+            # Local content-fraction gate.  A GLOBAL std (or non-zero) test
+            # passes a crop that is mostly flat resin/empty as long as some
+            # region is textured -- exactly the "half-empty" crops we want to
+            # reject.  Instead, split the crop into small blocks, mark each
+            # block as content when its local std (on the per-volume [0, 1]
+            # scale) exceeds ``image_min_std``, and require the content
+            # fraction to clear ``image_min_foreground`` (default 0.5 if the
+            # non-zero fraction gate is disabled).  Best-seen = highest
+            # content fraction.
+            params = self._norm_params.get(handle.name)
+            vmin = params[0] if params else float(image.min())
             scale = self._norm_scale(handle)
-            std_norm = float(image.std()) / scale
-            ok = ok and std_norm >= self.image_min_std
-            score = std_norm
-        return ok, None, image, score
+            img01 = np.clip((image - vmin) / scale, 0.0, 1.0)
+            content_frac = self._content_fraction(img01, self.image_min_std)
+            required = self.image_min_foreground if self.image_min_foreground > 0 else 0.5
+            return content_frac >= required, None, image, content_frac
+        # Contrast gate disabled: plain non-zero fraction gate (legacy).
+        nz_frac = float(np.count_nonzero(image)) / image.size
+        return nz_frac >= self.image_min_foreground, None, image, nz_frac
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
         seed = index if self.deterministic else index + int(torch.randint(0, 2**31, (1,)).item())

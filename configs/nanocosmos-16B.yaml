@@ -127,24 +127,9 @@ data:
       - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x0_y0_z0_volume
-        root: data/COSEM3D
-        native_resolution: [3.36, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x0_y0_z8192_volume
-        root: data/COSEM3D
-        native_resolution: [3.36, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z0_volume
-        root: data/COSEM3D
-        native_resolution: [3.36, 4, 4]
       - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
         root: data/COSEM3D
         native_resolution: [3.36, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z0_volume
-        root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z6512_volume
-        root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
       - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.44, 4, 4]
@@ -154,12 +139,6 @@ data:
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
       # 4 train crops per source (1 more held out per source in val_volumes);
       # all verified non-empty (empty corner tiles dropped).
-      - vol: flyem3d_8nm_ssl_x1024_y4096_z4096_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
-      - vol: flyem3d_8nm_ssl_x4096_y1024_z4096_volume
-        root: data/FLYEM3D
-        native_resolution: [8, 8, 8]
       - vol: flyem3d_8nm_ssl_x2700_y2700_z3500_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
@@ -220,13 +199,7 @@ data:
       - vol: mitoem2_beta_train04_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_jurkat_train01_volume
-        root: data/MitoEM2
-        native_resolution: [16, 16, 16]
       - vol: mitoem2_jurkat_train02_volume
-        root: data/MitoEM2
-        native_resolution: [16, 16, 16]
-      - vol: mitoem2_macro_train01_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
       - vol: mitoem2_macro_train02_volume
@@ -429,23 +402,7 @@ data:
     task: sft
     native_resolution: [40, 8, 8]
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
-  - vol: mitoem2_beta_test01_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [16, 16, 16]
   - vol: mitoem2_beta_test02_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [16, 16, 16]
-  - vol: mitoem2_beta_test03_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [16, 16, 16]
-  - vol: mitoem2_jurkat_test01_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [16, 16, 16]
-  - vol: mitoem2_macro_test01_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]

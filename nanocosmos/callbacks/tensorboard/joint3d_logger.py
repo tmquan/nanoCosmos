@@ -11,6 +11,7 @@ task-namespaced tag ``{stage}/{mode}/{task}/...``:
       {stage}/automatic/{ssl,sft}/pred/recon         raw-head small-voxel recon
       {stage}/automatic/ssl/true/recon_target        clean EM target (recon_image)
       # ssl only: on sft recon_target is a clone of true/image, so it is skipped
+      {stage}/automatic/{ssl,sft}/volume             text: source volume name(s)
 
 * **sft only** -- the fine head is pooled to the native label grid (matching
   the loss) and the usual segmentation panels are emitted::
@@ -135,6 +136,20 @@ class Joint3DImageLogger(ImageLogger):
         # ssl and sft renders coexist in TensorBoard instead of overwriting.
         ctx = TagContext(stage=stage, mode=self.mode, head=task)
         epoch = pl_module.current_epoch
+
+        # Record which source volume(s) the panels came from, so a black/odd
+        # panel can be traced to a specific volume.  TensorBoard image cards
+        # can't carry dynamic titles, so this logs a sibling text card under
+        # the same task namespace (``{stage}/{mode}/{task}/volume``).
+        vols = batch.get("volume")
+        if vols is not None:
+            if isinstance(vols, str):
+                vols = [vols]
+            shown = [str(v) for v in list(vols)[:n]]
+            # De-duplicate while preserving order (volume-balance mode draws a
+            # batch from one volume; resolution/subset mode may mix several).
+            uniq = list(dict.fromkeys(shown))
+            tb.add_text(ctx.tag("volume"), ", ".join(uniq), global_step=epoch)
 
         # All panels are upsampled to the FINEST in-plane size (the fine network
         # grid, e.g. 256x256) so every TB image -- including the SFT seg panels

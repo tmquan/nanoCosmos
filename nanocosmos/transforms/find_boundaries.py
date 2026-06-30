@@ -161,6 +161,12 @@ class FindBoundariesd(MapTransform, Randomizable):
     target ``(label > 0)``.  This teaches the semantic head to predict
     thin gaps between touching instances, aiding instance separation.
 
+    **No-full-erase guard** — erosion only opens gaps *between* instances;
+    any instance that the boundary pass would remove **entirely** (e.g. a
+    thin-along-z sheet under full-3D detection on isotropic volumes such as
+    FIB-25 8 nm) is restored, so it never silently becomes false background
+    in the semantic target.
+
     The keyed array is the only thing modified, so the caller controls
     scope: applying this to ``label`` erodes everything derived from it
     (sem + affinity targets), while applying it to a dedicated
@@ -237,7 +243,16 @@ class FindBoundariesd(MapTransform, Randomizable):
         return d
 
     def _process_volume(self, vol: np.ndarray) -> np.ndarray:
-        """Detect boundaries and zero them for a single spatial volume."""
+        """Detect boundaries and zero them for a single spatial volume.
+
+        Guards against *fully erasing* an instance: the goal of the erosion is
+        to open thin gaps **between** touching instances, not to delete them.
+        A structure that is thin along an eroded axis (e.g. a ~1-2 voxel-thick
+        neurite sheet under full-3D detection on isotropic volumes) would have
+        *every* voxel flagged as boundary and disappear from the target.  Any
+        component that the boundary pass would remove entirely is restored, so
+        it stays in the semantic target instead of becoming false background.
+        """
         if self._xy_only and vol.ndim == 3:
             boundaries = _find_boundaries_xy(
                 vol, mode=self.mode, connectivity=self.connectivity,
@@ -248,5 +263,16 @@ class FindBoundariesd(MapTransform, Randomizable):
             )
             boundaries = bnd if isinstance(bnd, np.ndarray) else np.asarray(bnd)
 
-        vol[boundaries] = 0
-        return vol
+        eroded = vol.copy()
+        eroded[boundaries] = 0
+
+        # Restore any instance that erosion removed completely.
+        present = np.unique(vol)
+        present = present[present != 0]
+        if present.size:
+            lost = present[~np.isin(present, np.unique(eroded))]
+            if lost.size:
+                keep = np.isin(vol, lost)
+                eroded[keep] = vol[keep]
+
+        return eroded
