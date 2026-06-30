@@ -145,10 +145,10 @@ and the loss targets.  No learnable state.
 
 #### `models/cosmos_2_5_common/` — shared scaffolding for the Cosmos 2.5 family
 
-Both Cosmos-Transfer 2.5 and Cosmos-Predict 2.5 share the same
-underlying base DiT, Wan VAE, feature-extraction hooks, decoder
-adapter, freeze plumbing and HF auto-pull path.  Those live here so
-each backbone-specific package only owns its true delta.
+The Cosmos 2.5 wrappers share the same underlying base DiT, Wan VAE,
+feature-extraction hooks, decoder adapter, freeze plumbing and HF
+auto-pull path.  Those live here so each backbone-specific package only
+owns its true delta.
 
 | File                  | Purpose                                                               |
 | --------------------- | --------------------------------------------------------------------- |
@@ -159,19 +159,6 @@ each backbone-specific package only owns its true delta.
 | `decoder.py`          | `_FeatureProjector3D` / `_DecoderAdapter3D` (VAE decoder + affinity + sem + raw head). |
 | `standalone_dit.py`   | Random-init `_StandaloneDiT3D` fallback for `pretrained=False`.       |
 | `hf_loader.py`        | Rank-aware HF snapshot download (ignores `text_encoder/*`).           |
-
-#### `models/cosmos_transfer_2_5/` — Cosmos-Transfer 2.5 3-D wrapper
-
-The Transfer-specific delta on top of `cosmos_2_5_common`: the
-ControlNet residual branch (`CosmosControlNetModel`) loaded from a
-sibling HF revision and summed into the base DiT every
-`controlnet_block_every_n` blocks.
-
-| File                  | Purpose                                                               |
-| --------------------- | --------------------------------------------------------------------- |
-| `__init__.py`         | Re-exports `CosmosTransfer3DWrapper`.                                 |
-| `wrapper.py`          | `CosmosTransfer3DWrapper` — adds ControlNet load / freeze / forward.  |
-| `variants.py`         | `_VariantConfig(_VariantConfigBase)` adding `hf_revision_controlnet`. |
 
 #### `models/cosmos_predict_2_5/` — Cosmos-Predict 2.5 3-D wrapper
 
@@ -204,9 +191,7 @@ concrete `module.py`.
 | Path                                  | Purpose                                                      |
 | ------------------------------------- | ------------------------------------------------------------ |
 | `modules/base.py`                       | `BaseCircuitModule` — loop + head-oriented scalar logging. |
-| `modules/cosmos_2_5_common/base.py`     | `BaseCosmosModule` — freeze schedule + optim param-group split (shared by Predict and Transfer). |
-| `modules/cosmos_transfer_2_5/base.py`   | Back-compat re-export of `BaseCosmosModule`.               |
-| `modules/cosmos_transfer_2_5/module.py` | `CosmosTransfer3DModule` — concrete Lightning class.       |
+| `modules/cosmos_2_5_common/base.py`     | `BaseCosmosModule` — freeze schedule + optim param-group split. |
 | `modules/cosmos_predict_2_5/module.py`  | `CosmosPredict3DModule` — concrete Lightning class.        |
 | `modules/vista/base.py`                 | `BaseVistaModule` — Vista-specific freeze schedule.        |
 | `modules/vista/module.py`               | `Vista3DModule` — concrete Lightning class.                |
@@ -267,14 +252,13 @@ concrete `module.py`.
 | --------------------------------------- | ---------- |
 | `nanocosmos/transforms/`                  |  7 (incl. `__init__`)                                |
 | `nanocosmos/models/cosmos_2_5_common/`    |  7 (incl. `__init__`)                                |
-| `nanocosmos/models/cosmos_transfer_2_5/`  |  3 (`__init__`, `wrapper`, `variants`)               |
 | `nanocosmos/models/cosmos_predict_2_5/`   |  3 (`__init__`, `wrapper`, `variants`)               |
 | `nanocosmos/models/vista/`                |  4 (incl. `__init__`)                                |
 | `nanocosmos/callbacks/tensorboard/`       |  6 (incl. `__init__`)                                |
 | `nanocosmos/losses/`                      |  4 (`__init__`, `_common`, `affinity`, `dice_bce_focal`) |
 | `nanocosmos/datamodules/` + `datasets/`   |  5 + 7 (datasets incl. `lazy.py`, `_patches.py`)     |
 | `nanocosmos/preprocessors/`               |  6 (incl. `__init__`, `base`)                        |
-| `nanocosmos/modules/`                     |  2 (top-level) + per-arch packages (`cosmos_2_5_common`, `cosmos_transfer_2_5`, `cosmos_predict_2_5`, `cosmos_3_nano`, `vista`) |
+| `nanocosmos/modules/`                     |  2 (top-level) + per-arch packages (`cosmos_2_5_common`, `cosmos_predict_2_5`, `cosmos_3_nano`, `vista`) |
 | `nanocosmos/metrics/`                     |  3                                                   |
 | `nanocosmos/inference/`                   |  3                                                   |
 | `nanocosmos/utils/`                       |  4 (incl. `__init__`)                                |

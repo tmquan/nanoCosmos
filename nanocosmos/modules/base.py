@@ -2,7 +2,7 @@
 Base Lightning module shared by every Nanocosmos training recipe.
 
 All modules in :mod:`nanocosmos.modules` (``CosmosPredict3DModule``,
-``Cosmos3Nano3DModule``, ``CosmosTransfer3DModule``, ``Vista3DModule``)
+``Cosmos3Nano3DModule``, ``Vista3DModule``)
 run the same training / evaluation loop:
 
 * forward the volume through the wrapper (``self.model``)
@@ -411,7 +411,12 @@ class BaseCircuitModule(pl.LightningModule):
         # Exclude ignored voxels (matching how the loss masks them) so the
         # metric agrees with the training objective.  ``sem_gt`` carries the
         # ignore sentinel at masked voxels so the MONAI metrics drop them.
-        ignore_index = int(getattr(self.criterion, "ignore_index", -100))
+        # The ignore value lives on the segmentation sub-loss (e.g.
+        # ``AffinityFGLoss``); for the joint recipe that is ``criterion.seg``,
+        # so check the inner loss first before the criterion itself.
+        _seg_crit = getattr(self.criterion, "seg", self.criterion)
+        ignore_index = int(getattr(_seg_crit, "ignore_index",
+                                   getattr(self.criterion, "ignore_index", -100)))
         valid = sem_source != ignore_index
         sem_gt = (sem_source > 0).long()
         sem_gt = torch.where(valid, sem_gt, torch.full_like(sem_gt, ignore_index))

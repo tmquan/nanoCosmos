@@ -34,7 +34,6 @@ class CosmosPredict3DWrapper(_BaseCosmos25Wrapper):
         head_channels: Unified head width (default HEAD_CHANNELS = N_AFF + 2).
         feature_size: Internal feature map channel count after projection.
         variant: ``"2B"`` or ``"14B"`` model variant.
-        checkpoint_variant: HuggingFace revision string.
         dtype: Weight dtype (``"bf16"``, ``"fp16"``, ``"fp32"``).
         pretrained: Auto-pull the variant's HuggingFace checkpoint
             (``nvidia/Cosmos-Predict2.5-2B``) on first instantiation.

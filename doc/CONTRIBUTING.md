@@ -211,17 +211,16 @@ nanocosmos/modules/<arch>/base.py           # arch-specific concerns
 nanocosmos/modules/<arch>/module.py         # concrete Lightning class
 ```
 
-> **If the new backbone is a thin variant of an existing one** (e.g.
-> Cosmos-Predict 2.5 vs. Cosmos-Transfer 2.5, which share the base DiT
-> + Wan VAE and only differ in whether a ControlNet residual branch is
-> loaded on top), prefer factoring the shared scaffolding into a
+> **If the new backbone is a thin variant of an existing one** (e.g. a
+> sibling of Cosmos-Predict 2.5 that shares the same base DiT + Wan VAE
+> and only swaps the variant registry or adds an extension branch),
+> prefer factoring the shared scaffolding into a
 > `cosmos_<family>_common/` package and inheriting from it.  See
 > [`nanocosmos/models/cosmos_2_5_common/`](../nanocosmos/models/cosmos_2_5_common/)
 > and [`nanocosmos/modules/cosmos_2_5_common/`](../nanocosmos/modules/cosmos_2_5_common/)
 > for the canonical example: `_BaseCosmos25Wrapper` exposes
-> `_init_arch_state` / `_post_load_diffusers` /
-> `_compute_controlnet_residuals` extension hooks so each backbone-
-> specific package only owns its true delta.
+> `_init_arch_state` / `_post_load_diffusers` extension hooks so each
+> backbone-specific package only owns its true delta.
 
 ### 3.1 The wrapper class
 
@@ -234,7 +233,7 @@ nanocosmos/modules/<arch>/module.py         # concrete Lightning class
   the loss; sigmoid for metrics / MWS / TensorBoard).
 * If your backbone has frozen modules under DDP, follow Cosmos's
   approach: `requires_grad_(False)` + `.eval()` + `.detach()` on the
-  output of the frozen subgraph (see `cosmos_transfer_2_5/wrapper.py`).
+  output of the frozen subgraph (see `cosmos_2_5_common/wrapper_base.py`).
 
 ### 3.2 The Lightning module
 
@@ -268,7 +267,6 @@ class MyArchModule(BaseMyArchModule):
 ```python
 module_classes = {
     "vista3d": Vista3DModule,
-    "cosmostransfer3d": CosmosTransfer3DModule,
     "cosmospredict3d": CosmosPredict3DModule,
     "cosmos3nano3d": Cosmos3Nano3DModule,
     "myarch": MyArchModule,                    # <-- new

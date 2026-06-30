@@ -58,14 +58,20 @@ fetch** — we do **not** download whole volumes (Hemibrain/MaleCNS are
 peta-voxel; even FIB-25 is ~3.5e11 vox). Especially for SSL a handful of
 crops suffices. `Nx A×B×C` = N crops of that size. **USED_SIZE values below are
 a starting proposal — tune per compute/coverage.** The implemented volume
-lists live in `configs/nanocosmos-16B.yaml` / `configs/nanocosmos-2B.yaml`
-(SSL also includes **MitoEM2** and image-only CREMI+ tiles).
+lists live in `configs/nanocosmos-{16B,4B,2B}.yaml`; the authoritative per-subset
+census (counts, sizes, voxel totals, task/split) is **[`doc/data.csv`](./data.csv)**.
+SSL also includes **MitoEM2**, image-only **CREMI+**, and the label-less **AC3**.
+Several originally-listed COSEM/FIB-25/MitoEM tiles were **pruned** after the SSL
+content gate flagged them as mostly-empty — so the USED_SIZE counts below are
+upper-bound proposals; `data.csv` is current.
 
-> Two sft/ssl data knobs are documented in
+> The sft/ssl data knobs are documented in
 > [`JOINT_TRAINING.md`](./JOINT_TRAINING.md) §4.1–4.2: boundary-aware sem
 > supervision (`find_boundaries` / `boundary_target: semantic` → a separate
-> eroded `sem_label`) and the SSL image-foreground gate (`ssl_min_foreground`,
-> which rejects empty/zero-padded ssl crops).
+> eroded `sem_label`, with a no-full-erase guard so thin instances are never
+> deleted) and the SSL crop gates — `ssl_min_std` (the active **local
+> block-content** gate that rejects flat resin/empty crops) plus the legacy
+> `ssl_min_foreground` non-zero gate.
 
 | rank | volume | (z,y,x) nm | up z·xy | role | AVAIL_SIZE (x×y×z vox) | USED_SIZE (x×y×z vox) |
 | --- | --- | --- | --- | --- | --- | --- |

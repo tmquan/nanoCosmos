@@ -3,7 +3,7 @@
 A PyTorch Lightning infrastructure for **spatially-coloured (nanocosmos-style)
 instance segmentation** of 3-D connectomics volumes, adapted from the
 `neurons` research codebase and built on top of NVIDIA's
-Cosmos-Transfer2.5 video-diffusion backbone (DiT + VAE).
+Cosmos-Predict 2.5 / Cosmos 3 video-diffusion backbones (DiT + VAE).
 
 > **First time here?**  Start with [`doc/INDEX.md`](doc/INDEX.md), which
 > routes you to the right doc for the question you're asking.  TL;DR:
@@ -18,7 +18,7 @@ Cosmos-Transfer2.5 video-diffusion backbone (DiT + VAE).
 flowchart LR
     cli["python scripts/train.py<br/>--config-name snemi3d"] --> hydra["Hydra compose<br/>(default + snemi3d)"]
     hydra --> dm["LightningDataModule<br/>(LazyVolDataset + MONAI transforms)"]
-    hydra --> mod["LightningModule<br/>(Cosmos3Nano3D / CosmosPredict3D / CosmosTransfer3D / Vista3D)"]
+    hydra --> mod["LightningModule<br/>(Cosmos3Nano3D / CosmosPredict3D / Vista3D)"]
     hydra --> tr["Trainer<br/>(DDP, callbacks, logger)"]
     dm --> tr
     mod --> tr
@@ -29,15 +29,12 @@ flowchart LR
     wrap -.->|"eval"| mws["Mutex Watershed<br/>(instances)"]
 ```
 
-Four end-to-end backbones live under `nanocosmos/models/`:
+Three end-to-end backbones live under `nanocosmos/models/`:
 
 - **`Cosmos3Nano3DWrapper`** — Cosmos 3 (Nano) 16B omni transformer; the
   shipped default backbone for the `snemi3d` recipe.
-- **`CosmosPredict3DWrapper`** — Cosmos-Predict 2.5 (base DiT + Wan VAE,
-  no ControlNet); the flattened 2B baseline (`configs/cosmospredict3d.yaml`).
-- **`CosmosTransfer3DWrapper`** — Cosmos-Transfer 2.5 (base DiT +
-  ControlNet residual branch + Wan VAE); shares all scaffolding with
-  Predict via `nanocosmos/models/cosmos_2_5_common/`.
+- **`CosmosPredict3DWrapper`** — Cosmos-Predict 2.5 (base DiT + Wan VAE);
+  the flattened 2B baseline (`configs/cosmospredict3d.yaml`).
 - **`Vista3DWrapper`** — SegResNetDS2 for fast local iteration.
 
 All emit the same affinity + sem + raw head.  For the channel layout,

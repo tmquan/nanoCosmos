@@ -1,8 +1,7 @@
 """Rank-aware HuggingFace snapshot download for Cosmos 2.5 backbones.
 
-Shared between :mod:`nanocosmos.models.cosmos_transfer_2_5` and
-:mod:`nanocosmos.models.cosmos_predict_2_5`.  The function is generic
-over ``repo_id`` / ``revision`` so both packages call it the same way.
+Used by :mod:`nanocosmos.models.cosmos_predict_2_5`.  The function is
+generic over ``repo_id`` / ``revision``.
 """
 
 import logging

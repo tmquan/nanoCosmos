@@ -335,7 +335,7 @@ tables and aggregate offline.
 "FileNotFoundError" or "EntryNotFoundError" and the run aborts with
 mixed errors.
 
-**Where.** [`nanocosmos/models/cosmos_transfer_2_5/hf_loader.py`](../nanocosmos/models/cosmos_transfer_2_5/hf_loader.py)
+**Where.** [`nanocosmos/models/cosmos_2_5_common/hf_loader.py`](../nanocosmos/models/cosmos_2_5_common/hf_loader.py)
 (`_download_from_hf`) and the parallel
 [`nanocosmos/models/vista/hf_loader.py`](../nanocosmos/models/vista/hf_loader.py).
 
@@ -552,37 +552,45 @@ validation instance GT / fg-mask keep the **pristine** ``label``.
 **Contract.** When no ``sem_label`` is present (legacy / `both`), the
 loss and metric fall back to ``labels`` — byte-identical to before. The
 datamodule **produces** ``sem_label`` in its sft transform pipeline and
-passes it through the batch; ``scripts/train.py`` only forwards the config
-knobs ``find_boundaries`` / ``boundary_target`` (and ``ssl_min_foreground``)
-to the datamodule for the mechanism to take effect.
+passes it through the batch; ``scripts/train.py`` forwards the config knobs
+``find_boundaries`` / ``boundary_target`` / ``sft_min_foreground`` /
+``ssl_min_foreground`` / ``ssl_min_std`` / ``balance`` / ``subset_weights``
+to the datamodule for the mechanism to take effect.  Erosion includes a
+**no-full-erase guard** (entry #47 / `FindBoundariesd`): an instance that would
+be removed completely — e.g. a thin-along-z neurite on isotropic FIB-25 under
+full-3D boundary detection — is restored so it never becomes false background.
 
 **See also.** Entry #34 (per-volume vs global `find_boundaries`).
 
 ---
 
-## #47 — Black SSL panels / empty ssl crops? Gate on image foreground.
+## 47. Black / non-meaningful SSL crops? The non-zero gate isn't enough.
 
-**Symptom.** The joint recipe's `ssl/true/image` TensorBoard panel is
-sometimes fully black, and the SSL reconstruction loss wastes steps on
-empty patches.
+**Symptom.** The joint recipe's `ssl/true/image` (and clean `recon_target`)
+TensorBoard panel is sometimes fully black or just flat resin/noise, and the
+SSL reconstruction loss wastes steps on uninformative patches.
 
-**Cause.** Label-based `min_foreground` does nothing for `ssl` volumes —
-they have no labels (`LazyVolDataset` returns "pass" before any check),
-and the joint datamodule forces `min_foreground=0` for `ssl`. The empty
-crops come from zero-padding (e.g. MitoEM2 nnU-Net irregular crops padded
-to a box, empty COSEM/FLYEM regions).
+**Cause.** Label-based `min_foreground` does nothing for `ssl` volumes (no
+labels; the datamodule forces `min_foreground=0`). A plain **non-zero** gate
+also fails: EM background/resin is a non-zero mid-grey, so a flat or *half-empty*
+crop (e.g. a COSEM cell edge against resin) passes — and even a global-std test
+passes a crop where only one corner is textured.
 
-**Fix.** Set `data.ssl_min_foreground` (shipped value `0.8`). This is an
-**image** non-zero gate applied only to label-less volumes; crops below the
-threshold are re-sampled (best-seen kept after `max_foreground_retries`).
-Labeled `sft` volumes keep using `min_foreground`.
+**Fix.** `data.ssl_min_std` (shipped `0.05`) — a **local block-content** gate:
+the crop is normalised to `[0,1]`, tiled into `4×16×16` blocks, each block is
+"content" when its local std `>=` `ssl_min_std`, and the crop must have a
+content fraction `>=` `ssl_min_foreground` (`0.8`). Flat / half-empty crops are
+re-sampled (best-seen by content fraction). The legacy `ssl_min_foreground`
+non-zero gate is used alone only when `ssl_min_std == 0`. Volumes that are
+*mostly* empty should still be removed from the config (see `doc/data.csv`); use
+the volume-name TB text card (`{stage}/automatic/{task}/volume`) to identify them.
 
-**See also.** Entry #46 (boundary erosion) and the `boundary_target:
-semantic` sem-supervision contract above.
+**See also.** Entry #46 (boundary erosion + no-full-erase guard) and the
+`boundary_target: semantic` sem-supervision contract above.
 
 ---
 
-## 47. The Wan VAE is *causal* in z; `vae_symmetrize_z` makes it non-causal
+## 48. The Wan VAE is *causal* in z; `vae_symmetrize_z` makes it non-causal
 
 **Symptom.** The `true/wan_decoder` panel (or the learned features) show a
 faint **z-direction asymmetry** — e.g. a first-section boundary effect or
@@ -612,7 +620,7 @@ non-causal VAE (symmetric conv padding) you would instead fine-tune the VAE —
 see the option discussion (A symmetrise / B symmetric padding + fine-tune / C
 retrain).
 
-**Remediation / caveat.** Default is **off** (2B / 16B recipes unchanged);
-`nanocosmos-4B.yaml` ships it **on**. Because it shifts the latent
-distribution, it is a **fresh-run** setting: a checkpoint trained with it OFF
-will not resume cleanly with it ON.
+**Remediation / caveat.** The code default is **off**, but **all three joint
+recipes (`nanocosmos-2B/4B/16B`) now ship it `true`**. Because it shifts the
+latent distribution, it is a **fresh-run** setting: a checkpoint trained with it
+OFF will not resume cleanly with it ON.

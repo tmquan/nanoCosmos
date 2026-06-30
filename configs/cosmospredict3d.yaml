@@ -255,7 +255,7 @@ model:
   # shifts the latent distribution, so it is a fresh-run setting: a checkpoint
   # trained with the old [0,1] input will not resume cleanly with it on.
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
 optimizer:
   lr: 0.0002
@@ -275,7 +275,6 @@ optimizer:
     eta_min: 6.0e-05
     warmup_epochs: 5
   dit_backbone_lr: 1.0e-04
-  controlnet_lr: 1.0e-05
 
 loss:
   ignore_index: -100

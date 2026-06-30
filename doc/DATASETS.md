@@ -25,7 +25,7 @@ resolution, and the exact script that downloads (or converts) it.
 
 `COSEM3D` (4 nm), `MitoEM2` (8–16 nm), and the Hemibrain / MaleCNS members of
 `FLYEM3D` (8 nm) are the image-only `ssl` rungs of the **joint super-resolution
-recipe** (`configs/nanocosmos-16B.yaml` / `configs/nanocosmos-2B.yaml`,
+recipe** (`configs/nanocosmos-{16B,4B,2B}.yaml`,
 `data.dataset: joint3d`); see [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
 
 All scripts live in `scripts/` and write the on-disk convention described
@@ -68,7 +68,9 @@ are thin metadata subclasses of `MICRONSDataset`/`MICRONSDataModule`.
 - **What:** The SNEMI3D challenge crops from Kasthuri et al. 2015 mouse
   somatosensory cortex (**ssSEM**, ATUM tape-collecting + SEM). `AC4` = train (1024 × 1024 × 100, EM +
   labels); `AC3` = test (1024 × 1024 × 100, **EM only** — labels were
-  never publicly released).
+  never publicly released).  In the joint configs `AC4` is the labeled `sft`
+  holdout (`val_volumes`) and the label-less `AC3_inputs` is an image-only
+  `ssl` train source.
 - **Resolution:** 6 × 6 × 30 nm (anisotropic).
 - **Source:** `snemi.zip` (rhoana / Zenodo). AC3/AC4 sit at Y ≈ 5440 in
   the `kasthuri11` volume, outside the GCS ground-truth cylinder.
@@ -146,9 +148,9 @@ uint64 seg): `512³` ≈ 1.1 GB, `1024³` ≈ 9 GB, `2048³` ≈ 72 GB,
   - **A, B, C** — labelled TRAINING volumes (`1250 × 1250 × 125`, dense
     neuron ids) → `train_volumes`.
   - **A+, B+, C+** — padded TEST volumes; public EM only (challenge
-    withholds the labels) → converted **image-only**.  They are **not**
-    listed in any config's `test_volumes` (no GT = no metrics); run **blind
-    inference** on them separately.
+    withholds the labels) → converted **image-only**.  No GT = no seg
+    metrics, so they are never in any `test_volumes`; instead the joint
+    configs list them under `data.branches.ssl` (image-only reconstruction).
 - **Resolution:** 4 × 4 × 40 nm (anisotropic; 10:1 z:xy).
 - **Source:** `https://cremi.org/static/data/sample_{A,B,C}_20160501.hdf`
   (raw + labels packed in one nested `.hdf`).
@@ -192,18 +194,19 @@ image-only `cremi3d_sample_A+_volume`, …).
   *eLife* 9:e57443 (FIB-SEM); MaleCNS — Berg, S. et al. (2025), *bioRxiv*
   2025.10.09.680999 (eFIB-SEM, 8 nm isotropic).
 
-- **Joint-recipe SSL crop set (image-only).** Each 8 nm source —
-  FIB-25 surround, Hemibrain, MaleCNS — contributes **4 train + 1 val**
-  `1024³` crops (12 train + 3 val total), listed in
-  `configs/nanocosmos-{16B,2B}.yaml` (`data.branches.ssl` / `val_volumes`).
-  All are verified non-empty. **Caveat:** Hemibrain / MaleCNS tissue does
-  **not** fill its bounding box, so corner / off-tissue origins (e.g.
+- **Joint-recipe SSL crop set (image-only).** Hemibrain and MaleCNS each
+  contribute **4 train + 1 val** `1024³` crops; the FIB-25 surround now
+  contributes **2 train + 1 val** (the two empty corner tiles
+  `x1024_y4096_z4096` and `x4096_y1024_z4096` were removed after the content
+  gate flagged them). Listed in `configs/nanocosmos-{16B,4B,2B}.yaml`
+  (`data.branches.ssl` / `val_volumes`). **Caveat:** Hemibrain / MaleCNS tissue
+  does **not** fill its bounding box, so corner / off-tissue origins (e.g.
   `x4000_y4000_z4000`) download as all-zero tiles (CloudVolume
   `fill_missing=True`). Pick origins inside the imaged region (Hemibrain
   ~`x12–24k`; MaleCNS ~`x16–28k, y20–30k, z20–36k`) and confirm a non-zero
-  central crop before adding it. The `data.ssl_min_foreground` gate rejects
-  mostly-empty crops at train time, but empty *volumes* should still be
-  removed from the config.
+  central crop before adding it. The `data.ssl_min_std` content gate rejects
+  flat / mostly-empty crops at train time, but empty *volumes* should still be
+  removed from the config (see `doc/data.csv` for the current census).
 
 Recommended: fetch the native cube **once**, then generate all variants
 locally with `--from-local` (no re-download).
@@ -264,8 +267,11 @@ Notes on the stem fields:
 - **MitoEM2** ships as nnU-Net datasets (`Dataset0NN_ME2-*/imagesTr/*.nii.gz`);
   the images are converted to the standard `mitoem2_{subset}_train{NN}_volume.h5`
   (key `main`, axes transposed `X,Y,Z` → `Z,Y,X`) and used **image-only in the
-  `ssl` branch**.  The folder's own split is honoured: `imagesTr` → ssl **train**
-  (34 vols), `imagesTs` → ssl **validation** holdout (11 vols, `task: ssl` recon).
+  `ssl` branch**.  The folder's own split is honoured: `imagesTr` → ssl **train**,
+  `imagesTs` → ssl **validation** holdout (`task: ssl` recon).  The joint configs
+  carry a content-gate–pruned subset (32 train / 7 val after removing empty
+  `jurkat_train01`, `macro_train01` and the `jurkat`/`macro`/`beta` test crops
+  that failed the gate); see `doc/data.csv` for the exact per-subset counts.
   Two native resolutions: `[16,16,16]` (Beta/Jurkat/Macro/Podo/Sperm) and
   `[30,8,8]` (Mossy/Pyra/Stem).  Labels (mito/boundary) are unused.
 - **COSEM3D** keeps the upstream `jrc_*` id and its exact (near-cubic) voxel in

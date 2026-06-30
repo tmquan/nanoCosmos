@@ -7,7 +7,7 @@ Provides:
 - Preprocessors for common data formats (TIFF, HDF5, NRRD, NIfTI)
 - Cosmos model wrappers (DiT + VAE backbone) for volumetric
   segmentation -- Cosmos-Predict 2.5 (2B) and Cosmos3-Nano (16B) are the
-  default backbones, with Cosmos-Transfer 2.5 and a Vista3D reference
+  default backbones, with a Vista3D reference
 - An affinity + foreground head supervised by ``AffinityFGLoss`` and
   agglomerated into instances at eval/inference by the Mutex Watershed
   (``nanocosmos.inference.mutex_watershed``).
@@ -52,7 +52,6 @@ from nanocosmos.models import (
     BaseModel,
     Cosmos3Nano3DWrapper,
     CosmosPredict3DWrapper,
-    CosmosTransfer3DWrapper,
     Vista3DWrapper,
 )
 from nanocosmos.modules import (
@@ -61,7 +60,6 @@ from nanocosmos.modules import (
     BaseVistaModule,
     Cosmos3Nano3DModule,
     CosmosPredict3DModule,
-    CosmosTransfer3DModule,
     Vista3DModule,
 )
 
@@ -94,7 +92,6 @@ __all__ = [
     "BaseModel",
     "Cosmos3Nano3DWrapper",
     "CosmosPredict3DWrapper",
-    "CosmosTransfer3DWrapper",
     "Vista3DWrapper",
     # Modules (Lightning)
     "BaseCircuitModule",
@@ -102,6 +99,5 @@ __all__ = [
     "Cosmos3Nano3DModule",
     "CosmosPredict3DModule",
     "BaseVistaModule",
-    "CosmosTransfer3DModule",
     "Vista3DModule",
 ]

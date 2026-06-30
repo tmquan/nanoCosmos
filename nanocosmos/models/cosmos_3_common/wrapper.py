@@ -506,7 +506,6 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         back when samples are stacked in :meth:`_extract_features_hook`).
         """
         self._hook_buffer: List[torch.Tensor] = []
-        self._hook_handles: List[Any] = []
         self._hook_block_container = None
         self._hooks_active = False
         self._c3_gen_vision_index: Optional[torch.Tensor] = None
@@ -525,7 +524,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         if self._hook_block_container is None:
             return
 
-        def _make_hook(_idx: int):
+        def _make_hook():
             def hook_fn(_module: nn.Module, _input: Any, output: Any) -> None:
                 if not self._hooks_active:
                     return
@@ -551,10 +550,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
 
         for idx in self._feature_layers:
             if idx < len(self._hook_block_container):
-                h = self._hook_block_container[idx].register_forward_hook(
-                    _make_hook(idx),
-                )
-                self._hook_handles.append(h)
+                self._hook_block_container[idx].register_forward_hook(_make_hook())
 
     def _extract_features_hook(
         self,

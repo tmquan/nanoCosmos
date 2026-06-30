@@ -21,7 +21,7 @@ training / evaluation / visualisation.
 ## 1. The head
 
 Every backbone (`Cosmos3Nano3DWrapper`, `CosmosPredict3DWrapper`,
-`CosmosTransfer3DWrapper`, `Vista3DWrapper`) emits **one** dense tensor
+`Vista3DWrapper`) emits **one** dense tensor
 `[B, HEAD_CHANNELS, D, H, W]`.  The canonical layout is the single source
 of truth in `nanocosmos/losses/_common.py`:
 

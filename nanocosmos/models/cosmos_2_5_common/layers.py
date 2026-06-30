@@ -1,10 +1,9 @@
 """Shared primitive layers for the Cosmos 2.5 wrappers.
 
-Used by both :mod:`nanocosmos.models.cosmos_transfer_2_5` (the base DiT
-plus ControlNet) and :mod:`nanocosmos.models.cosmos_predict_2_5` (base
-DiT only).  Kept dependency-light so every other submodule in the
-package can import from here without pulling in the heavyweight
-diffusers / VAE classes required by the wrappers.
+Used by :mod:`nanocosmos.models.cosmos_predict_2_5` (base DiT). Kept
+dependency-light so every other submodule in the package can import
+from here without pulling in the heavyweight diffusers / VAE classes
+required by the wrappers.
 """
 
 import torch

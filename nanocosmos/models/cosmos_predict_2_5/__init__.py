@@ -28,8 +28,7 @@ Module layout::
                          subclass of _BaseCosmos25Wrapper)
 
 All shared scaffolding (layers, hf_loader, standalone_dit, decoder,
-wrapper base class) lives in :mod:`nanocosmos.models.cosmos_2_5_common`
-and is reused by :mod:`nanocosmos.models.cosmos_transfer_2_5`.
+wrapper base class) lives in :mod:`nanocosmos.models.cosmos_2_5_common`.
 
 References:
     - https://github.com/nvidia-cosmos/cosmos-predict2

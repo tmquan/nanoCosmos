@@ -8,8 +8,9 @@ this doc only details how `Joint3DReconSegLoss` and the batch contract work.
 **Voxel-size convention** (used throughout): *small voxel size* = fine /
 high-detail (e.g. 4 nm); *large voxel size* = coarse (e.g. 30–40 nm). The
 network predicts on a fixed **small-voxel grid** (the finest voxel size, 4 nm;
-the configs use a `[200, 256, 256]` patch) and every loss term pools that
-prediction **down** to wherever its ground truth lives.
+`nanocosmos-16B.yaml` uses a `[200, 256, 256]` patch, the `2B`/`4B` configs a
+z-heavier `[400, 256, 256]`) and every loss term pools that prediction **down**
+to wherever its ground truth lives.
 
 ---
 
@@ -44,7 +45,9 @@ small-voxel x ──RandResolutionDegraded──► large-voxel input ──back
                                                                             │
                                                     L1(pool(raw→grid), x)  ◄─┘   (no labels)
 ```
-Sources: COSEM 4 nm + **unlabeled FIB-25** (domain-matched neuropil). The
+Sources: COSEM 4 nm + unlabeled FlyEM 8 nm (**FIB-25 / Hemibrain / MaleCNS**
+neuropil) + CREMI A+/B+/C+ (padded, image-only) + SNEMI3D **AC3** (label-less
+test half) + the full MitoEM2 8–16 nm ladder — all domain-matched EM. The
 degradation (`nanocosmos/transforms/degrade.py::RandResolutionDegraded`)
 composes z slab-integration + decimation, per-section `grid_sample`
 misalignment, missing/duplicated sections, and section noise/contrast — not
@@ -86,6 +89,33 @@ segmentation gradient shapes the reconstruction and vice-versa.
 total = weight_ssl · ( weight_rec · L1_recon )                                  # ssl
       + weight_sft · ( weight_seg · (aff + sem) [+ weight_rec · L1_dataconsist]) # sft
 ```
+
+`weight_ssl` / `weight_sft` are applied **per task-homogeneous batch** as an
+outer multiplier on that branch's subtotal (the shipped joint configs use
+`weight_ssl: 10.`, `weight_sft: 1.0`, so an ssl step carries 10× the gradient
+scale of an sft step). This is independent of how *often* each branch is drawn
+(that is the sampler's job, below).
+
+### 3.1 Sampling & balancing (`balance`, `sample_weight`, `subset_weights`)
+
+A custom round-robin batch sampler draws every batch from a **single group** so
+each batch is task- and shape-homogeneous (required by the loss/VAE). The
+`data.balance` knob chooses what a group is:
+
+- `resolution` (code default): one group per `(task, native_resolution)`. Within
+  a group, volumes are picked **weighted by voxel count** (big volumes dominate).
+- `volume` (**shipped joint configs**): one group per volume, every volume
+  scheduled **equally**; each batch is drawn from a single volume.
+- `subset`: one group per domain (e.g. `cremi3d`, `minnie65`, `mitoem2_pyra`),
+  every subset scheduled equally.
+
+A group's schedule share is `num_samples · branch.sample_weight · multiplier`,
+where `multiplier` is the per-volume `sample_weight` (volume balance) or
+`subset_weights[subset]` (subset balance), **normalised by the branch mean** so
+weights are *relative ratios* and the virtual-epoch length stays fixed. Bump a
+volume/subset's weight to deliberately over-sample it (e.g. overfit CREMI/SNEMI
+for a segmentation sanity check). `trainer.limit_train_batches` caps the actual
+epoch length, so adding groups does not lengthen epochs.
 
 ---
 
@@ -131,13 +161,34 @@ so the anisotropy guard (xy-only when z is ≥2× coarser) applies per dataset.
 The sem loss, the val sem metric, and the `true/sem` TensorBoard panel all use
 `sem_label` when present, falling back to `labels` otherwise.
 
-## 4.2 SSL foreground gate (`ssl_min_foreground`)
+**No-full-erase guard.** Erosion only opens gaps *between* touching instances —
+it must never delete an instance outright. On near-isotropic volumes (FIB-25
+8 nm, where the xy-only guard does *not* trigger) a structure thin along z would
+otherwise have every voxel flagged as boundary and vanish from `sem_label`,
+turning real tissue into false background (an all-black `true/sem` region).
+`FindBoundariesd` therefore restores any connected component the boundary pass
+would remove completely.
 
-The label-less `ssl` branch can sample mostly-empty / zero-padded crops (e.g.
-MitoEM2 nnU-Net irregular crops padded to a box) that show up as black panels.
-`ssl_min_foreground` (shipped value `0.8`) is an **image** non-zero gate applied
-only to label-less volumes in `LazyVolDataset`: crops below the threshold are
-re-sampled (best-seen kept on exhaustion).
+## 4.2 SSL crop gates (`ssl_min_foreground`, `ssl_min_std`)
+
+The label-less `ssl` branch can sample crops that are uninformative for
+reconstruction in two distinct ways, each with its own gate (both applied only
+to label-less volumes in `LazyVolDataset`; failing crops are re-sampled, and the
+best-seen crop is kept once `max_foreground_retries` is exhausted):
+
+- `ssl_min_foreground` — **legacy non-zero gate** used only when `ssl_min_std`
+  is `0`. Rejects literally zero-padded / black crops (non-zero voxel fraction
+  below the threshold).
+- `ssl_min_std` (shipped `0.05`, the active gate) — **local content gate**.
+  A global non-zero (or even global-std) test passes a crop that is mostly flat
+  resin/embedding medium as long as *some* region is textured. Instead, the crop
+  is normalised to `[0, 1]` (per-volume), tiled into `4×16×16` blocks, and each
+  block is marked *content* when its local std `>=` `ssl_min_std`; the crop must
+  then have a **content fraction `>=` `ssl_min_foreground`** (so the two knobs
+  compose: `ssl_min_std` sets the texture threshold, `ssl_min_foreground` the
+  required fraction). This rejects flat / half-empty crops (e.g. a COSEM cell
+  edge against resin) that the non-zero gate misses. Best-seen ranks by content
+  fraction.
 
 For the **sft** branch, `sft_min_foreground` (shipped `0.8`) is a **dual** gate:
 a crop must have BOTH its label-foreground fraction AND its image non-zero

@@ -5,7 +5,7 @@ panel logger: central-slice extraction, per-image min-max normalisation,
 HSV colour LUT, and integer-label → pastel-RGB mapping.
 """
 
-from typing import Optional, Sequence, Tuple
+from typing import Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -128,6 +128,3 @@ __all__ = [
     "_resize_2d",
     "_to_2d",
 ]
-
-# Silence "unused import" for Optional (kept for forward-compat type hints).
-_ = Optional

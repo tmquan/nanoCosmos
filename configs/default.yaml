@@ -4,7 +4,7 @@
 # Inheritance chain
 # -----------------
 #   default        <-- you are here
-#     └── snemi3d  (CosmosTransfer3D + SNEMI3D / neurons / MICrONS)
+#     └── snemi3d  (Cosmos3Nano3D + SNEMI3D / neurons / MICrONS)
 #           └── combine   (drops AC4 from train, keeps it in val)
 #
 # Every concrete recipe inherits from this file via ``defaults: [- default]``
@@ -74,9 +74,9 @@ data:
 
 # Model configuration
 model:
-  type: cosmos3nano3d  # Options: cosmos3nano3d, cosmostransfer3d, cosmospredict3d, vista3d
+  type: cosmos3nano3d  # Options: cosmos3nano3d, cosmospredict3d, vista3d
   # Backbone variant.  cosmos3nano3d -> "Nano" (16B, the only published
-  # Cosmos 3 generator); cosmos{transfer,predict}3d -> "2B" / "14B".
+  # Cosmos 3 generator); cosmospredict3d -> "2B".
   variant: Nano
   in_channels: 1
   # Affinity + sem + raw head (HEAD_CHANNELS = N_AFF + 2 = 16):
@@ -86,11 +86,10 @@ model:
   head_channels: 16
   feature_size: 64
   dropout: 0.2
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
   # If true, the wrapper will auto-pull pretrained weights from HuggingFace
   # on first instantiation:
   #   cosmos3nano3d    -> nvidia/Cosmos3-Nano        (16B omni MoT; BF16 only)
-  #   cosmostransfer3d -> nvidia/Cosmos-Transfer2.5-2B
   #   cosmospredict3d  -> nvidia/Cosmos-Predict2.5-2B
   #   vista3d          -> MONAI/VISTA3D-HF
   # Downloads are cached under ~/.cache/nanocosmos/.  Set to false to

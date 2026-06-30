@@ -135,7 +135,7 @@ lazily.
 ## 3. Lightning module construction
 
 `scripts/train.py:build_module` (~line 303) maps `cfg.model.type` to
-`CosmosPredict3DModule` / `CosmosTransfer3DModule` / `Cosmos3Nano3DModule`
+`CosmosPredict3DModule` / `Cosmos3Nano3DModule`
 (and the joint `Joint3DModule` / `JointPredict3DModule` for
 `model.type: joint3d` / `joint3d_2b`)
 / `Vista3DModule` and forwards four config sub-dicts:
@@ -155,7 +155,7 @@ What `BaseCircuitModule.__init__` does
 1. Stores `optimizer_config` / `training_config`; copies `loss_config`.
 2. Calls `_build_model(model_config)` which by default forwards every
    key as a kwarg to `_model_cls`.  Cosmos overrides this in
-   [modules/cosmos_transfer_2_5/base.py](../nanocosmos/modules/cosmos_transfer_2_5/base.py)
+   [modules/cosmos_2_5_common/base.py](../nanocosmos/modules/cosmos_2_5_common/base.py)
    to surface the freeze knobs and the `dit_backbone_lr` parameter group.
 3. Constructs `self.criterion = self._loss_cls(**loss_config)`
    (`AffinityFGLoss`); a field with `weight: 0` is skipped in the
@@ -257,13 +257,11 @@ TensorBoard eventually sees.
 `nanocosmos/modules/base.py:configure_optimizers` (line 463) splits
 parameters into `weight_decay` / `no_weight_decay` (norms + biases).
 The Cosmos module overrides this in
-[nanocosmos/modules/cosmos_transfer_2_5/base.py](../nanocosmos/modules/cosmos_transfer_2_5/base.py)
-to surface three architecturally-distinct learning rates:
+[nanocosmos/modules/cosmos_2_5_common/base.py](../nanocosmos/modules/cosmos_2_5_common/base.py)
+to surface two architecturally-distinct learning rates:
 
-* `model.dit.*`        → `optimizer.dit_backbone_lr` (base DiT,
-                          the "upper part" — typically frozen).
-* `model.controlnet.*` → `optimizer.controlnet_lr` (residual branch;
-                          defaults to `dit_backbone_lr` if unset).
+* `model.dit.*`        → `optimizer.dit_backbone_lr` (the pretrained
+                          base DiT).
 * everything else      → `optimizer.lr` (heads, projector, decoder shim).
 
 Each takes effect only when the corresponding submodule is unfrozen
@@ -273,31 +271,21 @@ Each takes effect only when the corresponding submodule is unfrozen
 
 ## 6. Freeze flags (Cosmos only)
 
-The Cosmos backbone exposes four independent freeze knobs:
-`freeze_vae_encoder`, `freeze_dit_backbone`, `freeze_controlnet`,
-`freeze_vae_decoder`.  Most are **bools** applied **once at construction**
-by
+The Cosmos backbone exposes three independent freeze knobs:
+`freeze_vae_encoder`, `freeze_dit_backbone`, `freeze_vae_decoder`.  Most
+are **bools** applied **once at construction** by
 [nanocosmos/models/cosmos_2_5_common/wrapper_base.py](../nanocosmos/models/cosmos_2_5_common/wrapper_base.py).
 `freeze_dit_backbone` additionally accepts a non-negative **int `N`**: the
 DiT is frozen for epochs `0..N-1` and thawed at the start of epoch `N`
 (parsed by `_resolve_freeze_dit_backbone`; the thaw fires in
 `BaseCosmosModule.on_train_epoch_start`).  See ARCHITECT §1.6 and GOTCHAS.
 
-Cosmos-Transfer2.5 is a **base DiT + ControlNet** stack: the upstream
-`nvidia/Cosmos-Transfer2.5-2B` repo holds the full base transformer on
-revision `diffusers/general` and a small replicated control branch on
-`diffusers/controlnet/general/{edge,depth,seg,blur}`.  Both are loaded
-by `_try_load_diffusers` / `_try_load_controlnet`; the ControlNet's
-`control_block_samples` are summed into the base DiT inside
-`CosmosTransformerBlock.forward` (`hidden_states += controlnet_residual`).
-
 * `freeze_*: true`  → that submodule is frozen (`requires_grad_(False)`)
   for the whole run; its parameters are excluded from the AdamW param
   groups in `configure_optimizers`.
 * `freeze_*: false` → that submodule trains for the whole run;
-  if it's the base DiT or the ControlNet, it is placed in its own param
-  group with `lr = optimizer.dit_backbone_lr` /
-  `optimizer.controlnet_lr` (each defaulting to `lr` if unset).
+  if it's the base DiT it is placed in its own param group with
+  `lr = optimizer.dit_backbone_lr` (defaulting to `lr` if unset).
 
 Defaults in `configs/snemi3d.yaml` (`cosmos3nano3d`, 16B Nano, no
 ControlNet): VAE encoder frozen, **base DiT trainable**

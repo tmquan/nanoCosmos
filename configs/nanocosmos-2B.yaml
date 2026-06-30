@@ -454,7 +454,7 @@ model:
   # is incompatible with torch.compile, so compile below is off).
   gradient_checkpointing: true
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
 optimizer:
   lr: 0.0002

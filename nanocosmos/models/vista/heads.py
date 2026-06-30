@@ -1,7 +1,7 @@
 """Shared task-head modules.
 
 This module holds the VISTA3D-style building blocks shared across our
-3D wrappers (:class:`Vista3DWrapper`, :class:`CosmosTransfer3DWrapper`)
+3D wrappers (:class:`Vista3DWrapper`, :class:`CosmosPredict3DWrapper`)
 so every wrapper applies an *actual* VISTA3D-style task head instead of
 the minimal ``Conv3-Norm-ReLU-Conv1`` adapter we used to ship.
 

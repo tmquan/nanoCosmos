@@ -273,15 +273,6 @@ class BaseCosmosModule(BaseCircuitModule):
         backbone_lr = self.optimizer_config.get("dit_backbone_lr")
         if backbone_lr is None:
             backbone_lr = lr
-        # ControlNet residual branch.  Defaults to the backbone LR
-        # (it's also pretrained Cosmos-Transfer 2.5 weight, just a
-        # smaller replicated stack); override via ``optimizer.controlnet_lr``.
-        # Backbones without a ControlNet (Cosmos-Predict) simply have
-        # no parameters in the controlnet groups; empty groups are
-        # filtered out before AdamW sees them.
-        controlnet_lr = self.optimizer_config.get("controlnet_lr")
-        if controlnet_lr is None:
-            controlnet_lr = backbone_lr
 
         # ``include_frozen_dit`` keeps the DiT params in the optimizer
         # even while they're still frozen, so the warm-up schedule
@@ -296,7 +287,6 @@ class BaseCosmosModule(BaseCircuitModule):
         )
 
         backbone_decay, backbone_no_decay = [], []
-        controlnet_decay, controlnet_no_decay = [], []
         head_decay, head_no_decay = [], []
         for name, param in self.named_parameters():
             is_backbone = name.startswith("model.dit.")
@@ -304,11 +294,8 @@ class BaseCosmosModule(BaseCircuitModule):
                 include_frozen_dit and is_backbone
             ):
                 continue
-            is_controlnet = name.startswith("model.controlnet.")
             no_decay = param.dim() <= 1 or name.endswith(".bias")
-            if is_controlnet:
-                (controlnet_no_decay if no_decay else controlnet_decay).append(param)
-            elif is_backbone:
+            if is_backbone:
                 (backbone_no_decay if no_decay else backbone_decay).append(param)
             else:
                 (head_no_decay if no_decay else head_decay).append(param)
@@ -316,8 +303,6 @@ class BaseCosmosModule(BaseCircuitModule):
         param_groups = [
             {"params": backbone_decay,      "lr": backbone_lr,   "weight_decay": wd},
             {"params": backbone_no_decay,   "lr": backbone_lr,   "weight_decay": 0.0},
-            {"params": controlnet_decay,    "lr": controlnet_lr, "weight_decay": wd},
-            {"params": controlnet_no_decay, "lr": controlnet_lr, "weight_decay": 0.0},
             {"params": head_decay,          "lr": lr,            "weight_decay": wd},
             {"params": head_no_decay,       "lr": lr,            "weight_decay": 0.0},
         ]

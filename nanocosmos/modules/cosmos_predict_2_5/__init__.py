@@ -10,8 +10,7 @@ Module layout::
 
     module.py  -- CosmosPredict3DModule (concrete 3-D Lightning module)
 
-The base class lives in :mod:`nanocosmos.modules.cosmos_2_5_common.base`
-and is shared with :mod:`nanocosmos.modules.cosmos_transfer_2_5`.
+The base class lives in :mod:`nanocosmos.modules.cosmos_2_5_common.base`.
 """
 
 from nanocosmos.modules.cosmos_2_5_common.base import BaseCosmosModule

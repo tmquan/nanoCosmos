@@ -329,7 +329,7 @@ model:
   # the latent distribution -> fresh-run setting (old [0,1] checkpoints will
   # not resume cleanly with it on).
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #47
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
   # What to freeze.  Cosmos 3 has no ControlNet residual branch to
   # absorb the trainable load, so leaving the omni transformer
@@ -539,12 +539,6 @@ training:
 optimizer:
   lr: 2e-4                        # head / new-parameter LR
   dit_backbone_lr: 2e-5           # 10x lower for the pretrained DiT backbone
-  # ``controlnet_lr`` is harmless on Cosmos-Predict (no ControlNet
-  # branch -> the param group is empty -> the value is ignored), but
-  # left here so flipping ``model.type`` to cosmostransfer3d doesn't
-  # also need an optimizer-section edit.
-  controlnet_lr: 2e-5
-                                  # (defaults to ``dit_backbone_lr`` if unset)
   weight_decay: 1.0e-4
   # Cosine schedule is built in
   # ``nanocosmos/modules/base.py::_maybe_wrap_scheduler``: a 2-epoch

@@ -1,0 +1,39 @@
+# =====================================================================
+# nanocosmos.yaml  --  default launch recipe (inherits nanocosmos-2B)
+# =====================================================================
+# Inheritance chain:  nanocosmos-2B <- nanocosmos
+#
+# Same joint recipe / data ladder / model / loss as nanocosmos-2B.yaml,
+# with launch-time overrides for a GB300 NVL72 (72 GPUs, ~9x the current
+# 8-GPU box):
+#   * per-branch batch size 2 -> 4
+#   * limit_*_batches scaled down ~9x (global batch grows ~9x; see below)
+#   * torch.compile enabled
+#
+# Quick start
+# -----------
+#   python scripts/train.py --config-name nanocosmos
+# =====================================================================
+
+defaults:
+  - nanocosmos-2B
+
+experiment_name: nanocosmos
+
+# ---------------------------------------------------------------------
+# Batch size override (deep-merged onto the inherited branch configs, so
+# task / sample_weight / volumes are preserved).
+# ---------------------------------------------------------------------
+data:
+  val_batch_size: 4
+  branches:
+    ssl:
+      batch_size: 4
+    sft:
+      batch_size: 4
+
+training:
+  max_epochs: 201
+  limit_train_batches: 400
+  limit_val_batches: 100
+

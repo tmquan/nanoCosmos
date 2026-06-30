@@ -109,7 +109,6 @@ class _BaseCosmos25Wrapper(nn.Module):
         head_channels: int = HEAD_CHANNELS,
         feature_size: int = 64,
         variant: str = "2B",
-        checkpoint_variant: str = "post-trained",
         dtype: str = "bf16",
         pretrained: bool = True,
         freeze_dit_backbone: Union[bool, int] = False,
@@ -194,7 +193,6 @@ class _BaseCosmos25Wrapper(nn.Module):
         )
         self._freeze_dit_backbone = initial_frozen
         self._dit_thaw_epoch: Optional[int] = thaw_epoch
-        self._freeze_vae_decoder = freeze_vae_decoder
         self._freeze_vae_encoder = freeze_vae_encoder
         # ``gradient_checkpointing`` accepts a bool (all targets) or a list of
         # targets among {"dit", "decode", "head"} so recompute can be traded
@@ -242,7 +240,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         self._init_arch_state()
 
-        self._build_backbone(cache_dir, hf_token, checkpoint_variant)
+        self._build_backbone(cache_dir, hf_token)
 
         self.feature_projector = _FeatureProjector3D(
             hidden_dim=self.cfg.hidden_dim,
@@ -501,7 +499,6 @@ class _BaseCosmos25Wrapper(nn.Module):
         self,
         cache_dir: Optional[str],
         hf_token: Optional[str],
-        checkpoint_variant: str,
     ) -> None:
         self.vae_encoder: Optional[nn.Module] = None
         self.vae_decoder: Optional[nn.Module] = None
@@ -527,10 +524,8 @@ class _BaseCosmos25Wrapper(nn.Module):
         _saved_dtype = torch.get_default_dtype()
         try:
             loaded = (
-                self._try_load_diffusers(cache_dir, hf_token, checkpoint_variant)
-                or self._try_load_cosmos_package(
-                    cache_dir, hf_token, checkpoint_variant,
-                )
+                self._try_load_diffusers(cache_dir, hf_token)
+                or self._try_load_cosmos_package(cache_dir, hf_token)
             )
         finally:
             torch.set_default_dtype(_saved_dtype)
@@ -547,7 +542,6 @@ class _BaseCosmos25Wrapper(nn.Module):
         self,
         cache_dir: Optional[str],
         hf_token: Optional[str],
-        checkpoint_variant: str,
     ) -> bool:
         transformer_cls_name = self._diffusers_transformer_cls_name()
         vae_cls_name = self._diffusers_vae_cls_name()
@@ -614,7 +608,6 @@ class _BaseCosmos25Wrapper(nn.Module):
         self,
         cache_dir: Optional[str],
         hf_token: Optional[str],
-        checkpoint_variant: str,
     ) -> bool:
         # Try the upstream ``cosmos_transfer2`` / ``cosmos_predict2``
         # packages in turn.  Both expose a ``Pipeline`` class with the
@@ -827,7 +820,6 @@ class _BaseCosmos25Wrapper(nn.Module):
     def _register_persistent_hooks(self) -> None:
         """Register forward hooks on DiT blocks once (called from __init__)."""
         self._hook_buffer: List[torch.Tensor] = []
-        self._hook_handles: List[Any] = []
         self._hook_block_container = None
         self._hooks_active = False
 
@@ -849,7 +841,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         if self._hook_block_container is None:
             return
 
-        def _make_hook(_idx: int):
+        def _make_hook():
             def hook_fn(_module: nn.Module, _input: Any, output: Any) -> None:
                 if not self._hooks_active:
                     return
@@ -870,10 +862,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         for idx in self._feature_layers:
             if idx < len(self._hook_block_container):
-                h = self._hook_block_container[idx].register_forward_hook(
-                    _make_hook(idx),
-                )
-                self._hook_handles.append(h)
+                self._hook_block_container[idx].register_forward_hook(_make_hook())
 
     def _extract_features_hook(
         self,
@@ -1087,12 +1076,10 @@ class _BaseCosmos25Wrapper(nn.Module):
 
     def freeze_vae_decoder(self) -> None:
         self.decoder_adapter._freeze_body()
-        self._freeze_vae_decoder = True
         logger.info("VAE decoder frozen.")
 
     def unfreeze_vae_decoder(self) -> None:
         self.decoder_adapter._unfreeze_body()
-        self._freeze_vae_decoder = False
         logger.info("VAE decoder unfrozen.")
 
     # ------------------------------------------------------------------

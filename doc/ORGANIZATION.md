@@ -18,7 +18,7 @@ file-by-file tree, see [`STRUCTURE.md`](./STRUCTURE.md).
 - **Package-per-thing when it grows.**  Single-file modules that exceed
   ~300 LOC are decomposed into a package with an `__init__.py` that
   re-exports the public API.  Examples:
-  `models/cosmos_transfer_2_5/`, `models/vista/`, `modules/*/`,
+  `models/cosmos_predict_2_5/`, `models/vista/`, `modules/*/`,
   `callbacks/tensorboard/`.
 - **Hydra-first configuration.**  Nothing is hard-coded; every
   behaviour-changing parameter is a key in `configs/*.yaml` with
@@ -72,8 +72,8 @@ Five subsystems instantiate this pattern.  Each has a single shared
 | ------------- | ------------------------------------------ | ------------------------------------------------- |
 | datasets      | `datasets/base.py::CircuitDataset`         | `snemi3d.py`, `microns.py`, `neurons.py`, `lazy.py` |
 | datamodules   | `datamodules/base.py::CircuitDataModule`   | `snemi3d.py`, `microns.py`, `neurons.py`          |
-| models        | `models/base.py::BaseModel`                | `cosmos_transfer_2_5/`, `vista/`                  |
-| modules       | `modules/base.py::BaseCircuitModule`       | `cosmos_transfer_2_5/`, `vista/`                  |
+| models        | `models/base.py::BaseModel`                | `cosmos_predict_2_5/`, `cosmos_3_nano/`, `vista/` |
+| modules       | `modules/base.py::BaseCircuitModule`       | `cosmos_predict_2_5/`, `cosmos_3_nano/`, `vista/` |
 | preprocessors | `preprocessors/base.py::BasePreprocessor`  | `hdf5.py`, `nrrd.py`, `tiff.py`, `nfty.py`        |
 
 **Convention:** the concrete class overrides only:
@@ -96,16 +96,20 @@ When a wrapper outgrows a single file it becomes a package.  The
 `__init__.py` is the **sole** public surface; everything else is treated
 as private.  Two fully-realized examples:
 
-### `models/cosmos_transfer_2_5/`
+### `models/cosmos_predict_2_5/` (+ shared `cosmos_2_5_common/`)
 
 ```
-__init__.py          # re-exports CosmosTransfer3DWrapper
-hf_loader.py         # rank-aware HF snapshot download
-variants.py          # 2B / 14B variant registry
-standalone_dit.py    # random-init DiT fallback
-layers.py            # shared primitives
-decoder.py           # feature projector + VAE decoder adapter
-wrapper.py           # CosmosTransfer3DWrapper (the public class)
+cosmos_2_5_common/
+  __init__.py        # shared scaffolding
+  hf_loader.py       # rank-aware HF snapshot download
+  standalone_dit.py  # random-init DiT fallback
+  layers.py          # shared primitives
+  decoder.py         # feature projector + VAE decoder adapter
+  wrapper_base.py    # _BaseCosmos25Wrapper
+cosmos_predict_2_5/
+  __init__.py        # re-exports CosmosPredict3DWrapper
+  variants.py        # 2B variant registry
+  wrapper.py         # CosmosPredict3DWrapper (the public class)
 ```
 
 ### `models/vista/`
@@ -245,7 +249,7 @@ class MyModule(BaseCircuitModule):
     # Optional: override configure_optimizers, freeze schedule hooks.
 ```
 
-The per-architecture package (`modules/cosmos_transfer_2_5/`,
+The per-architecture package (`modules/cosmos_2_5_common/`,
 `modules/vista/`) holds its own `base.py` for arch-specific concerns
 (parameter-group split for HF-pretrained backbones, freeze scheduling)
 and a `module.py` for the concrete Lightning class.

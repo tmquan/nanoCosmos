@@ -12,11 +12,15 @@ view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
 the fine grid while the label stays native and the recon target sits on the
 coarser of native/fine.
 
-Branches & batching.  Volumes are grouped by ``(task, native_resolution)`` --
-samples in a group share a tensor shape, so a batch can only be drawn from one
-group.  A round-robin batch sampler interleaves groups (weighted by each
-branch's ``sample_weight``), yielding **task- and shape-homogeneous** batches,
-which is exactly what ``Joint3DReconSegLoss`` / ``Joint3DModule`` require.
+Branches & batching.  Volumes are bucketed into round-robin groups per the
+``balance`` policy -- ``"resolution"`` (one group per ``(task, native_resolution)``;
+legacy default), ``"subset"`` (one group per domain), or ``"volume"`` (one group
+per volume; each volume scheduled equally).  Every group is single-task and
+single-resolution, so a batch drawn from one group is always **task- and
+shape-homogeneous**, which is exactly what ``Joint3DReconSegLoss`` /
+``Joint3DModule`` require.  A round-robin batch sampler interleaves groups,
+weighted by each branch's ``sample_weight`` and (for subset/volume balance) by
+``subset_weights`` / per-volume ``sample_weight``.
 
 Config schema (``cfg.data``)::
 

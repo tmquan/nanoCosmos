@@ -314,7 +314,6 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         Cosmos3Nano3DModule,
         Cosmos3SuperModule,
         CosmosPredict3DModule,
-        CosmosTransfer3DModule,
         Joint3DModule,
         JointEdge3DModule,
         JointPredict3DModule,
@@ -327,7 +326,6 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         "cosmos3edge3d": Cosmos3EdgeModule,
         "cosmos3nano3d": Cosmos3Nano3DModule,
         "cosmos3super3d": Cosmos3SuperModule,
-        "cosmostransfer3d": CosmosTransfer3DModule,
         "cosmospredict3d": CosmosPredict3DModule,
         # The joint reconstruction + segmentation recipe.  ``joint3d`` uses the
         # Cosmos-3 Nano (16B) backbone; ``joint3d_edge`` the Cosmos3-Edge (4B,
@@ -342,13 +340,12 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         "cosmos3_nano_3d": Cosmos3Nano3DModule,
         "cosmos3_edge_3d": Cosmos3EdgeModule,
         "cosmos3_super_3d": Cosmos3SuperModule,
-        "cosmos_transfer25_3d": CosmosTransfer3DModule,
         "cosmos_predict25_3d": CosmosPredict3DModule,
         "joint_predict3d": JointPredict3DModule,
     }
 
     model_cfg = dict(cfg.get("model", {}))
-    model_type = model_cfg.pop("type", "cosmostransfer3d").lower()
+    model_type = model_cfg.pop("type", "joint3d_2b").lower()
 
     cls = module_classes.get(model_type)
     if cls is None:

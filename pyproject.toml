@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Cosmos backbones (Cosmos 2.5 Predict/Transfer + Cosmos 3 Nano).
+# Cosmos backbones (Cosmos 2.5 Predict + Cosmos 3 Nano).
 # Pulls HuggingFace + diffusers (+ transformers for the Cosmos 3 omni
 # Qwen3-VL / Qwen2 sub-towers).
 #

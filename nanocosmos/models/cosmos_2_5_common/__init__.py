@@ -1,18 +1,16 @@
 """Shared scaffolding for the Cosmos 2.5 backbone wrappers.
 
-This package factors out everything Cosmos-Transfer 2.5 and
-Cosmos-Predict 2.5 have in common -- shared primitive layers, the
-random-init standalone DiT fallback, the rank-aware HuggingFace
-snapshot downloader, the unified-head decoder adapter, and the
-abstract :class:`_BaseCosmos25Wrapper` that ties them together.
+This package factors out everything the Cosmos 2.5 wrappers have in
+common -- shared primitive layers, the random-init standalone DiT
+fallback, the rank-aware HuggingFace snapshot downloader, the
+unified-head decoder adapter, and the abstract
+:class:`_BaseCosmos25Wrapper` that ties them together.
 
-The two backbone-specific packages
-(:mod:`nanocosmos.models.cosmos_transfer_2_5`,
-:mod:`nanocosmos.models.cosmos_predict_2_5`) only own:
+The backbone-specific package
+(:mod:`nanocosmos.models.cosmos_predict_2_5`) only owns:
 
-* their variant registry (different ``hf_repo_id`` / ``hf_revision``)
+* its variant registry (``hf_repo_id`` / ``hf_revision``)
 * the (optional) extension hooks of :class:`_BaseCosmos25Wrapper`
-  (Cosmos-Transfer adds a ControlNet branch; Cosmos-Predict has none)
 
 Module layout::
 
