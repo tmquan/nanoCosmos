@@ -25,11 +25,17 @@ Config schema (``cfg.data``)::
     degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (ssl)
     sft_min_foreground: 0.8          # sft gate: BOTH label fg AND image non-zero
     ssl_min_foreground: 0.8          # image non-zero gate (ssl volumes)
+    ssl_min_std: 0.05                # ssl contrast gate (reject flat resin crops)
+    balance: resolution              # group/schedule unit: "resolution" (default)
+                                     #   | "subset" | "volume"
+    subset_weights: {cremi3d: 50}    # (balance: subset) per-subset schedule weight
     find_boundaries: 1.0             # per-sample boundary-erosion probability
     boundary_target: semantic        # "semantic" (sem_label only) | "both"
     branches:
       ssl: {batch_size, sample_weight, volumes: [{vol, root, native_resolution}]}
       sft:  {batch_size, sample_weight, volumes: [{vol, seg, root, native_resolution}]}
+      #   per-volume ``sample_weight`` (optional) scales its share when
+      #   balance: volume (e.g. overfit one volume).
     val_volumes: [{vol, seg, root, task, native_resolution}]   # optional
 """
 
@@ -38,6 +44,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytorch_lightning as pl
@@ -138,8 +145,11 @@ class Joint3DDataModule(pl.LightningDataModule):
         min_foreground: float = 0.0,
         sft_min_foreground: float = 0.0,
         ssl_min_foreground: float = 0.0,
+        ssl_min_std: float = 0.0,
         find_boundaries: float = 0.0,
         boundary_target: str = "semantic",
+        balance: str = "resolution",
+        subset_weights: Optional[Dict[str, float]] = None,
         seed: int = 0,
     ) -> None:
         super().__init__()
@@ -166,6 +176,12 @@ class Joint3DDataModule(pl.LightningDataModule):
         # zero-padded crops (e.g. MitoEM2 nnU-Net irregular crops padded to a box,
         # empty COSEM/FLYEM regions) that would otherwise show as black panels.
         self.ssl_min_foreground = float(ssl_min_foreground)
+        # Contrast gate for the ssl branch: rejects flat, structureless crops
+        # (e.g. resin / embedding medium around a COSEM cell) whose normalised
+        # intensity std is below this value.  The non-zero gate cannot catch
+        # these because resin is a non-zero mid-grey; only a variance test does.
+        # 0 = disabled.
+        self.ssl_min_std = float(ssl_min_std)
         # sem-head boundary supervision (sft only).  ``find_boundaries`` = per-
         # sample probability of eroding membrane voxels so the sem head targets
         # thin membranes instead of (near-degenerate) full foreground.
@@ -178,6 +194,28 @@ class Joint3DDataModule(pl.LightningDataModule):
             raise ValueError(
                 f"boundary_target must be 'both' or 'semantic'; got {boundary_target!r}."
             )
+        # How volumes are bucketed into round-robin groups (= the unit that is
+        # scheduled equally per epoch).  Each batch is drawn from ONE group, so
+        # every mode still yields task- and shape-homogeneous batches.
+        #   "resolution" -- one group per (task, native_resolution) [default,
+        #                   legacy].  Within a group, volumes are picked
+        #                   voxel-count-weighted, so big volumes dominate.
+        #   "subset"     -- one group per (task, subset); every subset is
+        #                   scheduled equally (x ``subset_weights``).  Balances
+        #                   domains regardless of size / crop count.
+        #   "volume"     -- one group per volume; every volume is scheduled
+        #                   equally (x its ``sample_weight``).  A batch is then
+        #                   always drawn from a single volume.
+        # ``subset_weights`` / per-volume ``sample_weight`` multiply a group's
+        # schedule length, so a subset/volume can be deliberately over-sampled
+        # (e.g. to overfit CREMI / SNEMI for a segmentation sanity check).
+        self.balance = str(balance)
+        if self.balance not in ("resolution", "subset", "volume"):
+            raise ValueError(
+                "balance must be 'resolution', 'subset' or 'volume'; "
+                f"got {balance!r}."
+            )
+        self.subset_weights = {str(k): float(v) for k, v in (subset_weights or {}).items()}
         self.seed = int(seed)
 
         self._train_groups: List[Tuple[int, int, int]] = []
@@ -258,6 +296,8 @@ class Joint3DDataModule(pl.LightningDataModule):
                 self.sft_min_foreground if task == "sft"
                 else (self.ssl_min_foreground if task == "ssl" else 0.0)
             ),
+            # Contrast gate only for the ssl branch (label-less recon).
+            image_min_std=(self.ssl_min_std if task == "ssl" else 0.0),
             deterministic=deterministic,
         )
 
@@ -268,6 +308,79 @@ class Joint3DDataModule(pl.LightningDataModule):
             res = tuple(float(r) for r in vol["native_resolution"])
             groups.setdefault(res, []).append(vol)
         return groups
+
+    @staticmethod
+    def _derive_subset(vol_name: str) -> str:
+        """Best-effort subset (domain) name from a volume stem.
+
+        Covers the on-disk naming conventions in ``doc/DATASETS.md``.  A
+        volume may override this with an explicit ``subset:`` field in its
+        config spec.
+        """
+        n = vol_name
+        for suf in ("_volume", "_segmentation"):
+            if n.endswith(suf):
+                n = n[: -len(suf)]
+        # SNEMI3D: AC4_inputs / AC4_labels / AC3_inputs -> AC4 / AC3
+        m = re.match(r"^(AC\d+)_", n)
+        if m:
+            return m.group(1)
+        # Neurons / neurite cylinder
+        if n.startswith("neurons") or n.startswith("neurite"):
+            return "neurons"
+        # MICrONS
+        if n.startswith("minnie65"):
+            return "minnie65"
+        # CREMI: cremi3d_sample_A / A+ -> cremi3d (train) / cremi3d_test (image-only)
+        m = re.match(r"^(cremi3d)_sample_[A-Za-z]+(\+?)", n)
+        if m:
+            return "cremi3d_test" if m.group(2) == "+" else "cremi3d"
+        # FLYEM3D members (hemibrain / malecns carry the name; rest is FIB-25)
+        if n.startswith("flyem3d_hemibrain"):
+            return "flyem3d_hemibrain"
+        if n.startswith("flyem3d_malecns"):
+            return "flyem3d_malecns"
+        if re.match(r"^flyem3d_\d+nm_ssl", n):
+            return "flyem3d_fib25_ssl"
+        if n.startswith("flyem3d"):
+            return "flyem3d_fib25"
+        # COSEM: jrc_<id>_<rx>x<ry>x<rz>nm_... -> jrc_<id>
+        m = re.match(r"^(jrc_[A-Za-z0-9\-]+?)_\d+x\d", n)
+        if m:
+            return m.group(1)
+        # MitoEM2: mitoem2_<subset>_train01 / test01
+        m = re.match(r"^(mitoem2_[a-z]+)_(?:train|test)\d+", n)
+        if m:
+            return m.group(1)
+        # Fallback: drop a trailing _x{X}_y{Y}_z{Z} coordinate block.
+        m = re.match(r"^(.*?)_x\d+_y\d+_z\d+", n)
+        return m.group(1) if m else n
+
+    def _iter_train_groups(
+        self, task: str, vols: List[Dict[str, Any]],
+    ) -> List[Tuple[str, Tuple[float, ...], List[Dict[str, Any]], float]]:
+        """Bucket a branch's volumes into ``(desc, res, vols, multiplier)``
+        round-robin groups per the ``balance`` policy.  ``multiplier`` scales
+        the group's schedule length (1.0 = the branch's base share)."""
+        out: List[Tuple[str, Tuple[float, ...], List[Dict[str, Any]], float]] = []
+        if self.balance == "resolution":
+            for res, gvols in self._group_by_res(vols).items():
+                out.append((f"res={res}", res, gvols, 1.0))
+        elif self.balance == "subset":
+            keyed: Dict[Tuple[str, Tuple[float, ...]], List[Dict[str, Any]]] = {}
+            for v in vols:
+                sub = str(v.get("subset") or self._derive_subset(v["vol"]))
+                res = tuple(float(r) for r in v["native_resolution"])
+                keyed.setdefault((sub, res), []).append(v)
+            for (sub, res), gvols in keyed.items():
+                mult = self.subset_weights.get(sub, 1.0)
+                out.append((f"subset={sub}", res, gvols, mult))
+        else:  # "volume": one group per volume, equally likely (x sample_weight)
+            for v in vols:
+                res = tuple(float(r) for r in v["native_resolution"])
+                mult = float(v.get("sample_weight", 1.0))
+                out.append((f"vol={v['vol']}", res, [v], mult))
+        return out
 
     # ------------------------------------------------------------------
     # setup
@@ -281,16 +394,37 @@ class Joint3DDataModule(pl.LightningDataModule):
             bs = int(bcfg.get("batch_size", 2))
             weight = float(bcfg.get("sample_weight", 1.0))
             vols = [dict(v) for v in bcfg.get("volumes", [])]
-            n_group = max(bs, int(round(self.num_samples * weight)))
-            for res, gvols in self._group_by_res(vols).items():
-                ds = self._build_group(task, res, gvols, n_group, deterministic=False)
+            branch_groups = self._iter_train_groups(task, vols)
+            # Normalise multipliers by the branch mean so a group's length is
+            # ``num_samples * sample_weight`` when all weights are equal -- i.e.
+            # weights are RELATIVE ratios, and the branch's total virtual-epoch
+            # budget stays fixed regardless of how the weights are set (a high
+            # ``subset_weights`` simply reallocates the budget toward that
+            # subset rather than inflating the epoch).
+            mults = [m for _, _, _, m in branch_groups]
+            mean_mult = (sum(mults) / len(mults)) if mults else 1.0
+            if mean_mult <= 0:
+                mean_mult = 1.0
+            for desc, res, gvols, mult in branch_groups:
+                n_group = max(bs, int(round(self.num_samples * weight * mult / mean_mult)))
+                try:
+                    ds = self._build_group(task, res, gvols, n_group, deterministic=False)
+                except ValueError:
+                    # All volumes in the group were skipped (e.g. smaller than
+                    # the native patch on some axis).  Skip the empty group
+                    # rather than aborting the whole run.
+                    logger.warning(
+                        "Joint train group skipped (no usable volumes): "
+                        "task=%s %s", task, desc,
+                    )
+                    continue
                 datasets.append(ds)
                 group_specs.append((offset, len(ds), bs))
                 offset += len(ds)
                 logger.info(
-                    "Joint train group: task=%s res=%s vols=%d native_patch=%s "
-                    "len=%d bs=%d", task, res, len(gvols),
-                    _scaled(self.fine_patch, self.fine_nm, res), len(ds), bs,
+                    "Joint train group: task=%s %s vols=%d native_patch=%s "
+                    "len=%d bs=%d mult=%.2f", task, desc, len(gvols),
+                    _scaled(self.fine_patch, self.fine_nm, res), len(ds), bs, mult,
                 )
         if not datasets:
             raise ValueError("Joint3DDataModule: no train volumes configured under data.branches.")

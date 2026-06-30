@@ -84,6 +84,22 @@ data:
   # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
   # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
   ssl_min_foreground: 0.8
+  # Contrast gate: reject flat, structureless ssl crops (e.g. resin / embedding
+  # medium around a COSEM cell) whose normalised intensity std is below this
+  # value.  The non-zero gate above cannot catch these (resin is a non-zero
+  # mid-grey); only a variance test does.  Measured on the per-volume [0,1]
+  # scale.  Tune up if low-content crops still appear, down if the foreground
+  # retry budget is exhausted (best-seen fallback warns in the log).  0 = off.
+  ssl_min_std: 0.05
+  # Round-robin grouping/scheduling unit: each batch is drawn from one group.
+  #   "resolution" -- one group per (task, native_resolution); within a group
+  #                   volumes are picked voxel-count-weighted (big volumes win).
+  #   "volume"     -- one group per volume, scheduled EQUALLY (x per-volume
+  #                   sample_weight); every batch is drawn from a single volume.
+  #   "subset"     -- one group per domain, scheduled equally (x subset_weights).
+  # Weights are relative ratios (normalised per branch), so the virtual-epoch
+  # length stays fixed regardless of how they are set.
+  balance: volume
 
   # ---- realistic large-voxel degradation for the SSL branch ----
   # (nanocosmos.transforms.RandResolutionDegraded) -- the free
@@ -208,6 +224,10 @@ data:
       - vol: cremi3d_sample_C+_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
+      # --- SNEMI3D AC3 test volume, IMAGE-ONLY (labels never publicly released) ---
+      - vol: AC3_inputs
+        root: data/SNEMI3D
+        native_resolution: [30, 6, 6]
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
       # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
       - vol: mitoem2_beta_train01_volume

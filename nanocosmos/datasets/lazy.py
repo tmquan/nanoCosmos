@@ -226,6 +226,12 @@ class LazyVolDataset(Dataset):
             applied on top of ``min_foreground`` (the crop must pass both),
             so zero-padded EM is rejected alongside background-heavy labels.
             When > 0, failing crops are re-sampled.
+        image_min_std: Minimum normalised intensity standard deviation of the
+            *image* patch, measured as ``std / (vmax - vmin)`` on the per-volume
+            [0, 1] scale.  Rejects flat, structureless crops (e.g. resin /
+            embedding medium) that pass the non-zero gate because background EM
+            is a non-zero mid-grey.  Applies to label-less (e.g. SSL) volumes.
+            When > 0, failing crops are re-sampled (best-seen = highest std).
         max_foreground_retries: Maximum re-sampling attempts before
             falling back to the best-seen crop (highest foreground fraction
             across the attempts).
@@ -242,6 +248,7 @@ class LazyVolDataset(Dataset):
         deterministic: bool = False,
         min_foreground: float = 0.0,
         image_min_foreground: float = 0.0,
+        image_min_std: float = 0.0,
         max_foreground_retries: int = 50,
     ) -> None:
         super().__init__()
@@ -253,6 +260,14 @@ class LazyVolDataset(Dataset):
         self.normalize = normalize
         self.min_foreground = float(min_foreground)
         self.image_min_foreground = float(image_min_foreground)
+        # Contrast gate: reject low-variance crops (flat resin / empty
+        # embedding medium) whose normalised intensity std is below this
+        # threshold.  The non-zero gate alone passes such crops because EM
+        # background is a non-zero mid-grey; only a contrast/variance test
+        # rejects structureless regions.  Measured on the per-volume
+        # normalised [0, 1] scale (std_raw / (vmax - vmin)) so the threshold
+        # is volume-independent.  0 = disabled (default; no behaviour change).
+        self.image_min_std = float(image_min_std)
         self.max_foreground_retries = int(max_foreground_retries)
 
         self._handles: List[_VolumeHandle] = []
@@ -416,6 +431,19 @@ class LazyVolDataset(Dataset):
             self._write_norm_cache(h, vmin, vmax)
             logger.debug("Norm params for %s: min=%.4f, max=%.4f", h.name, vmin, vmax)
 
+    def _norm_scale(self, handle: _VolumeHandle) -> float:
+        """Per-volume intensity span ``vmax - vmin`` used to normalise std.
+
+        Falls back to ``1.0`` when norm params are unavailable or degenerate,
+        so the contrast gate degrades to a raw-intensity std test rather than
+        dividing by zero.
+        """
+        params = self._norm_params.get(handle.name)
+        if not params:
+            return 1.0
+        vmin, vmax = params
+        return (vmax - vmin) if vmax > vmin else 1.0
+
     def __len__(self) -> int:
         return self.num_samples
 
@@ -497,14 +525,28 @@ class LazyVolDataset(Dataset):
                   and image_frac >= self.image_min_foreground)
             return ok, label, image, min(label_frac, image_frac)
 
-        # Label-less volume: optional image-nonzero gate (rejects empty crops).
-        if self.image_min_foreground <= 0:
+        # Label-less volume: optional image-nonzero gate (rejects empty
+        # crops) AND/OR a contrast gate (rejects flat, structureless resin).
+        if self.image_min_foreground <= 0 and self.image_min_std <= 0:
             return True, None, None, 1.0
         image = _read_patch(
             handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
         )
-        nz_frac = float(np.count_nonzero(image)) / image.size
-        return nz_frac >= self.image_min_foreground, None, image, nz_frac
+        ok = True
+        # Best-seen score: when the contrast gate is active rank by std
+        # (so the fallback keeps the most-textured crop), else by non-zero
+        # fraction.  Both are measured on the normalised [0, 1] scale.
+        score = 1.0
+        if self.image_min_foreground > 0:
+            nz_frac = float(np.count_nonzero(image)) / image.size
+            ok = ok and nz_frac >= self.image_min_foreground
+            score = nz_frac
+        if self.image_min_std > 0:
+            scale = self._norm_scale(handle)
+            std_norm = float(image.std()) / scale
+            ok = ok and std_norm >= self.image_min_std
+            score = std_norm
+        return ok, None, image, score
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
         seed = index if self.deterministic else index + int(torch.randint(0, 2**31, (1,)).item())

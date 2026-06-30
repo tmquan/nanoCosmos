@@ -275,8 +275,11 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             min_foreground=float(d.get("min_foreground", 0.0)),
             sft_min_foreground=float(d.get("sft_min_foreground", 0.0)),
             ssl_min_foreground=float(d.get("ssl_min_foreground", 0.0)),
+            ssl_min_std=float(d.get("ssl_min_std", 0.0)),
             find_boundaries=float(d.get("find_boundaries", 0.0)),
             boundary_target=str(d.get("boundary_target", "semantic")),
+            balance=str(d.get("balance", "resolution")),
+            subset_weights=OmegaConf.to_container(d.get("subset_weights", {}), resolve=True) or {},
             seed=int(cfg.get("seed", 0)),
         )
 
