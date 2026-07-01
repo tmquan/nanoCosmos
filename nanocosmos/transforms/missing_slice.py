@@ -16,7 +16,7 @@ Only meaningful for 3-D volumes (``[C, D, H, W]``); a no-op on 2-D
 slice-mode tensors.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import torch

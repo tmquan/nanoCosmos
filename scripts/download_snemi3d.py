@@ -184,14 +184,14 @@ def download_snemi(out_dir: Path) -> None:
 
     zip_path = out_dir / "snemi.zip"
     if not zip_path.exists():
-        print(f"  Downloading snemi.zip ...")
+        print("  Downloading snemi.zip ...")
         urllib.request.urlretrieve(SNEMI_ZIP_URL, zip_path)
         size_mb = zip_path.stat().st_size / 1e6
         print(f"    saved: snemi.zip ({size_mb:.0f} MB)")
     else:
-        print(f"  snemi.zip already exists")
+        print("  snemi.zip already exists")
 
-    print(f"  Extracting and converting to H5 ...")
+    print("  Extracting and converting to H5 ...")
     import tifffile
 
     with zipfile.ZipFile(zip_path, "r") as zf:
@@ -230,7 +230,7 @@ def download_neurons(
     crops: List[Tuple[str, Tuple[int, ...], Tuple[int, ...]]],
 ) -> None:
     """Download neurons crops from GCS."""
-    print(f"\n--- Neurons ---")
+    print("\n--- Neurons ---")
     print(f"  EM:  {EM_PATH}")
     print(f"  Seg: {SEG_PATH}")
     print()
@@ -246,7 +246,7 @@ def download_neurons(
         if em_h5.exists():
             print(f"    EM: SKIP (already exists: {em_h5.name})")
         else:
-            print(f"    Downloading EM ...")
+            print("    Downloading EM ...")
             em_vol = download_subvolume(EM_PATH, bbox_start, bbox_size)
             print(f"      shape: {em_vol.shape}  dtype={em_vol.dtype}")
             save_h5(em_vol, em_h5)
@@ -258,7 +258,7 @@ def download_neurons(
         if seg_h5.exists():
             print(f"    Seg: SKIP (already exists: {seg_h5.name})")
         else:
-            print(f"    Downloading segmentation ...")
+            print("    Downloading segmentation ...")
             seg_vol = download_subvolume(SEG_PATH, bbox_start, bbox_size)
             n_ids = len(np.unique(seg_vol))
             print(f"      shape: {seg_vol.shape}  dtype={seg_vol.dtype}  "

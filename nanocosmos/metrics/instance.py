@@ -8,7 +8,7 @@ Provides per-point and per-batch variants of:
 - TED  (Tolerant Edit Distance -- min split+merge corrections)
 """
 
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple, Tuple
 
 import numpy as np
 import torch

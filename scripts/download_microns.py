@@ -269,7 +269,7 @@ def main() -> None:
     print("=" * 60)
     print(f"  Output      : {out_dir}")
     print(f"  Mip level   : {mip}")
-    print(f"  Resolution  : 8 x 8 x 40 nm (mip0)")
+    print("  Resolution  : 8 x 8 x 40 nm (mip0)")
     print(f"  Seg versions: {versions}")
 
     total_gb_all = 0.0
@@ -294,7 +294,7 @@ def main() -> None:
         if em_file.exists():
             print(f"  EM: SKIP (already exists: {em_file.name})")
         else:
-            print(f"  Downloading EM imagery ...")
+            print("  Downloading EM imagery ...")
             print(f"    source: {EM_PATH}")
             em_vol = download_subvolume(EM_PATH, bbox_start, bbox_size, mip=mip)
             print(f"    shape : {em_vol.shape}  dtype={em_vol.dtype}")

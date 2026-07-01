@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 import webbrowser
-from typing import Tuple, Optional
+from typing import Tuple
 
 
 def _parse_spacing(s: str) -> Tuple[float, float, float]:

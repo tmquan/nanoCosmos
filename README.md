@@ -111,6 +111,7 @@ python scripts/train.py --config-name combine loss.weight_sem.weight=0.0 loss.we
 #   ssl (degraded->clean EM reconstruction) + sft (affinity + sem) on a
 #   shared backbone via Joint3DReconSegLoss; see doc/JOINT_TRAINING.md.
 python scripts/train.py --config-name nanocosmos-16B   # Cosmos-3 Nano backbone
+python scripts/train.py --config-name nanocosmos-4B    # Cosmos-3 Edge (reduced from Nano)
 python scripts/train.py --config-name nanocosmos-2B    # Cosmos-Predict 2.5 (2B)
 ```
 

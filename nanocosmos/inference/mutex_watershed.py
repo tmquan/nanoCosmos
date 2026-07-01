@@ -357,7 +357,6 @@ def mutex_watershed(
         )
         n_mutex = int(edge_m.sum())
 
-    labels = np.zeros(n_nodes, dtype=np.int64)
     if edge_u.size > 0:
         # Descending priority (stable so equal weights keep offset order).
         order = np.argsort(-edge_w, kind="stable")

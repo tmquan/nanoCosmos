@@ -8,8 +8,6 @@ Provides per-point and per-batch variants of:
 Both support multi-class evaluation with an optional ``ignore_index``.
 """
 
-from typing import Optional
-
 import torch
 import torch.nn.functional as F
 from einops import rearrange

@@ -1,7 +1,7 @@
 """Vista3D wrapper with the affinity + sem + raw dense-prediction head."""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn

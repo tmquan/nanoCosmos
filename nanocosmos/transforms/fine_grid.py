@@ -28,7 +28,6 @@ from typing import Dict, Optional, Sequence
 import numpy as np
 import torch
 import torch.nn.functional as F
-from monai.config import KeysCollection
 from monai.transforms import MapTransform
 
 

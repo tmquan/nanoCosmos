@@ -538,7 +538,6 @@ def setup_profiler(cfg: DictConfig):
 def setup_strategy(cfg: DictConfig):
     """Resolve the Lightning distributed strategy from ``training.strategy``."""
     strategy_name = cfg.training.get("strategy", "auto")
-    use_compile = cfg.get("training", {}).get("compile", False)
 
     if strategy_name == "ddp":
         # 30-min collective timeout matches TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC

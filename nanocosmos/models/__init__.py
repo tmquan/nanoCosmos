@@ -1,7 +1,7 @@
 """
 Model architectures for connectomics segmentation.
 
-Four end-to-end backbone wrappers live here:
+Five end-to-end backbone wrappers live here:
 
 * :class:`CosmosPredict3DWrapper` -- Cosmos-Predict 2.5 (base DiT +
   VAE) with the affinity + sem + raw head
@@ -11,10 +11,17 @@ Four end-to-end backbone wrappers live here:
 * :class:`Cosmos3Nano3DWrapper` -- Cosmos 3 (Nano) 16B omni
   Mixture-of-Transformers (``Cosmos3OmniTransformer`` + Wan VAE) with
   the same head.
+* :class:`Cosmos3EdgeWrapper` -- Cosmos 3 (Edge) 4B tier; announced but
+  not yet released, so it warm-starts by structurally reducing the
+  loaded Nano transformer (``nanocosmos-4B.yaml``).
+* :class:`Cosmos3SuperWrapper` -- Cosmos 3 (Super) 64B tier; a thin
+  variant specialisation of the shared omni wrapper.
 * :class:`Vista3DWrapper` -- SegResNetDS2 backbone with the same
   head, for fast local iteration.
 
-All wrappers project their backbone features through
+The three Cosmos 3 tiers (Nano / Edge / Super) share
+:class:`nanocosmos.models.cosmos_3_common.Cosmos3OmniWrapper` as their
+common base.  All wrappers project their backbone features through
 :class:`nanocosmos.models.vista.VistaTaskHead3D` so the post-backbone
 refinement stack is shared.
 

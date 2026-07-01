@@ -46,13 +46,11 @@ Config schema (``cfg.data``)::
 from __future__ import annotations
 
 import logging
-import math
 import random
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytorch_lightning as pl
-import torch
 from monai.transforms import (
     Compose,
     CopyItemsd,

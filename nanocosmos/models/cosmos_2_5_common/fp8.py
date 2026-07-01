@@ -16,7 +16,6 @@ default as it is the most accuracy-robust dynamic recipe for training.
 """
 
 import logging
-from typing import Optional
 
 import torch.nn as nn
 

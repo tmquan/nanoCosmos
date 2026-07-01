@@ -38,6 +38,7 @@ chain is `default → <dataset> → <project>`.
 | `combine.yaml`        | Multi-dataset affinity training (SNEMI3D + neurons + MICrONS).              |
 | `cosmospredict3d.yaml`| Flattened standalone Cosmos-Predict 2.5 (2B) baseline recipe.               |
 | `nanocosmos-16B.yaml` | Joint SR + segmentation recipe (`dataset: joint3d`, Cosmos-3 Nano backbone). |
+| `nanocosmos-4B.yaml`  | Joint SR + segmentation recipe (`joint3d_edge`, Cosmos-3 Edge 4B backbone, reduced from Nano). |
 | `nanocosmos-2B.yaml`  | Joint SR + segmentation recipe (`joint3d_2b`, Cosmos-Predict 2.5 2B backbone). |
 | `cosmos3nano3d.yaml`  | Flattened standalone Cosmos3-Nano (16B) recipe.                             |
 
@@ -72,9 +73,14 @@ applicable or directly: `python scripts/<name>.py`.
 | `tests/test_datamodules.py`        | `CircuitDataModule` augmentation pipeline (via a synthetic in-memory dataset). |
 | `tests/test_preprocessors.py`      | HDF5 / NRRD / TIFF / NfTy converters.                      |
 | `tests/test_utils.py`              | label / io / parallel helpers.                             |
+| `tests/test_cosmos_predict.py`     | Cosmos-Predict 2.5 backbone smoke tests (random-init, CPU): forward contract `[B, HEAD_CHANNELS, D, H, W]`. |
+| `tests/test_joint.py`              | `Joint3DReconSegLoss` two-branch routing / shapes / gradients + `RandResolutionDegraded`. |
+| `tests/test_joint_datamodule.py`   | `Joint3DDataModule` per-branch batch contract + full `fast_dev_run` train path (synthetic HDF5). |
+| `tests/test_joint_module.py`       | `Joint3DModule` train/eval loop (stub backbone, `fast_dev_run`): task routing + sft metric pooling. |
+| `tests/test_patches.py`            | `_patches.generate_patch_indices` ordering / coverage / back-shift. |
+| `tests/test_sliding_window.py`     | Unified-head `sliding_window_inference`. |
 
-Tests for the freeze schedule and `sliding_window_inference` are not
-yet shipped (tracked under the
+Tests for the freeze schedule are not yet shipped (tracked under the
 audit overhaul backlog -- see
 [`doc/CONTRIBUTING.md`](./CONTRIBUTING.md) for where to land them).
 
@@ -100,6 +106,9 @@ and the loss targets.  No learnable state.
 | `rand_crop_foreground.py`  | Random crop biased toward foreground voxels.                           |
 | `rand_transpose_xy.py`     | Random xy-transpose augmentation.                                      |
 | `resolution_zoom.py`       | Per-axis resolution scaling for multi-resolution training.             |
+| `degrade.py`               | `RandResolutionDegraded` — small-voxel → large-voxel EM degradation (the SSL supervisor). |
+| `fine_grid.py`             | Resample a native-resolution patch onto the fixed fine (small-voxel) grid. |
+| `missing_slice.py`         | `RandMissingSliced` — missing z-section augmentation for ssTEM volumes. |
 
 ### `nanocosmos/datasets/` — MONAI `CacheDataset`s
 
@@ -109,7 +118,10 @@ and the loss targets.  No learnable state.
 | `snemi3d.py`    | SNEMI3D dataset leaf.                                                           |
 | `microns.py`    | MICrONS dataset leaf.                                                           |
 | `neurons.py`    | Internal "neurons" volume leaf.                                                 |
+| `cremi3d.py`    | CREMI (3D) *Drosophila* ssTEM dataset leaf.                                     |
+| `flyem3d.py`    | FLYEM3D (Janelia FlyEM 8 nm FIB-SEM) dataset leaf.                              |
 | `lazy.py`       | `LazyVolDataset` — on-demand loading for very large volumes.                    |
+| `_patches.py`   | Shared 3-D patch-index generator (used by `lazy.py`).                           |
 
 ### `nanocosmos/datamodules/` — Lightning `DataModule`s
 
@@ -119,6 +131,8 @@ and the loss targets.  No learnable state.
 | `snemi3d.py`    | SNEMI3D datamodule leaf.                                            |
 | `microns.py`    | MICrONS datamodule leaf.                                            |
 | `neurons.py`    | Internal neurons datamodule leaf.                                   |
+| `cremi3d.py`    | CREMI (3D) datamodule leaf.                                         |
+| `flyem3d.py`    | FIB-25 (3D) datamodule leaf.                                        |
 | `joint3d.py`    | `Joint3DDataModule` — round-robin ssl/sft branches for the joint recipe. |
 
 ### `nanocosmos/losses/` — affinity + sem + raw loss
@@ -172,6 +186,51 @@ extension hooks.
 | `wrapper.py`          | `CosmosPredict3DWrapper` — thin subclass of `_BaseCosmos25Wrapper`.   |
 | `variants.py`         | Predict-specific variant registry (`nvidia/Cosmos-Predict2.5-2B`).    |
 
+#### `models/cosmos_3_common/` — shared scaffolding for the Cosmos 3 family
+
+The three Cosmos 3 tiers (Nano / Edge / Super) share one omni-transformer
+wrapper; each tier package only pins its variant registry (and, for Edge,
+the Nano→Edge reduction).
+
+| File                  | Purpose                                                               |
+| --------------------- | --------------------------------------------------------------------- |
+| `__init__.py`         | Re-exports `Cosmos3OmniWrapper`.                                      |
+| `wrapper.py`          | `Cosmos3OmniWrapper` — the shared Cosmos 3 omni (`Cosmos3OmniTransformer` + Wan2.2 VAE) feature extractor + head. |
+| `wrapper_base.py`     | Abstract base / extension-hook surface for the tier wrappers.        |
+| `variants.py`         | `_VariantConfigBase` for the Cosmos 3 tiers.                         |
+| `reduce.py`           | `reduce_omni_transformer` — structured depth+width reduction (used by the Edge tier). |
+
+#### `models/cosmos_3_nano/` — Cosmos 3 Nano (16B) wrapper
+
+The shipped default backbone (`snemi3d.yaml` / `default.yaml`,
+`model.type: cosmos3nano3d`; joint recipe `joint3d`).
+
+| File                  | Purpose                                                               |
+| --------------------- | --------------------------------------------------------------------- |
+| `__init__.py`         | Re-exports `Cosmos3Nano3DWrapper` / `Cosmos3NanoWrapper`.            |
+| `wrapper.py`          | `Cosmos3Nano3DWrapper` — thin subclass pinning the Nano variant.    |
+| `wrapper_base.py`     | Nano extension-hook surface.                                         |
+| `variants.py`         | Nano variant registry (`nvidia/Cosmos3-Nano`).                      |
+
+#### `models/cosmos_3_edge/` — Cosmos 3 Edge (4B, reduced from Nano) wrapper
+
+Announced-but-unreleased tier (`nanocosmos-4B.yaml`, `joint3d_edge`); warm-starts
+by reducing the loaded Nano transformer.
+
+| File                  | Purpose                                                               |
+| --------------------- | --------------------------------------------------------------------- |
+| `__init__.py`         | Re-exports `Cosmos3EdgeWrapper`.                                     |
+| `wrapper.py`          | `Cosmos3EdgeWrapper` — reduces the loaded Nano transformer to the Edge geometry in `_post_load_diffusers`. |
+| `variants.py`         | Edge variant registry (paper geometry).                             |
+
+#### `models/cosmos_3_super/` — Cosmos 3 Super (64B) wrapper
+
+| File                  | Purpose                                                               |
+| --------------------- | --------------------------------------------------------------------- |
+| `__init__.py`         | Re-exports `Cosmos3SuperWrapper`.                                    |
+| `wrapper.py`          | `Cosmos3SuperWrapper` — thin subclass pinning the Super variant.    |
+| `variants.py`         | Super variant registry.                                             |
+
 #### `models/vista/` — Vista3D wrapper + head
 
 | File                       | Purpose                                                             |
@@ -191,8 +250,12 @@ concrete `module.py`.
 | Path                                  | Purpose                                                      |
 | ------------------------------------- | ------------------------------------------------------------ |
 | `modules/base.py`                       | `BaseCircuitModule` — loop + head-oriented scalar logging. |
+| `modules/joint3d.py`                    | `Joint3DModule` + `JointEdge3DModule` / `JointSuper3DModule` / `JointPredict3DModule` — joint SR+seg Lightning classes. |
 | `modules/cosmos_2_5_common/base.py`     | `BaseCosmosModule` — freeze schedule + optim param-group split. |
 | `modules/cosmos_predict_2_5/module.py`  | `CosmosPredict3DModule` — concrete Lightning class.        |
+| `modules/cosmos_3_nano/module.py`       | `Cosmos3Nano3DModule` — concrete Lightning class (shipped default). |
+| `modules/cosmos_3_edge/module.py`       | `Cosmos3EdgeModule` — concrete Lightning class.            |
+| `modules/cosmos_3_super/module.py`      | `Cosmos3SuperModule` — concrete Lightning class.           |
 | `modules/vista/base.py`                 | `BaseVistaModule` — Vista-specific freeze schedule.        |
 | `modules/vista/module.py`               | `Vista3DModule` — concrete Lightning class.                |
 
@@ -205,6 +268,7 @@ concrete `module.py`.
 | `callbacks/tensorboard/image_logger.py` | `ImageLogger` callback (the public class).                        |
 | `callbacks/tensorboard/tags.py`   | `TagContext` — single source of `{stage}/{mode}/[{head}/]{panel}`.      |
 | `callbacks/tensorboard/heads.py`  | `_log_predictions` — emits `true/{image,label,aff/*}`, `pred/{sem,raw,aff/*}`, and the Mutex Watershed `pred/label/{pre,mul}` panels; `aff_panel_indices` selects which affinity offsets to show. |
+| `callbacks/tensorboard/joint3d_logger.py` | `Joint3DImageLogger` — logs both `ssl` and `sft` panels each epoch (task-namespaced tags) for the joint recipe. |
 | `callbacks/tensorboard/viz.py`    | Colour-map, overlay, tile builders.                                     |
 
 ### `nanocosmos/inference/` — sliding-window + Mutex Watershed
@@ -250,18 +314,22 @@ concrete `module.py`.
 
 | Subsystem                               | .py files  |
 | --------------------------------------- | ---------- |
-| `nanocosmos/transforms/`                  |  7 (incl. `__init__`)                                |
-| `nanocosmos/models/cosmos_2_5_common/`    |  7 (incl. `__init__`)                                |
+| `nanocosmos/transforms/`                  | 10 (incl. `__init__`)                                |
+| `nanocosmos/models/cosmos_2_5_common/`    |  8 (incl. `__init__`)                                |
 | `nanocosmos/models/cosmos_predict_2_5/`   |  3 (`__init__`, `wrapper`, `variants`)               |
+| `nanocosmos/models/cosmos_3_common/`      |  5 (incl. `__init__`, `reduce.py`)                   |
+| `nanocosmos/models/cosmos_3_nano/`        |  4 (incl. `__init__`)                                |
+| `nanocosmos/models/cosmos_3_edge/`        |  3 (incl. `__init__`)                                |
+| `nanocosmos/models/cosmos_3_super/`       |  3 (incl. `__init__`)                                |
 | `nanocosmos/models/vista/`                |  4 (incl. `__init__`)                                |
 | `nanocosmos/callbacks/tensorboard/`       |  6 (incl. `__init__`)                                |
-| `nanocosmos/losses/`                      |  4 (`__init__`, `_common`, `affinity`, `dice_bce_focal`) |
-| `nanocosmos/datamodules/` + `datasets/`   |  5 + 7 (datasets incl. `lazy.py`, `_patches.py`)     |
+| `nanocosmos/losses/`                      |  5 (`__init__`, `_common`, `affinity`, `dice_bce_focal`, `joint3d`) |
+| `nanocosmos/datamodules/` + `datasets/`   |  8 + 9 (datasets incl. `lazy.py`, `_patches.py`)     |
 | `nanocosmos/preprocessors/`               |  6 (incl. `__init__`, `base`)                        |
-| `nanocosmos/modules/`                     |  2 (top-level) + per-arch packages (`cosmos_2_5_common`, `cosmos_predict_2_5`, `cosmos_3_nano`, `vista`) |
+| `nanocosmos/modules/`                     |  3 (top-level: `__init__`, `base`, `joint3d`) + per-arch packages (`cosmos_2_5_common`, `cosmos_predict_2_5`, `cosmos_3_common`, `cosmos_3_nano`, `cosmos_3_edge`, `cosmos_3_super`, `vista`) |
 | `nanocosmos/metrics/`                     |  3                                                   |
 | `nanocosmos/inference/`                   |  3                                                   |
-| `nanocosmos/utils/`                       |  4 (incl. `__init__`)                                |
+| `nanocosmos/utils/`                       |  2 (`__init__`, `io`)                                |
 | `nanocosmos/callbacks/`                   |  2 (top-level: `__init__`, `memory.py`) + `tensorboard/` package above |
 | `nanocosmos/visualizer/`                  |  4 py + 4 static                                     |
 
