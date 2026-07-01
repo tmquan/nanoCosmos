@@ -502,11 +502,19 @@ class BaseCircuitModule(pl.LightningModule):
         for i, name in enumerate(names):
             if counts[i] > 0:
                 avg = (sums[i] / counts[i]).item()
+                # ``sums`` / ``counts`` were already all-reduced above, so every
+                # rank holds an identical ``avg`` and logs the identical key set.
+                # Log on ALL ranks (NOT rank_zero_only) so the value lands in
+                # ``trainer.callback_metrics`` everywhere -- ModelCheckpoint /
+                # EarlyStopping run on every rank under DDP and raise
+                # "could not find the monitored key" if val metrics live only on
+                # rank 0.  ``sync_dist=False`` because the reduce already happened
+                # (no extra collective); loggers stay rank-0-guarded by Lightning.
                 self.log(
                     name, avg,
                     prog_bar=(name in prog_bar_names),
                     sync_dist=False,
-                    rank_zero_only=True,
+                    rank_zero_only=False,
                 )
 
         self._eval_accum.clear()
