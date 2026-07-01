@@ -9,6 +9,10 @@ task-namespaced tag ``{stage}/{mode}/{task}/...``:
 
       {stage}/automatic/{ssl,sft}/true/image         the (degraded, on ssl) input
       {stage}/automatic/{ssl,sft}/pred/recon         raw-head small-voxel recon
+      {stage}/automatic/{ssl,sft}/pred/wan_decoder   DiT features decoded through
+                                                     the frozen pretrained Wan
+                                                     conv_out (diagnostic; skipped
+                                                     when no pretrained VAE)
       {stage}/automatic/ssl/true/recon_target        clean EM target (recon_image)
       # ssl only: on sft recon_target is a clone of true/image, so it is skipped
       {stage}/automatic/{ssl,sft}/volume             text: source volume name(s)
@@ -128,6 +132,23 @@ class Joint3DImageLogger(ImageLogger):
                 [fwd_module(images[i:i + 1]) for i in range(n)], dim=0,
             ).float()
 
+            # Frozen Wan-decoder reconstruction of the DiT features: decode the
+            # model's learned latent through the pretrained ``conv_out``
+            # (preserved at build time) instead of the unified task head, so we
+            # can see what the Wan VAE believes the latent should render to in
+            # pixel space.  Diagnostic only -- ``conv_out`` is never optimised.
+            # Run per-image on ALL ranks (collective-consistent with the head
+            # forward above; ``wan_decoder_output`` is a ``@torch.no_grad``
+            # method).  Returns ``None`` on wrappers without a pretrained VAE
+            # (e.g. the random-init standalone DiT), in which case the panel is
+            # simply skipped.
+            wan_fn = getattr(getattr(pl_module, "model", None), "wan_decoder_output", None)
+            wan_rgb = None
+            if callable(wan_fn):
+                wan_parts = [wan_fn(images[i:i + 1]) for i in range(n)]
+                if all(p is not None for p in wan_parts):
+                    wan_rgb = torch.cat(wan_parts, dim=0).float()
+
         if tb is None:  # non-rank-0: forward done (collective), no logging
             return
 
@@ -164,6 +185,14 @@ class Joint3DImageLogger(ImageLogger):
         tb.add_images(ctx.tag("pred/recon"),
                       _resize_2d(_gray3(_to_2d(raw)), target_hw),
                       global_step=epoch)
+        # Wan-decoder reconstruction of the DiT features (frozen conv_out).
+        # RGB [n,3,D,H,W] ~[-1,1]; the EM is a tiled grayscale so collapse the
+        # channel dim to a single panel before the shared grayscale renderer.
+        if wan_rgb is not None:
+            wan_gray = _to_2d(wan_rgb[:n]).mean(dim=1, keepdim=True)
+            tb.add_images(ctx.tag("pred/wan_decoder"),
+                          _resize_2d(_gray3(wan_gray), target_hw),
+                          global_step=epoch)
         # The clean recon target only differs from true/image on the ssl branch
         # (where the input was degraded).  On sft the recon target is a clone of
         # the input, so logging it would just duplicate true/image -> skip it.
@@ -236,8 +265,10 @@ class Joint3DImageLogger(ImageLogger):
         aff = pooled[:, crit.aff_slice].sigmoid().float()
         names = offset_names(offsets, n_pull)
         mask_2d = torch.ones_like(_to_2d(aff[:, :1]))
+        # n_pull (=5) pull offsets + max_push evenly-spaced long-range push
+        # offsets = the affinity panels shown.  max_push=7 -> 5 + 7 = 12.
         _add_aff_panels(
-            tb, ctx, aff, aff_panel_indices(len(offsets), n_pull, max_push=4),
+            tb, ctx, aff, aff_panel_indices(len(offsets), n_pull, max_push=7),
             names=names, mask_2d=mask_2d, epoch=epoch, tag_prefix="aff/pred",
             size=target_hw,
         )
