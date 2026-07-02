@@ -5,7 +5,7 @@ panel logger: central-slice extraction, per-image min-max normalisation,
 HSV colour LUT, and integer-label → pastel-RGB mapping.
 """
 
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -32,14 +32,30 @@ def _resize_2d(
     return F.interpolate(img.float(), size=target, mode="bilinear", align_corners=False)
 
 
-def _to_2d(t: torch.Tensor) -> torch.Tensor:
-    """Extract the central depth-slice from a 5-D tensor [B,C,D,H,W].
+def _to_2d(t: torch.Tensor, frac: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Extract a depth-slice from a 5-D tensor [B,C,D,H,W].
+
+    By default the central slice (``D // 2``) is used.  When ``frac`` is given
+    -- a per-sample tensor of *relative* depths in ``[0, 1]`` with shape ``[B]``
+    -- each sample's slice is taken at ``round(frac * (D - 1))`` instead.
+
+    ``frac`` is relative (not an absolute index) on purpose: the SAME value
+    maps correctly onto tensors living on different grids -- e.g. the fine-grid
+    image (deep) and the coarser native-grid label -- so all panels display the
+    same physical depth.  Callers use this to show the most informative slice
+    (e.g. the z with the most segmentation foreground) rather than a central
+    slice that may be empty / fully eroded even when the 3-D target is not.
 
     Returns *t* unchanged if it is already 4-D [B,C,H,W].
     """
-    if t.dim() == 5:
-        return t[:, :, t.shape[2] // 2]
-    return t
+    if t.dim() != 5:
+        return t
+    D = t.shape[2]
+    if frac is None:
+        return t[:, :, D // 2]
+    idx = (frac.to(t.device).clamp(0.0, 1.0) * max(D - 1, 0)).round().long()
+    idx = idx.view(-1, 1, 1, 1, 1).expand(-1, t.shape[1], 1, t.shape[3], t.shape[4])
+    return t.gather(2, idx).squeeze(2)
 
 
 def _normalise(t: torch.Tensor) -> torch.Tensor:

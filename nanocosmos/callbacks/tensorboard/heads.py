@@ -71,13 +71,16 @@ def _add_aff_panels(
     epoch: int,
     tag_prefix: str,
     size: Optional[Sequence[int]] = None,
+    frac: Optional[torch.Tensor] = None,
 ) -> None:
     """Central-slice affinity panels (a curated channel subset).
 
     When ``size=(H, W)`` is given, each panel (and the mask) is upsampled to
     that size so affinity panels match the finest panel on the TB grid.
+    ``frac`` (per-sample relative depth in ``[0, 1]``) selects the display
+    slice; ``None`` keeps the central slice.
     """
-    aff_2d = _to_2d(aff_3d).clamp(0.0, 1.0)
+    aff_2d = _to_2d(aff_3d, frac).clamp(0.0, 1.0)
     if size is not None:
         aff_2d = _resize_2d(aff_2d, size, mode="bilinear")
         mask_2d = _resize_2d(mask_2d, size, mode="nearest")

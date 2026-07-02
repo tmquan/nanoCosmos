@@ -8,13 +8,13 @@ task-namespaced tag ``{stage}/{mode}/{task}/...``:
 * **both branches** -- reconstruction panels::
 
       {stage}/automatic/{ssl,sft}/true/image         the (degraded, on ssl) input
-      {stage}/automatic/{ssl,sft}/pred/recon         raw-head small-voxel recon
+      {stage}/automatic/{ssl,sft}/pred/image         raw-head small-voxel recon
       {stage}/automatic/{ssl,sft}/pred/wan_decoder   DiT features decoded through
                                                      the frozen pretrained Wan
                                                      conv_out (diagnostic; skipped
                                                      when no pretrained VAE)
-      {stage}/automatic/ssl/true/recon_target        clean EM target (recon_image)
-      # ssl only: on sft recon_target is a clone of true/image, so it is skipped
+      {stage}/automatic/ssl/true/target              clean EM target (recon_image)
+      # ssl only: on sft the target is a clone of true/image, so it is skipped
       {stage}/automatic/{ssl,sft}/volume             text: source volume name(s)
 
 * **sft only** -- the fine head is pooled to the native label grid (matching
@@ -158,6 +158,18 @@ class Joint3DImageLogger(ImageLogger):
         ctx = TagContext(stage=stage, mode=self.mode, head=task)
         epoch = pl_module.current_epoch
 
+        # Per-sample display depth for the sft panels: the z-slice with the most
+        # semantic foreground (as a RELATIVE depth in [0, 1]).  The fixed central
+        # slice can be empty / fully eroded on sparse or thin-structure crops
+        # (e.g. MICrONS neurites) even when the 3-D target is non-empty, showing
+        # up as a misleading all-black true/sem panel.  A relative depth maps
+        # correctly onto BOTH the fine-grid recon panels and the coarser
+        # native-grid seg panels, so all panels display the same physical slice.
+        # ssl carries no seg target -> None (keep the central slice).
+        frac_z = (
+            self._best_depth_frac(batch, pl_module, n) if task == "sft" else None
+        )
+
         # Record which source volume(s) the panels came from, so a black/odd
         # panel can be traced to a specific volume.  TensorBoard image cards
         # can't carry dynamic titles, so this logs a sibling text card under
@@ -179,17 +191,17 @@ class Joint3DImageLogger(ImageLogger):
 
         # ---- reconstruction panels (both branches) ----
         tb.add_images(ctx.tag("true/image"),
-                      _resize_2d(_gray3(_to_2d(images[:n])), target_hw),
+                      _resize_2d(_gray3(_to_2d(images[:n], frac_z)), target_hw),
                       global_step=epoch)
         raw = head[:, crit.raw_slice][:n]               # [n,1,D,H,W] linear
-        tb.add_images(ctx.tag("pred/recon"),
-                      _resize_2d(_gray3(_to_2d(raw)), target_hw),
+        tb.add_images(ctx.tag("pred/image"),
+                      _resize_2d(_gray3(_to_2d(raw, frac_z)), target_hw),
                       global_step=epoch)
         # Wan-decoder reconstruction of the DiT features (frozen conv_out).
         # RGB [n,3,D,H,W] ~[-1,1]; the EM is a tiled grayscale so collapse the
         # channel dim to a single panel before the shared grayscale renderer.
         if wan_rgb is not None:
-            wan_gray = _to_2d(wan_rgb[:n]).mean(dim=1, keepdim=True)
+            wan_gray = _to_2d(wan_rgb[:n], frac_z).mean(dim=1, keepdim=True)
             tb.add_images(ctx.tag("pred/wan_decoder"),
                           _resize_2d(_gray3(wan_gray), target_hw),
                           global_step=epoch)
@@ -202,16 +214,47 @@ class Joint3DImageLogger(ImageLogger):
             if recon_t.dim() == self.spatial_dims + 1:
                 recon_t = rearrange(recon_t, "b ... -> b 1 ...")
             tb.add_images(
-                ctx.tag("true/recon_target"),
+                ctx.tag("true/target"),
                 _resize_2d(_gray3(_to_2d(recon_t[:n])), target_hw),
                 global_step=epoch,
             )
 
         # ---- segmentation panels (sft only) ----
         if task == "sft" and "label" in batch:
-            self._log_seg_panels(tb, ctx, pl_module, head, batch, n, target_hw)
+            self._log_seg_panels(
+                tb, ctx, pl_module, head, batch, n, target_hw, frac_z=frac_z,
+            )
 
-    def _log_seg_panels(self, tb, ctx, pl_module, head, batch, n, target_hw=None):
+    def _best_depth_frac(self, batch, pl_module, n):
+        """Per-sample relative depth (``[0, 1]``) of the z-slice with the most
+        semantic foreground, used to slice-pick the sft panels.
+
+        Prefers the eroded ``sem_label`` (the actual sem target); falls back to
+        the instance ``label``.  Returns ``None`` (=> central slice) when no
+        usable target is present or every slice is empty.
+        """
+        seg = batch.get("sem_label")
+        if seg is None:
+            seg = batch.get("label")
+        if seg is None:
+            return None
+        s = seg.to(pl_module.device)
+        if s.dim() == self.spatial_dims + 2:      # [B,1,D,H,W] -> [B,D,H,W]
+            s = rearrange(s, "b 1 ... -> b ...")
+        if s.dim() != self.spatial_dims + 1:      # expect [B,D,H,W]
+            return None
+        fg = (s[:n] > 0).float()
+        depth = fg.shape[1]
+        if depth <= 1:
+            return None
+        per_z = fg.flatten(2).sum(-1)             # [n, D]
+        if not torch.any(per_z > 0):
+            return None                           # empty target -> central slice
+        return per_z.argmax(dim=1).float() / (depth - 1)
+
+    def _log_seg_panels(
+        self, tb, ctx, pl_module, head, batch, n, target_hw=None, frac_z=None,
+    ):
         epoch = pl_module.current_epoch
         crit = pl_module.criterion
         labels = batch["label"].to(pl_module.device)
@@ -224,7 +267,8 @@ class Joint3DImageLogger(ImageLogger):
 
         # True instance labels.  (nearest upsample -> no label-colour blending.)
         labels_2d = rearrange(
-            _to_2d(rearrange(labels, "b ... -> b 1 ...")), "b 1 ... -> b ...",
+            _to_2d(rearrange(labels, "b ... -> b 1 ..."), frac_z),
+            "b 1 ... -> b ...",
         )
         tb.add_images(
             ctx.tag("true/label"),
@@ -246,14 +290,14 @@ class Joint3DImageLogger(ImageLogger):
         else:
             sem_src = labels
         gt_sem = rearrange((sem_src > 0).float(), "b ... -> b 1 ...")
-        gt_sem_panel = _gray3(_to_2d(gt_sem))
+        gt_sem_panel = _gray3(_to_2d(gt_sem, frac_z))
         if target_hw:
             gt_sem_panel = _resize_2d(gt_sem_panel, target_hw)
         tb.add_images(ctx.tag("true/sem"), gt_sem_panel, global_step=epoch)
 
         # Foreground (sem) prediction.
         sem = pooled[:, crit.sem_slice].sigmoid()
-        sem_panel = _gray3(_to_2d(sem))
+        sem_panel = _gray3(_to_2d(sem, frac_z))
         if target_hw:
             sem_panel = _resize_2d(sem_panel, target_hw)
         tb.add_images(ctx.tag("pred/sem"), sem_panel, global_step=epoch)
@@ -264,13 +308,13 @@ class Joint3DImageLogger(ImageLogger):
         n_pull = getattr(agg, "n_pull", N_PULL) if agg else N_PULL
         aff = pooled[:, crit.aff_slice].sigmoid().float()
         names = offset_names(offsets, n_pull)
-        mask_2d = torch.ones_like(_to_2d(aff[:, :1]))
+        mask_2d = torch.ones_like(_to_2d(aff[:, :1], frac_z))
         # n_pull (=5) pull offsets + max_push evenly-spaced long-range push
         # offsets = the affinity panels shown.  max_push=7 -> 5 + 7 = 12.
         _add_aff_panels(
             tb, ctx, aff, aff_panel_indices(len(offsets), n_pull, max_push=7),
             names=names, mask_2d=mask_2d, epoch=epoch, tag_prefix="aff/pred",
-            size=target_hw,
+            size=target_hw, frac=frac_z,
         )
 
         if agg is not None and self.spatial_dims == 3:
@@ -281,7 +325,8 @@ class Joint3DImageLogger(ImageLogger):
                 sem_fg = None
             seg_3d = agg(aff, sem_fg)
             seg_2d = rearrange(
-                _to_2d(rearrange(seg_3d, "b ... -> b 1 ...")), "b 1 ... -> b ...",
+                _to_2d(rearrange(seg_3d, "b ... -> b 1 ..."), frac_z),
+                "b 1 ... -> b ...",
             )
             seg_rgb = _label_to_rgb(seg_2d.long())
             if target_hw:
