@@ -146,8 +146,11 @@ class Joint3DDataModule(pl.LightningDataModule):
         val_batch_size: int = 1,
         min_foreground: float = 0.0,
         sft_min_foreground: float = 0.0,
+        sft_min_instances: int = 0,
+        sft_max_inst_frac: float = 0.0,
         ssl_min_foreground: float = 0.0,
         ssl_min_std: float = 0.0,
+        ssl_min_autocorr: float = 0.0,
         find_boundaries: float = 0.0,
         boundary_target: str = "semantic",
         balance: str = "resolution",
@@ -174,6 +177,16 @@ class Joint3DDataModule(pl.LightningDataModule):
         # (rejects background-heavy / unlabeled crops and zero-padded EM).  Falls
         # back to the legacy label-only ``min_foreground`` when unset.
         self.sft_min_foreground = float(sft_min_foreground) or float(min_foreground)
+        # Instance-diversity gate for the sft branch: ``sft_min_foreground`` only
+        # checks the label's NON-ZERO fraction, so a crop entirely filled by ONE
+        # giant instance (e.g. a single MICrONS dendrite trunk spanning the whole
+        # patch) passes trivially yet gives AffinityFGLoss no inter-instance
+        # "push" signal -- only "pull".  ``sft_min_instances`` rejects crops with
+        # fewer than N distinct nonzero instance ids; ``sft_max_inst_frac``
+        # rejects crops where the single largest instance exceeds this fraction
+        # of the labeled foreground.  Both 0 = disabled (default).
+        self.sft_min_instances = int(sft_min_instances)
+        self.sft_max_inst_frac = float(sft_max_inst_frac)
         # Image-nonzero gate for the label-less ssl branch: rejects mostly-empty /
         # zero-padded crops (e.g. MitoEM2 nnU-Net irregular crops padded to a box,
         # empty COSEM/FLYEM regions) that would otherwise show as black panels.
@@ -184,6 +197,12 @@ class Joint3DDataModule(pl.LightningDataModule):
         # these because resin is a non-zero mid-grey; only a variance test does.
         # 0 = disabled.
         self.ssl_min_std = float(ssl_min_std)
+        # Structure gate for the ssl branch: reject NOISE-dominated crops
+        # (detector / resin grain) that pass the std/content gate because random
+        # noise has high local variance.  Lag-1 spatial autocorrelation on the
+        # per-volume [0, 1] scale: real ultrastructure ~0.6-0.8, white noise ~0.
+        # 0 = disabled.
+        self.ssl_min_autocorr = float(ssl_min_autocorr)
         # sem-head boundary supervision (sft only).  ``find_boundaries`` = per-
         # sample probability of eroding membrane voxels so the sem head targets
         # thin membranes instead of (near-degenerate) full foreground.
@@ -298,8 +317,12 @@ class Joint3DDataModule(pl.LightningDataModule):
                 self.sft_min_foreground if task == "sft"
                 else (self.ssl_min_foreground if task == "ssl" else 0.0)
             ),
-            # Contrast gate only for the ssl branch (label-less recon).
+            # Contrast + structure gates only for the ssl branch (label-less recon).
             image_min_std=(self.ssl_min_std if task == "ssl" else 0.0),
+            image_min_autocorr=(self.ssl_min_autocorr if task == "ssl" else 0.0),
+            # Instance-diversity gates only for the sft branch (labeled).
+            min_instances=(self.sft_min_instances if task == "sft" else 0),
+            max_inst_frac=(self.sft_max_inst_frac if task == "sft" else 0.0),
             deterministic=deterministic,
         )
 

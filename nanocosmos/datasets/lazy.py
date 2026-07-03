@@ -249,6 +249,9 @@ class LazyVolDataset(Dataset):
         min_foreground: float = 0.0,
         image_min_foreground: float = 0.0,
         image_min_std: float = 0.0,
+        image_min_autocorr: float = 0.0,
+        min_instances: int = 0,
+        max_inst_frac: float = 0.0,
         max_foreground_retries: int = 50,
     ) -> None:
         super().__init__()
@@ -268,6 +271,25 @@ class LazyVolDataset(Dataset):
         # normalised [0, 1] scale (std_raw / (vmax - vmin)) so the threshold
         # is volume-independent.  0 = disabled (default; no behaviour change).
         self.image_min_std = float(image_min_std)
+        # Structure gate: reject NOISE-dominated crops (detector / resin grain)
+        # that pass the std/content gate because random noise has high local
+        # variance.  Measured as the lag-1 spatial autocorrelation on the
+        # per-volume [0, 1] scale: real ultrastructure is spatially coherent
+        # (~0.6-0.8), white noise is ~0.  0 = disabled.
+        self.image_min_autocorr = float(image_min_autocorr)
+        # Instance-diversity gate (labeled/sft volumes only): ``min_foreground``
+        # only checks the label's NON-ZERO fraction, so a crop entirely filled by
+        # ONE giant instance (e.g. a single dendrite trunk spanning the whole
+        # patch) passes trivially (label_frac ~1.0) yet gives AffinityFGLoss no
+        # "push" (inter-instance) signal at all -- only "pull". These two gates
+        # catch that case directly:
+        #   min_instances -- reject crops with fewer than N distinct nonzero
+        #                     instance ids (0 = disabled).
+        #   max_inst_frac -- reject crops where the single largest instance
+        #                     exceeds this fraction of the labeled foreground
+        #                     (0 = disabled).
+        self.min_instances = int(min_instances)
+        self.max_inst_frac = float(max_inst_frac)
         self.max_foreground_retries = int(max_foreground_retries)
 
         self._handles: List[_VolumeHandle] = []
@@ -472,6 +494,25 @@ class LazyVolDataset(Dataset):
         )
         return float(np.mean(bricks.std(axis=1) >= std_thr))
 
+    @staticmethod
+    def _lag1_autocorr(img01: np.ndarray) -> float:
+        """Lag-1 in-plane spatial autocorrelation of a crop (``[*, H, W]``).
+
+        Real EM ultrastructure is spatially coherent -- neighbouring voxels are
+        strongly correlated (~0.6-0.8) -- whereas detector / resin grain is
+        essentially white noise (~0).  Unlike a variance / std test, this
+        **rejects noise-dominated crops**: random grain has high local variance
+        and sails through the ``image_min_std`` content gate (measured:
+        content_frac 1.0, autocorr ~0.25), while genuine ultrastructure sits at
+        autocorr ~0.7.  A threshold near 0.5 cleanly separates the two.
+        """
+        x = img01.astype(np.float32)
+        x = x - x.mean()
+        den = float((x * x).mean()) + 1e-8
+        ay = float((x[..., :-1, :] * x[..., 1:, :]).mean())
+        ax = float((x[..., :, :-1] * x[..., :, 1:]).mean())
+        return 0.5 * (ay + ax) / den
+
     def __len__(self) -> int:
         return self.num_samples
 
@@ -522,8 +563,11 @@ class LazyVolDataset(Dataset):
 
         * **Labeled volumes** are gated on the *label* non-zero fraction
           (``min_foreground``) AND, when ``image_min_foreground`` > 0, the
-          *image* non-zero fraction -- a crop must pass BOTH (rejects
-          background-heavy label crops and zero-padded EM).
+          *image* non-zero fraction, AND, when ``min_instances`` /
+          ``max_inst_frac`` > 0, instance DIVERSITY -- a crop must pass every
+          active gate (rejects background-heavy label crops, zero-padded EM,
+          AND crops filled by a single giant instance that would give
+          AffinityFGLoss no inter-instance "push" signal to learn from).
         * **Label-less volumes** (e.g. SSL) are gated on the *image*
           non-zero fraction (``image_min_foreground``) so mostly-empty /
           zero-padded crops are rejected; ``label`` is returned as ``None``.
@@ -533,49 +577,80 @@ class LazyVolDataset(Dataset):
         When no gate is active ``frac`` is ``1.0`` and no extra I/O is done.
         """
         if handle.label_path is not None:
-            if self.min_foreground <= 0 and self.image_min_foreground <= 0:
+            if (self.min_foreground <= 0 and self.image_min_foreground <= 0
+                    and self.min_instances <= 0 and self.max_inst_frac <= 0):
                 return True, None, None, 1.0
             label = None
             image = None
             label_frac = 1.0
             image_frac = 1.0
-            if self.min_foreground > 0:
+            inst_score = 1.0
+            need_label = (self.min_foreground > 0 or self.min_instances > 0
+                          or self.max_inst_frac > 0)
+            if need_label:
                 label = _read_patch(
                     handle.label_path, crop_slices, handle.label_key, dtype=np.int64,
                 )
-                label_frac = float(np.count_nonzero(label)) / label.size
+                if self.min_foreground > 0:
+                    label_frac = float(np.count_nonzero(label)) / label.size
             if self.image_min_foreground > 0:
                 image = _read_patch(
                     handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
                 )
                 image_frac = float(np.count_nonzero(image)) / image.size
+            inst_ok = True
+            if self.min_instances > 0 or self.max_inst_frac > 0:
+                ids, counts = np.unique(label, return_counts=True)
+                fg_counts = counts[ids != 0]
+                n_inst = int(fg_counts.size)
+                max_frac = float(fg_counts.max()) / fg_counts.sum() if n_inst else 1.0
+                if self.min_instances > 0:
+                    inst_ok = inst_ok and n_inst >= self.min_instances
+                    inst_score = min(inst_score, n_inst / self.min_instances)
+                if self.max_inst_frac > 0:
+                    inst_ok = inst_ok and max_frac <= self.max_inst_frac
+                    inst_score = min(inst_score, (1.0 - max_frac) / max(1.0 - self.max_inst_frac, 1e-6))
             ok = (label_frac >= self.min_foreground
-                  and image_frac >= self.image_min_foreground)
-            return ok, label, image, min(label_frac, image_frac)
+                  and image_frac >= self.image_min_foreground
+                  and inst_ok)
+            frac = min(label_frac, image_frac, inst_score)
+            return ok, label, image, frac
 
-        # Label-less volume: optional image gate.
-        if self.image_min_foreground <= 0 and self.image_min_std <= 0:
+        # Label-less volume: optional image gates.
+        if (self.image_min_foreground <= 0 and self.image_min_std <= 0
+                and self.image_min_autocorr <= 0):
             return True, None, None, 1.0
         image = _read_patch(
             handle.image_path, crop_slices, handle.image_key, dtype=np.float32,
         )
-        if self.image_min_std > 0:
-            # Local content-fraction gate.  A GLOBAL std (or non-zero) test
-            # passes a crop that is mostly flat resin/empty as long as some
-            # region is textured -- exactly the "half-empty" crops we want to
-            # reject.  Instead, split the crop into small blocks, mark each
-            # block as content when its local std (on the per-volume [0, 1]
-            # scale) exceeds ``image_min_std``, and require the content
-            # fraction to clear ``image_min_foreground`` (default 0.5 if the
-            # non-zero fraction gate is disabled).  Best-seen = highest
-            # content fraction.
+        if self.image_min_std > 0 or self.image_min_autocorr > 0:
+            # Two complementary gates on the per-volume [0, 1] scale:
+            #   * content-fraction (``image_min_std``): rejects FLAT crops
+            #     (resin / empty) -- split the crop into small blocks and
+            #     require a fraction of them to clear a local-std threshold.
+            #   * lag-1 autocorrelation (``image_min_autocorr``): rejects
+            #     NOISE-dominated crops (detector / resin grain), which the
+            #     std gate CANNOT catch because random noise has high local
+            #     variance (content_frac 1.0) yet ~0 spatial coherence.
+            # A crop must pass every ENABLED gate; best-seen ranks on the
+            # limiting (minimum) score so the fallback keeps the crop that is
+            # best on both axes.
             params = self._norm_params.get(handle.name)
             vmin = params[0] if params else float(image.min())
             scale = self._norm_scale(handle)
             img01 = np.clip((image - vmin) / scale, 0.0, 1.0)
-            content_frac = self._content_fraction(img01, self.image_min_std)
             required = self.image_min_foreground if self.image_min_foreground > 0 else 0.5
-            return content_frac >= required, None, image, content_frac
+            ok = True
+            score = 1.0
+            if self.image_min_std > 0:
+                content_frac = self._content_fraction(img01, self.image_min_std)
+                ok = ok and content_frac >= required
+                score = min(score, content_frac)
+            if self.image_min_autocorr > 0:
+                ac = self._lag1_autocorr(img01)
+                ok = ok and ac >= self.image_min_autocorr
+                score = min(score, ac)
+            return ok, None, image, score
         # Contrast gate disabled: plain non-zero fraction gate (legacy).
         nz_frac = float(np.count_nonzero(image)) / image.size
         return nz_frac >= self.image_min_foreground, None, image, nz_frac

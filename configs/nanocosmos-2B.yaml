@@ -65,6 +65,17 @@ data:
   # EM fraction >= this value, so background-heavy / unlabeled crops and
   # zero-padded EM are rejected (best-seen crop kept after max retries).
   sft_min_foreground: 0.8
+  # Instance-diversity gate: sft_min_foreground only checks the label's NON-ZERO
+  # fraction, so a crop entirely filled by ONE giant instance (e.g. a single
+  # MICrONS dendrite trunk spanning the whole patch) passes trivially yet gives
+  # AffinityFGLoss no inter-instance "push" signal -- only "pull". Audited Jul
+  # 2026: 10/12 MICrONS crops had at least one all-single-instance patch in 20
+  # random probes despite healthy median instance counts (31-48).  Require >=2
+  # distinct instances per crop (median counts are 20-125, so retries are cheap)
+  # and cap the largest instance at 90% of foreground as a secondary net.
+  # 0 = disabled.
+  sft_min_instances: 2
+  sft_max_inst_frac: 0.9
   # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
   # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
   ssl_min_foreground: 0.8
@@ -75,6 +86,15 @@ data:
   # scale.  Tune up if low-content crops still appear, down if the foreground
   # retry budget is exhausted (best-seen fallback warns in the log).  0 = off.
   ssl_min_std: 0.05
+  # Structure gate: reject NOISE-dominated ssl crops (detector / resin grain,
+  # e.g. COSEM regions of embedding medium around the cell).  The variance gate
+  # above CANNOT catch these -- random grain has high local std, so it passes
+  # ssl_min_std with content_frac 1.0.  This is the lag-1 spatial
+  # autocorrelation on the per-volume [0,1] scale: real ultrastructure is
+  # spatially coherent (~0.6-0.8), white noise ~0.  Calibrated on jrc_hela-3
+  # crops: noise crops sit at ~0.25, structured crops at ~0.7, so 0.5 cleanly
+  # separates.  Tune down if the foreground-retry budget is exhausted.  0 = off.
+  ssl_min_autocorr: 0.5
   # Round-robin grouping/scheduling unit: each batch is drawn from one group.
   #   "resolution" -- one group per (task, native_resolution); within a group
   #                   volumes are picked voxel-count-weighted (big volumes win).
@@ -121,16 +141,26 @@ data:
       # OpenOrganelle volumes here to scale SSL toward petascale.
       volumes:
       # --- COSEM ~4 nm small voxel (exact z per volume), all tiles ---
-      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
+      # jrc_hela-3 x0_y0_z0 / x0_y0_z8192 REMOVED: audited as mostly embedding
+      # RESIN (median lag-1 autocorr ~0.26-0.27 -- ~white noise) around the
+      # HeLa cell edge; passed the old ssl_min_std gate trivially (noise has
+      # high local variance) but fails ssl_min_autocorr.  Replaced with 2
+      # verified-structured tiles found via scripts/collect_meaningful_crops.py
+      # (probe-and-rank against the SAME content_frac + autocorr gates); see
+      # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
+      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z2048_volume   # autocorr 0.72
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z8192_volume
+      - vol: jrc_hela-3_4x4x3.24nm_x6144_y0_z2048_volume   # autocorr 0.63
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
       - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
       - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_hela-3_4x4x3.24nm_x2048_y0_z4096_volume   # autocorr 0.75
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
       - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
@@ -168,7 +198,11 @@ data:
       - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume
+      # x20000_y20000_z20000 REMOVED: audited autocorr ~0.45 (borderline
+      # low vs the ~0.85-0.95 the rest of this bucket shows). Replaced with a
+      # verified-structured tile (autocorr 0.94) found via
+      # scripts/collect_meaningful_crops.py.
+      - vol: flyem3d_malecns_8nm_ssl_x18000_y18000_z30000_volume   # autocorr 0.94
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
@@ -192,6 +226,12 @@ data:
         root: data/SNEMI3D
         native_resolution: [30, 6, 6]
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
+      # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683);
+      # see doc/DATASETS.md#mitoem2-refresh-from-zenodo-v6-jul-2026.
+      # NOTE: Dataset001_ME2-Beta's NIfTI headers ship voxel spacing (1,1,1)
+      # (an upstream metadata bug -- Jurkat/Macro/Podo/Sperm/Mossy/Pyra headers
+      # are correct); native_resolution below is the metadata.csv-documented
+      # 16 nm, NOT what convert_mitoem2.py would auto-derive from the header.
       # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
       - vol: mitoem2_beta_train01_volume
         root: data/MitoEM2
@@ -205,12 +245,26 @@ data:
       - vol: mitoem2_beta_train04_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_jurkat_train02_volume
+      # jurkat_train01 / macro_train01 RESTORED: an older doc note said these
+      # were "removed as empty", but audited fresh against the current
+      # release they are genuine, good EM (autocorr 0.79 / 0.59) -- whatever
+      # was wrong with them upstream previously appears to have been fixed.
+      - vol: mitoem2_jurkat_train01_volume   # autocorr 0.79
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_macro_train02_volume
+      - vol: mitoem2_macro_train01_volume   # autocorr 0.59
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+      # mitoem2_jurkat_train02 / mitoem2_macro_train02 REMOVED: audited as pure
+      # uniform random noise (min=0, max=255, all 256 values present, std~73.9 =
+      # theoretical max). CONFIRMED PERSISTENT in the fresh Zenodo v6 release
+      # too (re-downloaded + checksum-verified against the official
+      # checksums.txt -- these two files are the ONLY ones in the whole
+      # release that FAIL verification) -- a genuine upstream MitoEM2
+      # packaging bug, not a conversion artifact. Passed the old
+      # ssl_min_std/foreground gates trivially (noise has high variance) but
+      # fails ssl_min_autocorr (~0.0 vs ~0.6-0.9 for real EM); see
+      # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
       - vol: mitoem2_podo_train01_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
@@ -284,12 +338,14 @@ data:
       - vol: mitoem2_pyra_train17_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
-      - vol: mitoem2_stem_train01_volume
-        root: data/MitoEM2
-        native_resolution: [30, 8, 8]
-      - vol: mitoem2_stem_train02_volume
-        root: data/MitoEM2
-        native_resolution: [30, 8, 8]
+      # mitoem2_stem_train01 / mitoem2_stem_train02 REMOVED: audited as
+      # consistently low-structure (25-probe autocorr: train01 max=0.49
+      # median=0.40, ZERO probes reach the 0.5 gate threshold; train02
+      # max=0.49 median=0.44, also 0/25) -- unlike the heterogeneous jrc_hela-3
+      # tiles, there is no good sub-region within these files for the per-crop
+      # ssl_min_autocorr gate to land on.  No CloudVolume source for MitoEM2
+      # (local nnU-Net conversion only), so "ignore in config" is the only fix;
+      # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
     sft:
       task: sft
       batch_size: 3
@@ -371,15 +427,21 @@ data:
     native_resolution: [30, 6, 6]
   # --- 20% holdout of the divisible-by-5 datasets (image-only COSEM/FLYEM ->
   #     ssl recon validation) ---
-  - vol: jrc_hela-3_4x4x3.24nm_x8192_y0_z0_volume
+  # x8192_y0_z0 REMOVED: audited autocorr ~0.27 (embedding resin, ~white
+  # noise) -- reconstructing noise made this a meaningless val target.
+  # Replaced with a verified-structured tile (autocorr 0.75).
+  - vol: jrc_hela-3_4x4x3.24nm_x6144_y0_z0_volume   # autocorr 0.75
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.24, 4, 4]
-  - vol: jrc_macrophage-2_4x4x3.36nm_x7952_y0_z0_volume
+  # x7952_y0_z0 REMOVED: audited autocorr ~0.33, 44.7% of voxels outside the
+  # cached norm range (severe under-calibration on top of resin/noise).
+  # Replaced with a verified-structured tile (autocorr 0.85).
+  - vol: jrc_macrophage-2_4x4x3.36nm_x2048_y0_z4096_volume   # autocorr 0.85
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.36, 4, 4]
-  - vol: jrc_jurkat-1_4x4x3.44nm_x7952_y0_z0_volume
+  - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z2048_volume   # autocorr 0.84
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.44, 4, 4]
@@ -408,7 +470,24 @@ data:
     task: sft
     native_resolution: [40, 8, 8]
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
+  # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683).
+  - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
   - vol: mitoem2_beta_test02_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_beta_test03_volume   # NEW
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_jurkat_test01_volume   # NEW -- autocorr 0.79
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_macro_test01_volume   # NEW -- autocorr 0.72
     root: data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
@@ -432,10 +511,10 @@ data:
     root: data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
-  - vol: mitoem2_stem_test01_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [30, 8, 8]
+  # mitoem2_stem_test01 REMOVED: audited autocorr median 0.45 (only 24% of
+  # probes reach the 0.5 gate threshold); consistent with both stem TRAIN
+  # volumes above being removed for the same reason -- no cloud source to
+  # replace it with, and no train counterpart left to pair it with anyway.
 
 model:
   type: joint3d_2b       # -> JointPredict3DModule (Cosmos-Predict 2.5 2B backbone + Joint3DReconSegLoss)
