@@ -58,7 +58,7 @@ data:
   num_workers: 8
   pin_memory: true
   persistent_workers: true
-  prefetch_factor: 8
+  prefetch_factor: 4
   find_boundaries: 1.0
   boundary_target: semantic
   # sft crop gate: require BOTH the labeled-foreground fraction AND the non-zero
