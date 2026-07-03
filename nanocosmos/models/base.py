@@ -20,11 +20,14 @@ Public surface
 
 Note on subclassing
 -------------------
-The concrete wrappers (Cosmos-Predict / Transfer / Cosmos3-Nano / Vista)
-inherit directly from :class:`torch.nn.Module` rather than
-:class:`BaseModel`; the single-tensor ``forward`` contract is still
-respected.  New backbone wrappers are encouraged to inherit
-:class:`BaseModel` for consistency.
+No current wrapper actually subclasses :class:`BaseModel`.  The concrete
+wrappers (Cosmos-Predict 2.5, the Cosmos-3 Nano/Edge/Super family, and
+Vista3D) inherit from :class:`torch.nn.Module` or an intermediate wrapper
+base (``_BaseCosmos25Wrapper`` / ``Cosmos3OmniWrapper``) while still
+honouring the single-tensor ``forward`` contract.  :class:`BaseModel` is
+retained as the documented contract and an optional base for future
+wrappers; it is exported via :mod:`nanocosmos` so external code may rely
+on it.
 """
 
 from abc import ABC, abstractmethod

@@ -65,4 +65,4 @@ class _VariantConfig(_VariantConfigBase):
     reduce_from_parent: bool = False
 
 
-__all__ = ["_VariantConfig", "_VariantConfigBase"]
+__all__ = ["_VariantConfig"]

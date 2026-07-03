@@ -40,6 +40,8 @@ from einops import rearrange
 from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
+from nanocosmos.transforms._sampling import log_uniform
+
 
 # Default target range: (min_nm, max_nm) per axis in (Z, Y, X) order.
 # Spans SNEMI3D (6×6×30) to MICrONS (8×8×40), keeping 5:1 Z:XY ratio.
@@ -209,8 +211,7 @@ class RandResolutionZoomd(MapTransform, Randomizable):
 
     def _log_uniform(self, lo_hi: np.ndarray) -> float:
         """Sample log-uniformly from a ``(min, max)`` pair (scale-symmetric)."""
-        lo, hi = float(lo_hi[0]), float(lo_hi[1])
-        return float(np.exp(self.R.uniform(np.log(lo), np.log(hi))))
+        return log_uniform(self.R, float(lo_hi[0]), float(lo_hi[1]))
 
     def randomize(self, data=None) -> None:  # noqa: D102
         self._do_zoom = self.R.random() < self.prob

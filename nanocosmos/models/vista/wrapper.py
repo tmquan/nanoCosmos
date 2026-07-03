@@ -32,7 +32,9 @@ class Vista3DWrapper(nn.Module):
         feature_size: Base feature dimension from backbone (default: 64).
             Set to 48 to load the pretrained MONAI VISTA3D encoder
             cleanly (upstream uses ``init_filters=48``).
-        encoder_name: Vista3D internal encoder ('segresnet' or 'swin').
+        encoder_name: Backbone selector. ``'vista3d'`` or ``'segresnet_ds2'``
+            build the SegResNetDS2 VISTA3D encoder (default ``'vista3d'``);
+            any other value falls back to a plain MONAI ``SegResNet``.
         pretrained: If true, download and load the MONAI VISTA3D encoder
             weights from HuggingFace (``MONAI/VISTA3D-HF``).  Only the
             SegResNetDS2 encoder is loaded; task heads remain randomly
@@ -68,7 +70,6 @@ class Vista3DWrapper(nn.Module):
         self.feature_size = feature_size
         self.spatial_dims = _SPATIAL_DIMS
         self.dropout = dropout
-        self._pretrained = pretrained
 
         self._build_backbone(encoder_name, **kwargs)
 

@@ -98,6 +98,21 @@ class VistaTaskHead3D(nn.Module):
         self.out_channels = int(out_channels)
         self.refine_channels = refine
 
+        # CHECKPOINT INVARIANT -- ``block`` is an ``nn.Sequential`` whose child
+        # INDICES (and therefore the ``...head.block.{N}.*`` state_dict keys)
+        # depend on two construction-time booleans:
+        #   * width matcher present  <=>  in_channels != refine_channels
+        #   * Dropout3d present      <=>  dropout > 0
+        # Resulting index maps:
+        #   matcher + dropout : 0=matcher 1,2=UnetrBasicBlock 3=Dropout 4=Conv(out)
+        #   matcher, no drop  : 0=matcher 1,2=UnetrBasicBlock         3=Conv(out)
+        #   no matcher, drop  : 0,1=UnetrBasicBlock 2=Dropout         3=Conv(out)
+        #   neither           : 0,1=UnetrBasicBlock                   2=Conv(out)
+        # The shipped last.ckpt was built with feature_size=64 (head_in=96 !=
+        # refine=64 -> matcher present) AND dropout=0.5>0, so its final conv is
+        # ``head.block.4`` (out=32). Changing feature_size / head_in / dropout
+        # between train and resume RENUMBERS these keys and breaks a strict load
+        # even when the tensor shapes would otherwise fit -- do not reindex.
         layers: list[nn.Module] = []
         if self.in_channels != refine:
             # Width matcher: 1×1 conv keeps the refinement blocks at a

@@ -5,7 +5,7 @@ through :class:`TagContext` so the layout ``{stage}/{mode}/{panel}`` is
 enforced in one place.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -13,10 +13,9 @@ from typing import Optional
 class TagContext:
     """Hierarchical TB tag builder: ``{stage}/{mode}/[{head}/]{panel}``.
 
-    ``head`` is retained only as a lightweight compatibility shim for
-    older call sites; the unified-head logger passes ``head=None`` and
-    encodes field names directly in ``panel`` (e.g. ``pred/sem``,
-    ``aff/pred/01_pull_z-1``, ``pred/label/pre``).
+    ``head`` is an optional extra level; the unified-head logger passes
+    ``head=None`` and encodes field names directly in ``panel`` (e.g.
+    ``pred/sem``, ``aff/pred/01_pull_z-1``, ``pred/label/pre``).
     """
 
     stage: str                        # "train" | "val"
@@ -33,7 +32,3 @@ class TagContext:
     def tag(self, panel: str) -> str:
         """Return the full tag for a panel under this context."""
         return f"{self.prefix}/{panel}"
-
-    def for_head(self, head: str) -> "TagContext":
-        """Return a child context scoped to ``head``."""
-        return replace(self, head=head)

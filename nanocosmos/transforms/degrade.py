@@ -56,6 +56,8 @@ import torch.nn.functional as F
 from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
+from nanocosmos.transforms._sampling import log_uniform
+
 
 class RandResolutionDegraded(MapTransform, Randomizable):
     """Degrade a small-voxel patch into a realistic large-voxel acquisition.
@@ -134,7 +136,7 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
     def _sample_zf(self) -> float:
         lo, hi = self.zf_range
-        return float(np.exp(self.R.uniform(np.log(lo), np.log(hi))))
+        return log_uniform(self.R, lo, hi)
 
     def _jitter_sections(self, coarse: torch.Tensor) -> torch.Tensor:
         """Translate each coarse section in-plane by a small random shift.
@@ -163,7 +165,14 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         return x.permute(1, 0, 2, 3).contiguous()
 
     def _drop_sections(self, coarse: torch.Tensor) -> torch.Tensor:
-        """Blank or replicate up to ``max_missing`` coarse sections."""
+        """Blank or replicate up to ``max_missing`` coarse sections.
+
+        Deliberately kept separate from :class:`RandMissingSliced` (in
+        ``missing_slice.py``): that transform applies the same missing-section
+        defect to a full-resolution ``[C, D, H, W]`` image at augmentation
+        time, whereas this operates on the coarse decimated stack inside the
+        SSL degrade model, so the two are not merged into one helper.
+        """
         c, d, h, w = coarse.shape
         k = min(int(self.R.randint(1, self.max_missing + 1)), d)
         drop = sorted(int(i) for i in self.R.choice(d, size=k, replace=False))

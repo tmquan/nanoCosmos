@@ -112,9 +112,10 @@ data:
   data_root: data/SNEMI3D
 
   # ---- Loader & batching ----
-  # NOTE: cut from 4 to 2 because ``model.input_supersample: 2`` quadruples
-  # the in-plane latent voxels (~4x DiT tokens + VAE work).  Raise back
-  # toward 4-8 if you set ``input_supersample: 1``.
+  # NOTE: batch_size 2 is conservative for the 16B Cosmos-3 Nano backbone.
+  # ``model.input_supersample`` is 1 here; setting it to 2 would quadruple the
+  # in-plane latent voxels (~4x DiT tokens + VAE work), so lower batch_size if
+  # you enable it.  Raise toward 4-8 only after confirming GPU headroom.
   batch_size: 2
   # Validation/test batch size.  The eval path runs a full-resolution
   # decode + the Mutex Watershed + contingency-matrix metrics on top of
@@ -123,8 +124,8 @@ data:
   # and corrupts the survivors' epoch-end reduction.  Keep val modest to
   # stay under the per-GPU ceiling; raise once you've confirmed headroom.
   # (A per-batch OOM is also caught and skipped -- see
-  # ``BaseCircuitModule._eval_step_and_accumulate``.)  Pinned to 1 under
-  # ``input_supersample: 2``.
+  # ``BaseCircuitModule._eval_step_and_accumulate``.)  Kept modest (2) with
+  # ``input_supersample: 1``; lower to 1 if you enable input_supersample.
   val_batch_size: 2
   num_workers: 8
   # persistent_workers=true keeps the DataLoader worker pool alive across
@@ -294,7 +295,7 @@ model:
   type: cosmos3nano3d
   variant: "Nano"
   dtype: "bf16"
-  pretrained: true                # auto-pulls nvidia/Cosmos-Predict2.5-2B from HF
+  pretrained: true                # auto-pulls the Cosmos-3 Nano backbone from HF (model.type: cosmos3nano3d)
 
   # Affinity + sem + raw output head (must match
   # nanocosmos.losses._common.HEAD_CHANNELS = N_AFF + 2):
@@ -438,9 +439,10 @@ training:
   # DDP replicates the 2B Cosmos-Predict DiT per rank (~fits on 80 GB at
   # this batch size); FSDP is only needed for the 16B Cosmos3 backbone.
   strategy: ddp
-  # ``bf16-mixed`` is the recommended DDP precision: params stay fp32 with
-  # an outer bf16 autocast over the step.  (``bf16-true`` is for the
-  # natively-bf16 Cosmos3 backbone under FSDP MixedPrecision.)
+  # ``bf16-true`` here: this recipe's Cosmos-3 Nano backbone is natively bf16,
+  # so full-bf16 params avoid the fp32 master-weight overhead (used under DDP
+  # here, or FSDP for the 16B).  ``bf16-mixed`` (fp32 params + an outer bf16
+  # autocast over the step) is the safer choice for the 2B Cosmos-Predict DiT.
   precision: bf16-true
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
@@ -543,12 +545,9 @@ optimizer:
   # Cosine schedule is built in
   # ``nanocosmos/modules/base.py::_maybe_wrap_scheduler``: a 2-epoch
   # LinearLR warm-up (``start_factor=0.01``), then a CosineAnnealingLR
-  # over ``max(T_max - warmup_epochs, 1) = 48`` epochs, stepped per
-  # epoch.  Note ``T_max: 50`` is shorter than ``training.max_epochs:
-  # 101`` -- the LR reaches ``eta_min`` around epoch 50 and stays
-  # pinned there for the remaining ~50 epochs (long low-LR refinement
-  # tail).  If you want the cosine to extend across the whole run,
-  # set ``T_max`` to ``training.max_epochs``.
+  # over ``max(T_max - warmup_epochs, 1) = 99`` epochs, stepped per
+  # epoch.  ``T_max: 101`` matches ``training.max_epochs: 101``, so the
+  # cosine spans the whole run and reaches ``eta_min`` right at the end.
   scheduler:
     type: cosine_warmup
     warmup_epochs: 2

@@ -77,17 +77,46 @@ Subclass `CircuitDataset` (`nanocosmos/datasets/base.py`).  Use the
 existing `SNEMI3DDataset` (`nanocosmos/datasets/snemi3d.py`) as a
 template -- it's the closest to a clean copy-paste.
 
+`CircuitDataset` declares **five** abstract members — the three
+metadata properties `paper` / `resolution` / `labels`, plus `data_files`
+and `_prepare_data`.  You must supply all five or the class can't be
+instantiated.  Like `SNEMI3DDataset`, back the metadata with private
+`_paper` / `_resolution` / `_labels` attrs and expose them via
+`@property` overrides:
+
 ```python
 # nanocosmos/datasets/myset.py
+from typing import Any, Dict, List, Union
+
+import numpy as np
+
 from nanocosmos.datasets.base import CircuitDataset
 from nanocosmos.preprocessors import HDF5Preprocessor
 
 class MySetDataset(CircuitDataset):
-    paper = "Author et al., Year"
-    resolution = {"z": 30.0, "y": 4.0, "x": 4.0}     # nanometres
-    labels = ["background", "membrane", "mito", ...]
+    _paper = "Author et al., Year"
+    _resolution: Dict[str, float] = {"z": 30.0, "y": 4.0, "x": 4.0}   # nm
+    _labels: List[str] = ["background", "membrane", "mito"]
 
-    def _prepare_data(self):
+    @property
+    def paper(self) -> str:
+        return self._paper
+
+    @property
+    def resolution(self) -> Dict[str, float]:
+        return self._resolution.copy()
+
+    @property
+    def labels(self) -> List[str]:
+        return self._labels.copy()
+
+    @property
+    def data_files(self) -> Dict[str, Union[str, np.ndarray]]:
+        # Used in error messages; describe the expected {"vol", "seg"} paths.
+        vols = self._get_volume_list()
+        return {"vol": vols[0]["vol"], "seg": vols[0]["seg"]} if vols else {}
+
+    def _prepare_data(self) -> List[Dict[str, Any]]:
         # Build the list of MONAI data dicts the CacheDataset will see.
         # Each dict needs at least {"image": <ndarray>, "label": <ndarray>}.
         ...

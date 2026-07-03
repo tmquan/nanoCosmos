@@ -5,6 +5,7 @@ generic over ``repo_id`` / ``revision``.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -60,9 +61,13 @@ def _download_from_hf(
 
     import torch.distributed as dist
 
-    cache_dir = cache_dir or str(
+    # Cache location: explicit arg > ``NANOCOSMOS_CACHE_DIR`` env >
+    # ``~/.cache/nanocosmos/cosmos25`` (unchanged default when neither is set).
+    cache_dir = cache_dir or os.environ.get("NANOCOSMOS_CACHE_DIR") or str(
         Path.home() / ".cache" / "nanocosmos" / _DEFAULT_CACHE_SUBDIR
     )
+    # Token: explicit arg > ``HF_TOKEN`` env, so gated repos work without edits.
+    token = token or os.environ.get("HF_TOKEN")
     ignore = list(ignore_patterns) if ignore_patterns is not None else list(_DEFAULT_IGNORE_PATTERNS)
 
     is_distributed = dist.is_available() and dist.is_initialized()

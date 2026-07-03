@@ -43,6 +43,11 @@ import inspect
 import os
 import warnings
 
+# Single source of truth for the distributed collective timeout. Used both for
+# the NCCL watchdog heartbeat env var below and the per-strategy process-group
+# timeout in ``setup_strategy`` so the two never drift out of sync by hand.
+_COLLECTIVE_TIMEOUT_MIN = 30
+
 
 # NCCL / torch.distributed env vars must be set BEFORE torch.distributed is
 # initialised by Lightning's DDPStrategy. Setting them at module import time
@@ -51,24 +56,27 @@ import warnings
 #
 # Why these values:
 #   * TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC -- the watchdog's "is anyone alive?"
-#     check. Default 480s (8 min). The cold first training batch on this
-#     recipe runs kimimaro + per-instance EDT on 80x256x256 crops with
-#     hundreds of segments (see nanocosmos/transforms/skeleton.py); on a
-#     fresh forkserver worker that can take 5-10 min before NCCL sees any
-#     collective from that rank. 1800s gives the loader time to warm up
-#     without making real hangs invisible.
+#     check. Default 480s (8 min). The cold first training batch reads and
+#     normalises large lazy 3-D crops (up to 400x256x256) through the full
+#     MONAI augmentation pipeline (relabel, boundary erosion, resolution
+#     zoom/degrade) on freshly forkserver-spawned workers; before those
+#     caches warm up a rank can take several minutes to issue its first
+#     collective. 1800s gives the loader time to warm up without making
+#     real hangs invisible.
 #   * TORCH_NCCL_TRACE_BUFFER_SIZE -- enables the C10D flight recorder so a
 #     post-mortem trace (timeouts, in-flight collectives) is dumped when
 #     the watchdog does fire. Tiny memory cost; huge debugging win.
 #   * TORCH_NCCL_ASYNC_ERROR_HANDLING -- raise a Python exception instead
 #     of SIGABRT when a collective errors, so Lightning's crash-recovery
 #     hook can checkpoint before tearing down.
-os.environ.setdefault("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", "1800")
+os.environ.setdefault(
+    "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", str(_COLLECTIVE_TIMEOUT_MIN * 60)
+)
 os.environ.setdefault("TORCH_NCCL_TRACE_BUFFER_SIZE", "2048")
 os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 
 # NVLink-fabric hardening on B300 / NVSwitch nodes.
-# Symptom on this node (umb-b300-dp-129, driver 580.x) is an Xid 145
+# Symptom (first observed on a B300 node with a 580.x driver) is an Xid 145
 # `RLW_SRC_TRACK Nonfatal XC1` storm on NVLink lanes 11-15 firing during
 # the very first bf16 all-reduce, which cascades to Xid 45 channel
 # tear-downs and surfaces in Python as
@@ -137,27 +145,46 @@ def _install_runtime_patches() -> None:
 
     * Allow-list a handful of (Lightning-friendly) types for
       ``torch.load``'s weights-only unpickler.
-    * Force ``weights_only=False`` on ``torch.load`` because Lightning
-      checkpoints pickle ``defaultdict`` / ``DictConfig`` instances that
-      the safe unpickler refuses even with the allow-list above.
+    * Wrap ``torch.load`` to try the SAFE (``weights_only=True``) unpickler
+      first and only fall back to ``weights_only=False`` -- with a loud
+      warning -- when the safe path rejects a Lightning-pickled type. This
+      keeps the safe unpickler in force for the common case instead of
+      globally disabling it for every load in the process.
     * Silence a handful of noisy warnings emitted by Lightning / MONAI
       that we cannot fix upstream.
     * Bump ``set_float32_matmul_precision`` so TF32 matmuls are allowed.
     """
     torch.serialization.add_safe_globals([
         Any,
-        dict,
+        dict, list, tuple, set,
         collections.defaultdict,
         DictConfig, ListConfig, ContainerMetadata, ValueNode, AnyNode,
     ])
 
     _orig_torch_load = torch.load
 
-    def _torch_load_trusted(*args: Any, **kwargs: Any) -> Any:
-        kwargs["weights_only"] = False
-        return _orig_torch_load(*args, **kwargs)
+    def _torch_load_safe_first(*args: Any, **kwargs: Any) -> Any:
+        # Honour an explicit ``weights_only=`` from the caller verbatim.
+        if "weights_only" in kwargs:
+            return _orig_torch_load(*args, **kwargs)
+        try:
+            # Safe path: weights_only defaults to True on modern torch, so the
+            # allow-list above covers the Lightning/OmegaConf types we expect.
+            return _orig_torch_load(*args, **kwargs)
+        except Exception as exc:  # pragma: no cover - depends on ckpt contents
+            # A Lightning checkpoint can pickle a type the safe unpickler still
+            # refuses. Fall back to the trusted loader, but make the trust
+            # assumption explicit and auditable rather than silent+global.
+            warnings.warn(
+                "torch.load safe unpickler rejected a global "
+                f"({type(exc).__name__}: {exc}); retrying with "
+                "weights_only=False. Only load checkpoints you trust.",
+                stacklevel=2,
+            )
+            kwargs["weights_only"] = False
+            return _orig_torch_load(*args, **kwargs)
 
-    torch.load = _torch_load_trusted  # type: ignore[assignment]
+    torch.load = _torch_load_safe_first  # type: ignore[assignment]
 
     warnings.filterwarnings("ignore", message=r".*isinstance.*LeafSpec.*is deprecated.*")
     warnings.filterwarnings("ignore", message=r".*AccumulateGrad.*stream.*mismatch.*")
@@ -348,6 +375,9 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
     }
 
     model_cfg = dict(cfg.get("model", {}))
+    # The ``joint3d_2b`` fallback is only used if ``model.type`` is entirely
+    # absent; every shipped Hydra config sets it explicitly (e.g. default.yaml
+    # -> cosmos3nano3d), so the two "defaults" never actually conflict.
     model_type = model_cfg.pop("type", "joint3d_2b").lower()
 
     cls = module_classes.get(model_type)
@@ -368,11 +398,6 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         loss_config=loss_cfg,
         training_config=dict(cfg.get("training", {})),
     )
-
-
-# Back-compat aliases for callers that imported the old names.
-get_datamodule = build_datamodule
-get_module = build_module
 
 
 def _maybe_compile(module: pl.LightningModule, cfg: DictConfig) -> None:
@@ -544,9 +569,10 @@ def setup_strategy(cfg: DictConfig):
 
     if strategy_name == "ddp":
         # 30-min collective timeout matches TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
-        # (set at module top). The first training batch on this recipe runs
-        # the full kimimaro + EDT geometry pipeline cold on every rank; the
-        # default 30-min torch.distributed timeout is sometimes shaved down
+        # (set at module top). The first training batch warms the lazy data
+        # pipeline cold on every rank (large 3-D crop reads + full MONAI
+        # augmentation), which can delay a rank's first collective by minutes;
+        # the default 30-min torch.distributed timeout is sometimes shaved down
         # by Lightning, so we pin it explicitly here.
         #
         # ``gradient_as_bucket_view=True`` makes DDP store each bucket as a
@@ -565,7 +591,7 @@ def setup_strategy(cfg: DictConfig):
         return DDPStrategy(
             find_unused_parameters=True,
             gradient_as_bucket_view=True,
-            timeout=datetime.timedelta(minutes=30),
+            timeout=datetime.timedelta(minutes=_COLLECTIVE_TIMEOUT_MIN),
         )
     if strategy_name == "fsdp":
         # FULL_SHARD FSDP for end-to-end training of the 15.2 B Cosmos3-Nano
@@ -622,7 +648,7 @@ def setup_strategy(cfg: DictConfig):
             use_orig_params=True,
             limit_all_gathers=True,
             state_dict_type="sharded",
-            timeout=datetime.timedelta(minutes=30),
+            timeout=datetime.timedelta(minutes=_COLLECTIVE_TIMEOUT_MIN),
         )
     return strategy_name
 
@@ -712,6 +738,15 @@ def _resolve_checkpoint(cfg: DictConfig, module: pl.LightningModule) -> Optional
     Both filters operate on the saved keys exactly as
     ``module.state_dict()`` produces them (so include the leading
     ``model.`` for keys inside the wrapper).
+
+    NOTE (checkpoint compatibility): ``module`` is built from the *live* Hydra
+    config, not from the checkpoint's saved ``hyper_parameters``. For a full
+    resume the structural model_config keys (variant, head_channels / loss
+    offset count, feature_size, dropout, highres_skip, pretrained,
+    vae_symmetrize_z, fp8) MUST match what the checkpoint was trained with, or
+    the strict Lightning restore will fail on renumbered/reshaped keys. Run
+    ``python scripts/check_ckpt_loadable.py --full`` to verify a checkpoint
+    still reconstructs+loads before launching a long resume.
     """
     training_cfg = cfg.training
     resume_ckpt = training_cfg.get("resume_from_checkpoint")
@@ -768,6 +803,21 @@ def _resolve_checkpoint(cfg: DictConfig, module: pl.LightningModule) -> Optional
             console.log(
                 f"  Unexpected keys ({len(unexpected)}, ignored): "
                 f"{dict(_summarise_keys_by_prefix(list(unexpected)))}"
+            )
+        # Guard against a silently near-cold warm start: if the checkpoint
+        # matched only a small fraction of the model's parameters, the run is
+        # effectively training from scratch (wrong ckpt or wrong skip/only
+        # prefixes). Warn loudly rather than let it pass unnoticed.
+        n_target = len(module.state_dict())
+        n_loaded = n_target - len(missing)
+        if n_target and n_loaded < 0.5 * n_target:
+            warnings.warn(
+                f"Warm start loaded only {n_loaded}/{n_target} "
+                f"({100 * n_loaded / n_target:.0f}%) of the model's parameters; "
+                f"the rest kept fresh init. This usually means a mismatched "
+                f"checkpoint or the wrong ckpt_path_skip/only_prefixes -- "
+                f"verify +ckpt_path.",
+                stacklevel=2,
             )
         console.log("Model weights loaded (optimiser state skipped).")
 

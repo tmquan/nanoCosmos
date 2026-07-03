@@ -127,7 +127,14 @@ class _RoundRobinBatchSampler(Sampler):
 
 
 class Joint3DDataModule(pl.LightningDataModule):
-    """Round-robin multi-task datamodule for the joint recipe."""
+    """Round-robin multi-task datamodule for the joint recipe.
+
+    Note: unlike the single-dataset datamodules, this one intentionally does
+    NOT call ``save_hyperparameters()`` -- the joint data config (branches,
+    degrade schema, crop gates) is reproduced from the Hydra config snapshot
+    saved under the run directory rather than from checkpoint
+    ``datamodule_hyper_parameters``. Model checkpoints are unaffected either way.
+    """
 
     def __init__(
         self,

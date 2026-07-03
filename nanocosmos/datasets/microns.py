@@ -191,6 +191,9 @@ class MICRONSDataset(CircuitDataset):
                 del inputs, labels
 
             elif self.patch_size is not None:
+                # Eager 3-D patching. Note the datamodules never reach this
+                # branch: for slice_mode=False + patch_size they build a
+                # LazyVolDataset instead. Kept for direct/programmatic use.
                 patch_indices = self._generate_patch_indices(
                     inputs.shape, self.patch_size, self.patch_overlap
                 )

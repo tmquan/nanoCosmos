@@ -26,32 +26,24 @@ Module layout::
 from nanocosmos.models.cosmos_2_5_common.decoder import (
     _DecoderAdapter3D,
     _FeatureProjector3D,
-    _ProgressiveUpsampler3D,
 )
 from nanocosmos.models.cosmos_2_5_common.hf_loader import _download_from_hf
 from nanocosmos.models.cosmos_2_5_common.layers import (
-    _CONV,
     _NORM,
     _PointwiseLinear,
     _SPATIAL_DIMS,
     _adapt_to_rgb,
 )
-from nanocosmos.models.cosmos_2_5_common.standalone_dit import (
-    _DiTBlock,
-    _StandaloneDiT3D,
-)
+from nanocosmos.models.cosmos_2_5_common.standalone_dit import _StandaloneDiT3D
 from nanocosmos.models.cosmos_2_5_common.variants import _VariantConfigBase
 from nanocosmos.models.cosmos_2_5_common.wrapper_base import _BaseCosmos25Wrapper
 
 __all__ = [
     "_BaseCosmos25Wrapper",
-    "_CONV",
     "_DecoderAdapter3D",
-    "_DiTBlock",
     "_FeatureProjector3D",
     "_NORM",
     "_PointwiseLinear",
-    "_ProgressiveUpsampler3D",
     "_SPATIAL_DIMS",
     "_StandaloneDiT3D",
     "_VariantConfigBase",

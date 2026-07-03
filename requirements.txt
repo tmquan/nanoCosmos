@@ -15,7 +15,7 @@
 #                                                of the dev environment.
 #   * ``pip install -e ".[cosmos,dev]"``       -- permissive lower bounds,
 #                                                pulled from pyproject.toml.
-#   * ``pip install -e ".[cosmos,gpu-cu13,viz,scripts,dev]"``
+#   * ``pip install -e ".[cosmos,fp8,gpu-cu13,viz,scripts,figures,dev]"``
 #                                              -- equivalent of this lockfile
 #                                                without the exact pins.
 #
@@ -25,9 +25,16 @@
 
 # Core deep learning
 --extra-index-url https://download.pytorch.org/whl/cu130
-# torch==2.10.0+cu130
-# torchvision==0.25.0+cu130
+# Pinned to the versions actually resolved/installed in the frozen
+# CUDA-13 / Python-3.12 env.  torch is the single most serialization-
+# sensitive library (fp8/torchao, FSDP wrapping, torch.save/Lightning
+# checkpoints); leaving it to the extra-index resolver lets it drift.
+torch==2.12.1+cu130
+torchvision==0.27.1+cu130
 pytorch-lightning==2.6.1
+# torchmetrics is not imported directly by nanocosmos, but it is a hard
+# transitive dependency of pytorch-lightning; pinned here so the frozen
+# lockfile reproduces the exact installed version.
 torchmetrics==1.0.3
 monai==1.5.2
 einops==0.8.2
@@ -63,7 +70,7 @@ tifffile==2026.2.16
 pynrrd==1.1.3
 nibabel==5.3.3
 pillow==12.0.0
-cloud-volume>=10.4.0
+cloud-volume==12.13.3
 
 # Scientific computing
 numpy==2.3.5
@@ -77,7 +84,17 @@ tensorboard==2.20.0
 
 # Visualization
 matplotlib==3.10.8
-plotly>=5.24.0
+# NOTE: plotly removed -- it is not imported anywhere in the codebase
+# (the visualizer uses FastAPI + WebGL).  Re-add here and in the
+# pyproject ``viz`` group if/when figure code actually uses it.
+
+# Optional visualizer (``nanocosmos.visualizer``) -- FastAPI + WebGL QA
+# viewer, not on the training/inference path.  fastapi/uvicorn are not
+# yet installed in the frozen env, so they carry lower bounds; pin them
+# to the resolved versions once installed.
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic==2.14.0a1
 
 # Cosmos backbones (Cosmos 2.5 Predict + Cosmos 3 Nano)
 #
@@ -85,28 +102,38 @@ plotly>=5.24.0
 # ``Cosmos3OmniTransformer``, which is NOT in any tagged diffusers
 # release yet -- the pinned 0.37.0 only ships the Cosmos 2.5 classes
 # (``CosmosTransformer3DModel`` etc.).  Without the git-main build the
-# wrapper silently falls back to a randomly-initialised DiT (see
-# ``_BaseCosmos25Wrapper._try_load_diffusers``).  Track HF's main until
-# a release (>= the version that exposes ``Cosmos3OmniTransformer``)
-# lands, then re-pin to that tag.  git main still ships every Cosmos
-# 2.5 class, so Predict keeps working.
-diffusers @ git+https://github.com/huggingface/diffusers.git
+# wrapper falls back to a randomly-initialised DiT (logged as a warning
+# in ``_BaseCosmos25Wrapper``; see wrapper_base.py).  git main still
+# ships every Cosmos 2.5 class, so Predict keeps working.
+#
+# [verify-weights] Pinned to the exact resolved commit
+# (diffusers 0.39.0.dev0) so the lockfile is reproducible instead of
+# tracking a moving branch.  Changing the diffusers / transformers /
+# safetensors versions can change how HF weights deserialize into the
+# DiT via ``from_pretrained``; re-verify pretrained-weight loading
+# after any bump.  Re-pin to a tagged release once one exposes
+# ``Cosmos3OmniTransformer``.
+diffusers @ git+https://github.com/huggingface/diffusers.git@6d71b76aceff935192e58fee38c5cc5d8d227cf0
 # Cosmos 3 is an omni model: the pipeline pulls a Qwen3-VL vision
 # encoder + Qwen2 tokenizer from transformers, so it is now a hard
-# dependency (Qwen3-VL support requires a recent transformers).  Pin
-# the exact resolved version once the env is rebuilt.
-transformers>=4.57.0
-huggingface_hub>=1.6.0
-# git-main diffusers (0.39.0.dev0) requires safetensors>=0.8.0rc0, so
-# the old ``==0.7.0`` pin is unsatisfiable against it.  Track the rc
-# lower bound; re-pin to the resolved version at freeze time.
-safetensors>=0.8.0rc0
+# dependency (Qwen3-VL support requires a recent transformers).
+# transformers and accelerate are NOT imported directly by the package;
+# they are pulled in transitively by diffusers (do not delete as
+# "apparently unused").  Pinned to the resolved versions.
+transformers==5.12.1
+huggingface_hub==1.21.0
+# git-main diffusers requires safetensors>=0.8.0rc0; pinned to the
+# resolved release.
+safetensors==0.8.0
 accelerate==1.13.0
 
 # HTTP / networking
-requests #==2.32.5
-charset-normalizer #==3.4.5
-chardet<6.0.0
+# NOTE: ``requests`` removed -- the download scripts use stdlib
+# urllib.request and non-HTTP fetches go through cloud-volume; requests
+# is not imported by the package or scripts.  cloud-volume pulls its own
+# requests transitively if it needs one.
+charset-normalizer==3.4.7
+chardet==5.2.0
 
 # Utilities
 rich==14.3.2

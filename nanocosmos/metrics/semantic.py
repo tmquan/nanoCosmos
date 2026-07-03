@@ -61,7 +61,6 @@ def compute_per_point_dice(
     target: torch.Tensor,
     num_classes: int = 2,
     ignore_index: int = -100,
-    eps: float = 1e-7,
 ) -> float:
     """Mean Dice coefficient across foreground classes for a single sample.
 
@@ -81,12 +80,11 @@ def compute_per_batch_dice(
     target: torch.Tensor,
     num_classes: int = 2,
     ignore_index: int = -100,
-    eps: float = 1e-7,
 ) -> float:
     """Mean Dice averaged over a batch [B, ...]."""
     total, count = 0.0, 0
     for b in range(pred.shape[0]):
-        total += compute_per_point_dice(pred[b], target[b], num_classes, ignore_index, eps)
+        total += compute_per_point_dice(pred[b], target[b], num_classes, ignore_index)
         count += 1
     return total / count if count > 0 else 0.0
 
@@ -100,7 +98,6 @@ def compute_per_point_iou(
     target: torch.Tensor,
     num_classes: int = 2,
     ignore_index: int = -100,
-    eps: float = 1e-7,
 ) -> float:
     """Mean IoU (Jaccard) across foreground classes for a single sample."""
     p_oh, t_oh = _to_onehot_pair(pred.cpu(), target.cpu(), num_classes, ignore_index)
@@ -115,11 +112,10 @@ def compute_per_batch_iou(
     target: torch.Tensor,
     num_classes: int = 2,
     ignore_index: int = -100,
-    eps: float = 1e-7,
 ) -> float:
     """Mean IoU averaged over a batch [B, ...]."""
     total, count = 0.0, 0
     for b in range(pred.shape[0]):
-        total += compute_per_point_iou(pred[b], target[b], num_classes, ignore_index, eps)
+        total += compute_per_point_iou(pred[b], target[b], num_classes, ignore_index)
         count += 1
     return total / count if count > 0 else 0.0

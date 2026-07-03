@@ -32,6 +32,7 @@ the child's fresh initialisation.
 
 import logging
 import re
+import warnings
 from typing import Any, Dict, Optional
 
 import torch
@@ -86,18 +87,6 @@ def _truncate_to(src: torch.Tensor, shape: torch.Size) -> Optional[torch.Tensor]
         return None
     idx = tuple(slice(0, int(t)) for t in shape)
     return src[idx].contiguous().clone()
-
-
-def build_geometry_overrides(child_cfg_fields: Dict[str, int]) -> Dict[str, int]:
-    """Map nanoCosmos variant fields -> the canonical override dict.
-
-    ``child_cfg_fields`` keys are the :class:`_VariantConfig` field names
-    (``hidden_dim``, ``num_layers``, ``num_heads``, ``num_key_value_heads``,
-    ``head_dim``, ``intermediate_size``); returns the same dict unchanged --
-    the alias resolution against the *parent* config happens in
-    :func:`reduce_omni_transformer`.
-    """
-    return dict(child_cfg_fields)
 
 
 def reduce_omni_transformer(
@@ -203,7 +192,18 @@ def reduce_omni_transformer(
         parent_layers, child_layers, n_copied, n_truncated, n_fresh,
         len(missing), len(unexpected),
     )
+    # Warn loudly when the reduction warm-started only a small fraction of the
+    # child: a near-cold init (mostly-fresh tensors) usually means the layer map
+    # or geometry did not line up with the parent, not an intended random start.
+    n_total = n_copied + n_fresh
+    if n_total and n_fresh > 0.5 * n_total:
+        warnings.warn(
+            f"reduce_omni_transformer kept {n_fresh}/{n_total} child tensors at "
+            f"fresh init (>50%); the reduced backbone is largely un-warm-started "
+            f"-- check the child geometry / layer map against the parent.",
+            stacklevel=2,
+        )
     return child
 
 
-__all__ = ["reduce_omni_transformer", "build_geometry_overrides"]
+__all__ = ["reduce_omni_transformer"]

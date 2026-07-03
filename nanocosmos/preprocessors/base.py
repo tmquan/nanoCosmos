@@ -22,7 +22,10 @@ Optional overrides
 ------------------
 * :meth:`save(path, data)` -- writing back is optional.  The base class
   raises :class:`NotImplementedError` for read-only formats; that's a
-  legitimate state, not a bug.
+  legitimate state, not a bug.  Note: the concrete ``save`` overrides are
+  currently exercised only by the test-suite; runtime volume writes go
+  through :func:`nanocosmos.utils.io.save_volume` (a separate suffix-dispatch
+  path), not through these preprocessor methods.
 * :meth:`get_metadata`, :meth:`get_shape` -- the base implementations
   read the full file via :meth:`load`.  Override for cheap header-only
   paths on large files.

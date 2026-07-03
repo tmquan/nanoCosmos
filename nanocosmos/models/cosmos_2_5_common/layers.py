@@ -11,7 +11,6 @@ import torch.nn as nn
 from einops import repeat
 
 _SPATIAL_DIMS = 3
-_CONV = nn.Conv3d
 
 
 def _NORM(ch: int) -> nn.GroupNorm:
@@ -50,7 +49,6 @@ def _adapt_to_rgb(x: torch.Tensor) -> torch.Tensor:
 
 
 __all__ = [
-    "_CONV",
     "_NORM",
     "_PointwiseLinear",
     "_SPATIAL_DIMS",

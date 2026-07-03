@@ -79,14 +79,25 @@ class BaseCosmosModule(BaseCircuitModule):
         **kwargs: Any,
     ) -> None:
         model_config = dict(model_config or {})
-        # ``hf_token`` is intentionally not persisted via save_hyperparameters.
+        # ``hf_token`` must never be persisted into the checkpoint. Pop it out
+        # BEFORE ``save_hyperparameters`` snapshots ``model_config``. Crucially,
+        # ``save_hyperparameters`` keeps a *reference* to this dict, so we must
+        # NOT re-insert the token into it afterwards (that leaked the token into
+        # ``self.hparams`` and hence every saved checkpoint). Build the model
+        # from a separate copy that carries the token instead.
         hf_token = model_config.pop("hf_token", None)
+        # NOTE: this snapshots all four config dicts into the checkpoint's
+        # ``hyper_parameters``. ``training_config`` therefore also carries
+        # environment-specific keys (accelerator / devices / strategy /
+        # resume_from_checkpoint / compile); treat those as informational
+        # provenance, not a portable spec, when inspecting an old checkpoint.
         self.save_hyperparameters()
+        build_config = dict(model_config)
         if hf_token is not None:
-            model_config["hf_token"] = hf_token
+            build_config["hf_token"] = hf_token
 
         super().__init__(
-            model_config=model_config,
+            model_config=build_config,
             optimizer_config=optimizer_config,
             loss_config=loss_config,
             training_config=training_config,

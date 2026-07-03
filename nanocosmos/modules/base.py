@@ -1,12 +1,14 @@
 """
 Base Lightning module shared by every Nanocosmos training recipe.
 
-All modules in :mod:`nanocosmos.modules` (``CosmosPredict3DModule``,
-``Cosmos3Nano3DModule``, ``Vista3DModule``)
-run the same training / evaluation loop:
+All modules in :mod:`nanocosmos.modules` (e.g. ``CosmosPredict3DModule``,
+``Cosmos3NanoModule``, ``Cosmos3EdgeModule``, ``Cosmos3SuperModule``,
+``Vista3DModule``, and the ``Joint*3DModule`` recipes -- a representative,
+non-exhaustive list) run the same training / evaluation loop:
 
 * forward the volume through the wrapper (``self.model``)
-* apply :class:`nanocosmos.losses.AffinityFGLoss`
+* apply the module's configured loss (``_loss_cls`` -- ``AffinityFGLoss`` for
+  the affinity recipes; ``Joint3DReconSegLoss`` for the joint recipes)
 * accumulate foreground + Mutex Watershed instance metrics during
   validation / test
 * all-reduce once per epoch and log under a single scalar hierarchy
@@ -31,7 +33,6 @@ This matches the image tags emitted by
 scalars for a given head collapse into the same TensorBoard group.
 """
 
-import logging
 import warnings
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -42,8 +43,6 @@ import pytorch_lightning as pl
 from einops import rearrange, reduce
 
 from nanocosmos.inference.mutex_watershed import MutexWatershed
-
-logger = logging.getLogger(__name__)
 from nanocosmos.metrics import (
     compute_per_batch_ari,
     compute_per_batch_ami,
@@ -54,6 +53,8 @@ from nanocosmos.metrics import (
 )
 from nanocosmos.losses import AFFINITY_OFFSETS
 
+# Only the 3-D entry is exercised today (every concrete module sets
+# ``_SPATIAL_DIMS = 3``); the 2-D entry is a latent extension point.
 _SPATIAL_AXES = {2: "h w", 3: "d h w"}
 
 
@@ -134,6 +135,14 @@ class BaseCircuitModule(pl.LightningModule):
         # determines the unified-head width so the model, loss, and Mutex
         # Watershed all agree on one channel count.  Derive it here and
         # inject into the model kwargs (overriding any stale config value).
+        #
+        # CHECKPOINT INVARIANT: the final head Conv3d out-channels are pinned by
+        # THIS derived width, i.e. by the loss offset set -- NOT by the
+        # persisted ``model.head_channels`` (which is informational only and may
+        # be stale in a saved checkpoint). Resuming a checkpoint therefore
+        # requires the same offset count it was trained with. The shipped
+        # last.ckpt used 30 offsets -> head_channels=32; keep loss(.seg).offsets
+        # at 30 entries to load it. See doc/CURRENT_STATE.md (checkpoint rules).
         _offsets = self._loss_offsets(loss_config)
         _n_aff = len(_offsets) if _offsets is not None else len(AFFINITY_OFFSETS)
         _head_channels = _n_aff + 2

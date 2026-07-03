@@ -58,12 +58,11 @@ from __future__ import annotations
 import argparse
 import itertools
 from pathlib import Path
-from typing import Optional, Sequence
 
 import numpy as np
 
-_COSEM_BUCKET = "https://janelia-cosem-datasets.s3.amazonaws.com"
-_COSEM_EM_SUFFIX = "neuroglancer/em/fibsem-uint8.precomputed"
+# Single source of truth for the COSEM S3 source lives in download_cosem3d.
+from download_cosem3d import _BUCKET as _COSEM_BUCKET, _EM_SUFFIX as _COSEM_EM_SUFFIX
 
 _FLYEM_SOURCES = {
     "fib25": {

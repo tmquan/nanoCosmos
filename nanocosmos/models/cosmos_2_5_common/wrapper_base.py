@@ -1,7 +1,7 @@
-"""Shared backbone wrapper for the Cosmos 2.5 family.
+"""Shared backbone wrapper for the Cosmos 2.5 / Cosmos 3 families.
 
-:class:`_BaseCosmos25Wrapper` factors out everything Cosmos-Transfer 2.5
-and Cosmos-Predict 2.5 have in common:
+:class:`_BaseCosmos25Wrapper` factors out everything the Cosmos-Predict 2.5
+and Cosmos 3 (Nano / Edge / Super) wrappers have in common:
 
 * HuggingFace snapshot download + diffusers-class instantiation (base
   DiT + Wan-style VAE)
@@ -13,10 +13,12 @@ and Cosmos-Predict 2.5 have in common:
 * gradient checkpointing on/off
 * parameter-contiguity fix for DDP
 
-Cosmos-Transfer 2.5 adds a ControlNet residual branch on top via the
-two extension hooks (:meth:`_post_load_diffusers` and
-:meth:`_compute_controlnet_residuals`); Cosmos-Predict 2.5 simply
-inherits this base class without overrides.
+Subclasses extend it via the hooks (:meth:`_init_arch_state`,
+:meth:`_post_load_diffusers`, ...): the Cosmos 3 omni family overrides
+:meth:`_post_load_diffusers` to repatch/reduce the DiT, while
+Cosmos-Predict 2.5 inherits this base class without overrides. (An earlier
+Cosmos-Transfer 2.5 ControlNet variant used the same hooks but is no longer
+part of this repo.)
 """
 
 import logging
@@ -91,8 +93,8 @@ class _BaseCosmos25Wrapper(nn.Module):
       specific attributes (e.g. ``self.controlnet``) that downstream
       methods depend on.
     * :meth:`_post_load_diffusers` -- runs after the base DiT + VAE
-      have been successfully loaded via diffusers.  Cosmos-Transfer
-      uses this to load its ControlNet branch.
+      have been successfully loaded via diffusers.  The Cosmos 3 omni
+      family uses this to repatch / structurally reduce the DiT.
     * :meth:`_hook_should_detach` / :meth:`_any_trainable` -- adjust
       gradient policy when an extra trainable branch (e.g. ControlNet)
       is in play.
@@ -169,8 +171,10 @@ class _BaseCosmos25Wrapper(nn.Module):
         # ``_DecoderAdapter3D._decode_body``).  Cancels the directional bias
         # WITHOUT retraining (frozen-VAE safe); costs one extra encode + one
         # extra decode.  This shifts the latent distribution, so it is a
-        # fresh-run setting (a checkpoint trained with it OFF will not resume
-        # cleanly with it ON).
+        # fresh-run setting.  The dependence is BIDIRECTIONAL: it adds no
+        # state_dict keys, but a checkpoint trained with it OFF will not resume
+        # cleanly with it ON, and one trained ON (like the shipped last.ckpt,
+        # vae_symmetrize_z=True) must resume with it ON.
         self._vae_symmetrize_z = bool(vae_symmetrize_z)
         # Temporal chunk size for the residual Wan VAE decode (frames per
         # decoder pass after the mandatory single-frame first chunk).  Larger =
@@ -584,6 +588,12 @@ class _BaseCosmos25Wrapper(nn.Module):
             vae = vae.to(self._dtype)
             self._vae_ref = [vae]
             self.vae_encoder = vae.encoder
+            # CHECKPOINT INVARIANT: this Wan decoder is intentionally registered
+            # under TWO state_dict prefixes -- here as ``model.vae_decoder.*``
+            # and again (same module) inside the decoder adapter as
+            # ``model.decoder_adapter.decoder_body.*``. Both prefixes exist in
+            # last.ckpt; do NOT de-duplicate or convert either to an
+            # unregistered reference (it would drop keys and break the load).
             self.vae_decoder = vae.decoder
 
             self.dit = transformer.to(self._dtype)

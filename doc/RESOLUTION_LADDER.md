@@ -199,8 +199,8 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 ## 5. Plan of record
 
 1. **Census + fine grid.** Adopt §2; fine grid = **4 nm cubic** (§2.1).
-   (Revisit FOV/memory: the shipped configs use a `[200, 256, 256]` @ 4 nm
-   patch — see §6.)
+   (Revisit FOV/memory: the shipped configs use a `[200, 256, 256]` (16B) or
+   `[400, 256, 256]` (2B / 4B) @ 4 nm patch — see §6.)
 2. **Acquire SSL data.**
    - `scripts/download_cosem3d.py` — 4 nm COSEM3D cubes (`jrc_hela-3`,
      `jrc_macrophage-2`, `jrc_jurkat-1`).
@@ -223,7 +223,8 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 ## 6. Open knob (FOV vs resolution)
 
 A 4 nm grid at 160³ sees only 0.64 µm — small context for large neurites
-(the shipped configs use `[200, 256, 256]`, ~0.8 × 1.0 × 1.0 µm).
+(the shipped configs use `[200, 256, 256]` (16B, ~0.8 × 1.0 × 1.0 µm) or
+`[400, 256, 256]` (2B / 4B, ~1.6 × 1.0 × 1.0 µm)).
 Levers: bigger voxel patch (more memory), non-cubic voxel patch (more z-planes
 since z is synthesized), or a slightly larger-voxel grid (e.g. 6 nm: 0.96 µm
 FOV, only CREMI/COSEM mildly downsampled). Decide alongside the 16B memory

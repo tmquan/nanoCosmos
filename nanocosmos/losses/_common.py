@@ -97,6 +97,10 @@ N_AFF: int = len(AFFINITY_OFFSETS)                                     # 14
 # channel last.  The head emits raw logits / linear values; each consumer
 # applies its own activation (logit BCE in the loss, sigmoid for metrics /
 # MWS / TensorBoard, linear for the ``raw`` channel).
+# Default-layout convenience constants (default AFFINITY_OFFSETS -> N_AFF=14 ->
+# 16 channels). Production code that must honour a config-driven offset set uses
+# the ``head_slices()`` / ``head_channels_for()`` helpers below; these fixed
+# constants remain the documented default layout (and are pinned by the tests).
 AFF_SLICE: slice = slice(0, N_AFF)                                     # [0, N_AFF)
 SEM_SLICE: slice = slice(N_AFF, N_AFF + 1)                            # [N_AFF, N_AFF+1)
 RAW_SLICE: slice = slice(SEM_SLICE.stop, SEM_SLICE.stop + 1)          # [N_AFF+1, N_AFF+2)

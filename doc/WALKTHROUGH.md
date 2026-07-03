@@ -62,7 +62,7 @@ Everything below zooms into one piece of this diagram.
 
 ## 1. CLI entry point
 
-`scripts/train.py:main` (`@hydra.main` wrapper at ~line 802) is the only
+`scripts/train.py:main` (`@hydra.main` wrapper at ~line 841) is the only
 entry point; everything else is called from it.  (Line numbers in this
 doc are approximate — anchor on the function names.)
 
@@ -70,20 +70,20 @@ What happens, in order:
 
 | Step | Lines      | Effect                                                                     |
 | ---- | ---------- | -------------------------------------------------------------------------- |
-| 1    | `538`      | `_install_runtime_patches()` — install `torch.load` allow-list + warning filters (see below). |
-| 2    | `540-542`  | Print resolved YAML to stdout (good first-look sanity check).              |
-| 3    | `544-548`  | Make a unique `outputs/<timestamp>_<name>/` run directory.                 |
-| 4    | `550-552`  | `pl.seed_everything(seed, workers=True)`.                                  |
-| 5    | `554-558`  | Build the **DataModule** via `build_datamodule(cfg)` — see §2.             |
-| 6    | `560-569`  | Build the **Lightning Module** via `build_module(cfg)` — see §3.           |
-| 7    | `571`      | Optional `torch.compile` on the **DiT backbone only** (avoids inference-mode tensors leaking into `backward` under DDP). |
-| 8    | `573-579`  | Build callbacks, logger, profiler — see §4.                                |
-| 9    | `581-588`  | Construct `pl.Trainer` via `build_trainer(...)`.                           |
-| 10   | `592`      | `_resolve_checkpoint(cfg, module)` — pick **resume** or **weights-only** load. |
-| 11   | `593-599`  | `run_fit_with_recovery(...)` wraps `trainer.fit(...)` and writes a `crash_recovery.ckpt` if anything throws. |
-| 12   | `601-610`  | Save `final_model.ckpt` on rank 0.                                          |
+| 1    | `843`      | `_install_runtime_patches()` — install `torch.load` allow-list + warning filters (see below). |
+| 2    | `845-847`  | Print resolved YAML to stdout (good first-look sanity check).              |
+| 3    | `849-853`  | Make a unique `outputs/<timestamp>_<name>/` run directory.                 |
+| 4    | `855-857`  | `pl.seed_everything(seed, workers=True)`.                                  |
+| 5    | `859-863`  | Build the **DataModule** via `build_datamodule(cfg)` — see §2.             |
+| 6    | `865-874`  | Build the **Lightning Module** via `build_module(cfg)` — see §3.           |
+| 7    | `876`      | Optional `torch.compile` on the **DiT backbone only** (avoids inference-mode tensors leaking into `backward` under DDP). |
+| 8    | `878-884`  | Build callbacks, logger, profiler — see §4.                                |
+| 9    | `886-893`  | Construct `pl.Trainer` via `build_trainer(...)`.                           |
+| 10   | `897`      | `_resolve_checkpoint(cfg, module)` — pick **resume** or **weights-only** load. |
+| 11   | `898-904`  | `run_fit_with_recovery(...)` wraps `trainer.fit(...)` and writes a `crash_recovery.ckpt` if anything throws. |
+| 12   | `906-915`  | Save `final_model.ckpt` on rank 0.                                          |
 
-`_install_runtime_patches()` (~line 128) is called explicitly from
+`_install_runtime_patches()` (~line 129) is called explicitly from
 `main` (no longer at import time) so `import scripts.train` from a
 notebook or test does not silently mutate the global `torch` module
 or warning filters.  Inside it:
@@ -150,7 +150,7 @@ return cls(
 ```
 
 What `BaseCircuitModule.__init__` does
-([nanocosmos/modules/base.py:122-157](../nanocosmos/modules/base.py)):
+([nanocosmos/modules/base.py:112-167](../nanocosmos/modules/base.py)):
 
 1. Stores `optimizer_config` / `training_config`; copies `loss_config`.
 2. Calls `_build_model(model_config)` which by default forwards every
@@ -199,14 +199,14 @@ sequenceDiagram
     participant TB as TensorBoard
 
     DL->>Mod: training_step(batch, idx)
-    Note over Mod: nanocosmos/modules/base.py:243
+    Note over Mod: nanocosmos/modules/base.py:274
     Mod->>Wrap: self.model(images)
     Note over Wrap: cosmos / vista wrapper.forward
     Wrap-->>Mod: head tensor [B, HEAD_CHANNELS, ...]
     Mod->>Loss: self.criterion(head, targets)
     Note over Loss: nanocosmos/losses/affinity.py
     Loss-->>Mod: {"loss", "loss/aff", "loss/sem", "loss/raw"}
-    Mod->>TB: self.log_dict("train/automatic/...", scalars, sync_dist=True)
+    Mod->>TB: self.log("train/automatic/<key>", value, on_epoch=True)  # per-key
     Mod-->>DL: total_loss (scalar)
 ```
 
@@ -241,7 +241,7 @@ loss/raw        # raw reconstruction
 ```
 
 (A field with `weight: 0` is skipped and absent from the dict.)
-`loss/aff` accompanies the `pred/aff/{offset}` / `true/aff/{offset}`
+`loss/aff` accompanies the `aff/true/{offset}` / `aff/pred/{offset}`
 panels, `loss/sem` the `pred/sem` panel, `loss/raw` the `pred/raw`
 panel.  At eval the predicted affinities also feed the Mutex Watershed,
 whose instances appear as `pred/label/{pre,mul}` and are scored under
@@ -254,7 +254,7 @@ TensorBoard eventually sees.
 
 ### 5.3 Optimiser parameter groups
 
-`nanocosmos/modules/base.py:configure_optimizers` (line 463) splits
+`nanocosmos/modules/base.py:configure_optimizers` (line 585) splits
 parameters into `weight_decay` / `no_weight_decay` (norms + biases).
 The Cosmos module overrides this in
 [nanocosmos/modules/cosmos_2_5_common/base.py](../nanocosmos/modules/cosmos_2_5_common/base.py)
@@ -291,7 +291,7 @@ Defaults in `configs/snemi3d.yaml` (`cosmos3nano3d`, 16B Nano, no
 ControlNet): VAE encoder frozen, **base DiT trainable**
 (`freeze_dit_backbone: false`, full fine-tune under DDP), VAE decoder
 frozen except the fine-tuning shim.  (The flattened `cosmospredict3d.yaml`
-2B baseline uses an integer warm-up, `freeze_dit_backbone: 2`.)  See
+2B baseline uses an integer warm-up, `freeze_dit_backbone: 5`.)  See
 [`ARCHITECT.md` §1.6](./ARCHITECT.md#16-freeze-flags--what-actually-moves)
 for parameter-budget consequences.
 
@@ -301,7 +301,9 @@ for parameter-budget consequences.
 
 `nanocosmos/callbacks/tensorboard/image_logger.py:ImageLogger`.
 
-Once per `every_n_epochs` (default 1), on rank 0 only:
+Once per `every_n_epochs` (default 1), the eval-mode forward runs on
+all ranks (FSDP-collective-safe); only rank 0 writes the panels to
+TensorBoard (non-rank-0 bail right after the forward):
 
 1. `on_train_batch_end` / `on_validation_batch_end` cache the **first
    batch of the epoch** to CPU (`_detach_batch`).
@@ -309,7 +311,7 @@ Once per `every_n_epochs` (default 1), on rank 0 only:
    the device, runs a single eval-mode forward under autocast, casts
    predictions back to fp32.
 3. `_log_predictions(...)` renders `true/{image,label}`, the
-   `true/aff/{offset}` and `pred/aff/{offset}` affinity panels,
+   `aff/true/{offset}` and `aff/pred/{offset}` affinity panels,
    `pred/sem`, `pred/raw`, and the Mutex Watershed instance
    segmentation `pred/label/{pre,mul}`.
 4. Every tag is built through `TagContext.tag(panel)` so the resulting

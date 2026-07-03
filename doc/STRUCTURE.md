@@ -13,7 +13,7 @@ nanocosmos/
 ├── LICENSE
 ├── README.md
 ├── pyproject.toml          # package metadata
-├── requirements.txt        # pinned runtime dependencies
+├── requirements.txt        # runtime dependencies (mostly pinned; torch/diffusers/transformers are unpinned or VCS refs)
 ├── configs/                # Hydra YAMLs (§ Configuration)
 ├── data/                   # (gitignored) raw volumes
 ├── outputs/                # (gitignored) training artefacts
@@ -72,7 +72,7 @@ applicable or directly: `python scripts/<name>.py`.
 | `tests/test_datasets.py`           | `CircuitDataset` abstract contract (resolution, anisotropy, length virtualisation). |
 | `tests/test_datamodules.py`        | `CircuitDataModule` augmentation pipeline (via a synthetic in-memory dataset). |
 | `tests/test_preprocessors.py`      | HDF5 / NRRD / TIFF / NfTy converters.                      |
-| `tests/test_utils.py`              | label / io / parallel helpers.                             |
+| `tests/test_utils.py`              | io façade (`utils/io`), relabel (`transforms/label`), and instance metrics (`metrics/instance`). |
 | `tests/test_cosmos_predict.py`     | Cosmos-Predict 2.5 backbone smoke tests (random-init, CPU): forward contract `[B, HEAD_CHANNELS, D, H, W]`. |
 | `tests/test_joint.py`              | `Joint3DReconSegLoss` two-branch routing / shapes / gradients + `RandResolutionDegraded`. |
 | `tests/test_joint_datamodule.py`   | `Joint3DDataModule` per-branch batch contract + full `fast_dev_run` train path (synthetic HDF5). |
@@ -121,7 +121,7 @@ and the loss targets.  No learnable state.
 | `cremi3d.py`    | CREMI (3D) *Drosophila* ssTEM dataset leaf.                                     |
 | `flyem3d.py`    | FLYEM3D (Janelia FlyEM 8 nm FIB-SEM) dataset leaf.                              |
 | `lazy.py`       | `LazyVolDataset` — on-demand loading for very large volumes.                    |
-| `_patches.py`   | Shared 3-D patch-index generator (used by `lazy.py`).                           |
+| `_patches.py`   | Shared 3-D patch-index generator (used by `microns.py` / `neurons.py`).         |
 
 ### `nanocosmos/datamodules/` — Lightning `DataModule`s
 
@@ -173,6 +173,7 @@ owns its true delta.
 | `decoder.py`          | `_FeatureProjector3D` / `_DecoderAdapter3D` (VAE decoder + affinity + sem + raw head). |
 | `standalone_dit.py`   | Random-init `_StandaloneDiT3D` fallback for `pretrained=False`.       |
 | `hf_loader.py`        | Rank-aware HF snapshot download (ignores `text_encoder/*`).           |
+| `fp8.py`              | Optional FP8 DiT `nn.Linear` conversion (`apply_float8_to_dit`, torchao float8 training path). |
 
 #### `models/cosmos_predict_2_5/` — Cosmos-Predict 2.5 3-D wrapper
 
@@ -197,7 +198,7 @@ the Nano→Edge reduction).
 | `__init__.py`         | Re-exports `Cosmos3OmniWrapper`.                                      |
 | `wrapper.py`          | `Cosmos3OmniWrapper` — the shared Cosmos 3 omni (`Cosmos3OmniTransformer` + Wan2.2 VAE) feature extractor + head. |
 | `wrapper_base.py`     | Abstract base / extension-hook surface for the tier wrappers.        |
-| `variants.py`         | `_VariantConfigBase` for the Cosmos 3 tiers.                         |
+| `variants.py`         | `_VariantConfig` (subclass of `_VariantConfigBase` from `cosmos_2_5_common`) for the Cosmos 3 tiers. |
 | `reduce.py`           | `reduce_omni_transformer` — structured depth+width reduction (used by the Edge tier). |
 
 #### `models/cosmos_3_nano/` — Cosmos 3 Nano (16B) wrapper
@@ -243,9 +244,13 @@ by reducing the loaded Nano transformer.
 ### `nanocosmos/modules/` — Lightning modules
 
 `modules/base.py::BaseCircuitModule` captures the full training /
-validation / test loop shared by every architecture.  Each arch gets
-its own package with a freeze-/optim-aware `base.py` and a
-concrete `module.py`.
+validation / test loop shared by every architecture.  The
+freeze-/optim-aware base lives once per family
+(`modules/cosmos_2_5_common/base.py::BaseCosmosModule`,
+`modules/vista/base.py::BaseVistaModule`); the concrete `module.py`
+classes inherit it (`modules/cosmos_3_common/base.py` is a re-export
+shim onto `BaseCosmosModule`).  Not every arch package carries its own
+`base.py`.
 
 | Path                                  | Purpose                                                      |
 | ------------------------------------- | ------------------------------------------------------------ |
@@ -288,7 +293,7 @@ concrete `module.py`.
 | `hdf5.py`    | HDF5 preprocessor (primary format).         |
 | `nrrd.py`    | NRRD preprocessor (medical imaging format). |
 | `tiff.py`    | Multi-page TIFF preprocessor.               |
-| `nfty.py`    | NfTy / neurofitty volumetric format.        |
+| `nfty.py`    | NIfTI (.nii/.nii.gz) preprocessor via nibabel (nnU-Net-convention volumes). |
 
 ### `nanocosmos/utils/` — miscellaneous helpers
 

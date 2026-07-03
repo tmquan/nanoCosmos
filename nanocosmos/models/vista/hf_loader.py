@@ -127,6 +127,13 @@ def load_pretrained_vista3d_encoder(
     Returns a dict with ``loaded`` / ``shape_mismatch`` / ``missing`` /
     ``unexpected`` counts so callers can surface actionable messages
     (e.g. "set `feature_size=48` to match the pretrained encoder").
+
+    CHECKPOINT NOTE: the partial load is keyed on shape match, so with
+    ``feature_size != 48`` every encoder tensor silently stays at fresh init
+    (no error). The resulting ``backbone.*`` key set is therefore
+    feature_size-dependent, and Vista3DModule checkpoints persist NO
+    hyper_parameters -- so record the training ``feature_size`` / ``encoder_name``
+    alongside any saved Vista checkpoint to reproduce the backbone on resume.
     """
     local_path = _download_vista3d_snapshot(
         repo_id=repo_id,

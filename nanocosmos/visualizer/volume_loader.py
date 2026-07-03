@@ -126,17 +126,6 @@ class VolumeData:
         else:
             return sz / sy
 
-    def slice_physical_size(self, axis: int) -> Tuple[float, float]:
-        """Physical (height, width) in spacing units for a slice along *axis*."""
-        sz, sy, sx = self.spacing
-        Z, Y, X = self.shape
-        if axis == 0:
-            return (Y * sy, X * sx)
-        elif axis == 1:
-            return (Z * sz, X * sx)
-        else:
-            return (Z * sz, Y * sy)
-
 
 def load_volume(
     path: str,

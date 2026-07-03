@@ -49,6 +49,13 @@ class Cosmos3EdgeWrapper(Cosmos3OmniWrapper):
         leave the VAE untouched; everything built afterwards
         (feature_projector / hooks / decoder_adapter) already keys on the
         Edge ``self.cfg`` and the new ``self.dit.config``.
+
+        CHECKPOINT INVARIANT: this reduction is a checkpoint-STRUCTURAL
+        transform -- an Edge checkpoint's ``model.dit.*`` keys/shapes are the
+        reduced-Edge geometry (num_layers 28 / hidden 2048 / heads 16) produced
+        by ``reduce_omni_transformer``'s layer map, NOT the raw HF Nano
+        weights.  Freezing the Edge variant geometry + ``reduce_from_parent``
+        is required to resume any saved Edge checkpoint.
         """
         if not bool(getattr(self.cfg, "reduce_from_parent", False)):
             return

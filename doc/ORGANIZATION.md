@@ -52,7 +52,8 @@ nanocosmos/
     ├── models/           # model wrappers (BaseModel + per-arch packages).
     ├── modules/          # Lightning modules (BaseCircuitModule + per-arch).
     ├── preprocessors/    # format converters (base + per-format).
-    ├── transforms/       # deterministic ops (boundaries, EDT, relabel, ...).
+    ├── transforms/       # MONAI dict transforms, deterministic + randomized
+    │                     #   (boundaries, EDT, relabel, degrade, ...).
     ├── utils/            # io helpers.
     └── visualizer/       # web volume renderer.
 ```
@@ -70,11 +71,23 @@ Five subsystems instantiate this pattern.  Each has a single shared
 
 | Subsystem     | Base                                       | Concrete examples                                 |
 | ------------- | ------------------------------------------ | ------------------------------------------------- |
-| datasets      | `datasets/base.py::CircuitDataset`         | `snemi3d.py`, `microns.py`, `neurons.py`, `lazy.py` |
+| datasets      | `datasets/base.py::CircuitDataset`         | `snemi3d.py`, `microns.py`, `neurons.py`          |
 | datamodules   | `datamodules/base.py::CircuitDataModule`   | `snemi3d.py`, `microns.py`, `neurons.py`          |
-| models        | `models/base.py::BaseModel`                | `cosmos_predict_2_5/`, `cosmos_3_nano/`, `vista/` |
+| models        | `models/base.py::BaseModel` (contract-only) | `cosmos_predict_2_5/`, `cosmos_3_nano/`, `vista/` |
 | modules       | `modules/base.py::BaseCircuitModule`       | `cosmos_predict_2_5/`, `cosmos_3_nano/`, `vista/` |
 | preprocessors | `preprocessors/base.py::BasePreprocessor`  | `hdf5.py`, `nrrd.py`, `tiff.py`, `nfty.py`        |
+
+> **Note on `BaseModel`.**  `models/base.py::BaseModel` is an
+> aspirational contract only — it has no live subclasses.  The concrete
+> wrappers (`_BaseCosmos25Wrapper`, `Vista3DWrapper`, …) inherit
+> `torch.nn.Module` directly and honour the single-tensor `forward`
+> contract by convention; new wrappers are *encouraged* to inherit
+> `BaseModel` for consistency (see the docstring in `models/base.py`).
+
+> **Note on `datasets/lazy.py`.**  `LazyVolDataset` intentionally does
+> *not* inherit `CircuitDataset` — it subclasses the torch/MONAI
+> `Dataset` for on-demand HDF5 patch I/O, so it lives outside the
+> base-and-concrete pattern above.
 
 **Convention:** the concrete class overrides only:
 
@@ -137,7 +150,12 @@ image_logger.py  # ImageLogger callback (the public class)
 
 - **No deep imports.**  Downstream code imports from the package root
   (`from nanocosmos.models.vista import Vista3DWrapper`), never from a
-  sibling file.
+  sibling file.  Exception: the shared `*_common` packages are explicitly
+  designed to be deep-imported by sibling model families — their
+  underscore-prefixed scaffolding (e.g. `_BaseCosmos25Wrapper`,
+  `reduce_omni_transformer`) is imported directly across the
+  `cosmos_*_common` packages.  The "package root only" rule applies to
+  the public leaf wrappers.
 - **`__init__.py` stays thin.**  It re-exports; it does not execute
   substantial logic.
 - **Private modules carry a leading-topic naming scheme** (`layers`,
@@ -147,9 +165,11 @@ image_logger.py  # ImageLogger callback (the public class)
 
 ## 5. Affinity + sem + raw loss
 
-The loss package has one public loss, `AffinityFGLoss` (`affinity.py`),
-the shared `DiceBCEFocalLoss` supervisor, and the layout/helper module
-`_common.py`.  Instance segmentation at eval is produced by the Mutex
+The loss package has two public losses: `AffinityFGLoss` (`affinity.py`)
+for the single-head recipes and `Joint3DReconSegLoss` (`joint3d.py`) for
+the joint resolution-ladder recipes, plus the shared `DiceBCEFocalLoss`
+supervisor and the layout/helper module `_common.py`.  Instance
+segmentation at eval is produced by the Mutex
 Watershed (`inference/mutex_watershed.py`) -- see
 [`MUTEXWATERSHED.md`](./MUTEXWATERSHED.md) for the head, loss, and eval
 in depth.
@@ -181,19 +201,26 @@ out = criterion(head, {"labels": labels, "raw_image": image})
 # out -> {"loss", "loss/aff", "loss/sem", "loss/raw"}
 ```
 
-**Joint recipe.** The resolution-ladder configs (`nanocosmos-16B.yaml` /
-`nanocosmos-2B.yaml`) wrap this head in `Joint3DReconSegLoss`
+**Joint recipe.** The resolution-ladder configs (`nanocosmos-2B.yaml` /
+`nanocosmos-4B.yaml` / `nanocosmos-16B.yaml`) wrap this head in `Joint3DReconSegLoss`
 (`nanocosmos/losses/joint3d.py`): a two-task loss with `ssl`
 (degraded→clean EM reconstruction on the `raw` head) and `sft` (the pooled
 affinity + sem segmentation via `AffinityFGLoss`, configured under the
 nested `loss.seg.*` block, with `offsets` of length 30). See
 [`JOINT_TRAINING.md`](./JOINT_TRAINING.md).
 
+The base `AffinityFGLoss` head emits these scalar groups:
+
 | Scalar group | Meaning |
 | ------------ | ------- |
 | `loss/aff` | masked + offset-weighted (pull/push) affinity composite (BCE + soft-Dice + focal) |
 | `loss/sem` | foreground (semantic) `DiceBCEFocalLoss` vs `labels > 0` |
 | `loss/raw` | L1 reconstruction of the input EM intensity |
+
+The joint recipe (`Joint3DReconSegLoss`) reuses the same `aff` / `sem`
+keys but renames the raw reconstruction scalar to `loss/recon` — covering
+both the `ssl` super-resolution term and the `sft` data-consistency term
+(`joint3d.py`); it does not emit `loss/raw`.
 
 ---
 
@@ -210,19 +237,19 @@ loss/{aff,sem,raw}            # per-field totals
 
 | image tag (`heads.py`)                 | scalar tag(s)                         |
 | -------------------------------------- | ------------------------------------- |
-| `pred/aff/{offset}`, `true/aff/{offset}` | `loss/aff`                          |
+| `aff/pred/{offset}`, `aff/true/{offset}` | `loss/aff`                          |
 | `pred/sem`                             | `loss/sem`, `sem/metric/{acc,iou,dice}` |
 | `pred/raw`                             | `loss/raw`                            |
 | `pred/label/{pre,mul}` (Mutex Watershed) | `ins/metric/{ari,ami,voi,ted}`      |
 
 **Affinity tag ordering.**  Each affinity panel is named by its offset
-(`nanocosmos.losses.AFF_NAMES`, e.g. `01_pull_z1`, `04_push_y3`) with a
+(`nanocosmos.losses.AFF_NAMES`, e.g. `01_pull_z-1`, `21_push_y-2x-2`) with a
 1-based numeric prefix, so TensorBoard's alphabetical sort keeps the
 panels in offset order.  A curated subset (or all `N_AFF`) is chosen by
 `aff_panel_indices`.
 
-**Visualisation-only mask.**  The `pred/aff` panels are multiplied by
-the predicted `sem`, and `true/aff` by the GT foreground, before being
+**Visualisation-only mask.**  The `aff/pred` panels are multiplied by
+the predicted `sem`, and `aff/true` by the GT foreground, before being
 written to TB.  Display-only; the loss uses the unmasked tensors.
 
 Task losses whose weight is `0.0` are **not instantiated** (not just
@@ -236,7 +263,9 @@ All modules in `nanocosmos.modules.*` inherit `BaseCircuitModule`, which
 captures the entire training/eval loop:
 
 1. forward the volume through the wrapper (`self.model`),
-2. apply `AffinityFGLoss`,
+2. apply the configured loss (`self.criterion` / `_loss_cls`) —
+   `AffinityFGLoss` for the single-head recipes, `Joint3DReconSegLoss`
+   for the joint recipes,
 3. accumulate foreground + Mutex Watershed instance metrics during validation/test,
 4. all-reduce once per epoch and log under the scalar hierarchy.
 
@@ -249,10 +278,14 @@ class MyModule(BaseCircuitModule):
     # Optional: override configure_optimizers, freeze schedule hooks.
 ```
 
-The per-architecture package (`modules/cosmos_2_5_common/`,
-`modules/vista/`) holds its own `base.py` for arch-specific concerns
-(parameter-group split for HF-pretrained backbones, freeze scheduling)
-and a `module.py` for the concrete Lightning class.
+A concrete per-architecture package (e.g. `modules/vista/`,
+`modules/cosmos_3_nano/`) holds its own `base.py` for arch-specific
+concerns (parameter-group split for HF-pretrained backbones, freeze
+scheduling) and a `module.py` for the concrete Lightning class.  A shared
+`*_common` package (e.g. `modules/cosmos_2_5_common/`) is base-only — it
+provides the arch-family `base.py` that the concrete packages'
+`module.py` files build on, so those concrete packages may carry only a
+`module.py`.
 
 ---
 
@@ -269,7 +302,9 @@ where
 - `mode`  ∈ `{"automatic", "prompted", ...}` (single-value today,
   structured so `prompted` can slot in later),
 - `head`  ∈ `{"aff", "sem", "raw", "ins"}` or
-  `None` for mode-level panels,
+  `None` for mode-level panels; the joint recipe's image logger reuses
+  this slot for its task branch (`"ssl"` / `"sft"`), so panels land under
+  `{stage}/{mode}/{ssl|sft}/...`,
 - `panel` is the concrete image / scalar name.
 
 Every image logged in `heads.py` and every scalar logged in
@@ -333,9 +368,12 @@ Models that wrap third-party pretrained backbones follow one pattern:
 - Partial loading is graceful: if some head shapes don't match (e.g.
   Vista output classes differ), the backbone still loads and the heads
   stay random-initialized with a warning.
-- Variants that don't have released weights (e.g. Cosmos 14B) raise a
-  clear error when `pretrained=True` — never a silent random-init
-  fallback.
+- Variants with no released weights (an unpopulated `hf_repo_id`, e.g.
+  Cosmos 14B) raise a clear error when `pretrained=True` rather than
+  silently random-initialising.  Note the *download/load-failure* path
+  for a repo that does exist currently degrades differently: it logs a
+  warning and falls back to a random-init standalone DiT backbone
+  (`wrapper_base.py::_build_backbone`).
 
 ---
 
@@ -395,7 +433,12 @@ Rules:
    `canonical_loss_keys()` (so the eval reducer pre-seeds it).
 2. To change the affinity edge set, edit `AFFINITY_OFFSETS` / `N_PULL`
    in `losses/_common.py` — `HEAD_CHANNELS`, the target builders, and the
-   Mutex Watershed all re-derive from it; bump `model.head_channels`.
+   Mutex Watershed all re-derive from it.  `head_channels` is
+   auto-derived from the affinity offset count in
+   `BaseCircuitModule.__init__` (`_head_channels = n_aff + 2`) and
+   injected into the model kwargs, so `model.head_channels` no longer
+   needs to be — and cannot be — set by hand: a mismatched config value
+   only triggers a warning and is overridden.
 3. Tests in `tests/test_losses.py` (shape / gradients / edge cases).
 
 ### ... model architecture
@@ -404,8 +447,10 @@ Rules:
 2. If it needs HF auto-pull or more than ~300 LOC, create
    `models/<name>/` as a package: `wrapper.py`, `heads.py`,
    `hf_loader.py`, `__init__.py`.
-3. Add a matching `modules/<name>/` package with `base.py` and
-   `module.py` inheriting `BaseCircuitModule`.
+3. Add a matching `modules/<name>/` package with a `module.py` (and a
+   `base.py` for arch-family concerns) inheriting `BaseCircuitModule`.
+   When the shared base lives in a `*_common` package, the concrete
+   package may carry only `module.py`.
 4. Surface `pretrained: bool` + any new knobs in `configs/default.yaml`.
 5. Tag the module with its preferred logging hierarchy (see §8).
 
@@ -419,7 +464,7 @@ Rules:
 ### ... transform
 
 1. Add `transforms/<name>.py` as a plain function or a MONAI
-   `Transformd` wrapper.
+   `MapTransform` (dict transform, optionally `Randomizable`).
 2. Re-export from `transforms/__init__.py` only if it's expected to
    appear in a datamodule's `Compose([...])`.
 

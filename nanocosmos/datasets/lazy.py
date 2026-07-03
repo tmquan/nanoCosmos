@@ -293,6 +293,9 @@ class LazyVolDataset(Dataset):
         self.max_foreground_retries = int(max_foreground_retries)
 
         self._handles: List[_VolumeHandle] = []
+        # Built during discovery, then converted to the ``_cum_voxels_arr``
+        # np.searchsorted table used for weighted volume picking; the list form
+        # is kept only as a debugging aid and is not read after conversion.
         self._cum_voxels: List[int] = []
         self._norm_params: Dict[str, Tuple[float, float]] = {}
 

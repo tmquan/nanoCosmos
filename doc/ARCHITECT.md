@@ -13,6 +13,20 @@ The wrappers live under `nanocosmos/models/`:
 2. `Cosmos3Nano3DWrapper` — Cosmos 3 (Nano) 16B omni transformer + Wan2.2 VAE (`nanocosmos/models/cosmos_3_nano/`).  The shipped `snemi3d.yaml` / `default.yaml` default (`model.type: cosmos3nano3d`, variant `Nano`).  Shipped joint configs use DDP + gradient checkpointing; FSDP is supported (opt-in, intended for the 16B joint recipe).
 3. [`Vista3DWrapper`](#2-vista3dwrapper) — EM → SegResNetDS2 → head (fast local iteration).
 
+Two further Cosmos-3 tiers ship in-tree but are not detailed below (they share
+the Nano data flow); see [§3](#3-choosing-a-backbone):
+
+- `Cosmos3EdgeWrapper` — Cosmos-3 Edge (4B), a structural reduction from Nano
+  (`nanocosmos/models/cosmos_3_edge/`, `model.type: joint3d_edge` →
+  `JointEdge3DModule`; shipped config `configs/nanocosmos-4B.yaml`). Until the
+  official Edge weights ship it warm-starts from the released Nano checkpoint and
+  reduces the loaded transformer down to the Edge geometry.
+- `Cosmos3SuperWrapper` — Cosmos-3 Super (64B total / 32B dense generator tower)
+  (`nanocosmos/models/cosmos_3_super/`, selectors `cosmos3super3d` →
+  `Cosmos3SuperModule` / `joint3d_super` → `JointSuper3DModule`). No Super config
+  ships yet (`configs/nanocosmos-16B.yaml` uses `type: joint3d`, the Nano 16B
+  backbone).
+
 Channel counts mirror `configs/default.yaml`. Parameter counts are
 approximate; use `model.get_num_parameters(trainable_only=…)` on a loaded
 instance for exact numbers.
@@ -81,7 +95,7 @@ From `nanocosmos/models/cosmos_predict_2_5/variants.py` (`_VARIANT_CONFIGS["2B"]
 | Key                    | Value |
 |------------------------|-------|
 | HF repo                | `nvidia/Cosmos-Predict2.5-2B`    |
-| Base DiT revision      | `diffusers/general`              |
+| Base DiT revision      | `diffusers/base/post-trained` (alt: `diffusers/base/pre-trained`) |
 | `hidden_dim`           | **2048**                         |
 | `num_layers`           | **28**                           |
 | `num_heads`            | **16** (head_dim 128)            |
@@ -108,8 +122,9 @@ that lives on the wrapper (`wrapper.vae_decoder is
 wrapper.decoder_adapter.decoder_body`). Lightning's
 `ModelSummary` walks the module tree and **double-counts** those weights once
 per registration site. Use `CosmosPredict3DWrapper.get_num_parameters(...)`
-(which iterates `self.parameters()` and deduplicates by `id`) for authoritative
-totals.
+(which sums `self.parameters()` — and `nn.Module.parameters()` already
+de-duplicates shared parameters via its built-in `remove_duplicate` behavior)
+for authoritative totals.
 
 The adapter adds, on top of the shared decoder:
 
@@ -239,8 +254,11 @@ upsampling internally.
 When `pretrained=True` **and** `feature_size == 48`, `load_pretrained_vista3d_encoder`
 downloads MONAI's `VISTA3D-HF` encoder weights and loads them into the backbone
 encoder (`strict=False`). With `feature_size == 64` (our default) the load is
-skipped and the backbone starts random — trades pretrained init for a wider
-feature channel throughout.
+still *attempted* — the code emits a warning and calls
+`load_pretrained_vista3d_encoder` anyway (the download happens and the merge runs
+with `strict=False`) — but every encoder tensor fails shape-matching against the
+48-wide pretrained weights, so the backbone effectively stays random. This trades
+pretrained init for a wider feature channel throughout.
 
 ### 2.4 No freeze-flag API
 
@@ -273,7 +291,9 @@ local iteration and debugging.
 
 | Use case                                               | Recommended wrapper |
 |--------------------------------------------------------|---------------------|
-| Shipped default (16B omni, FSDP)                       | Cosmos 3 (Nano)     |
+| Shipped default (16B omni, DDP; FSDP opt-in for full 16B) | Cosmos 3 (Nano)  |
+| Reduced-from-Nano tier (4B, `joint3d_edge`, `configs/nanocosmos-4B.yaml`) | Cosmos 3 (Edge) |
+| Largest tier (64B total / 32B dense tower, `cosmos3super3d` / `joint3d_super`; no shipped config yet) | Cosmos 3 (Super) |
 | 2B affinity baseline, DDP                              | Cosmos-Predict      |
 | Fast local dev / debugging on a single GPU             | Vista               |
 

@@ -169,17 +169,23 @@ turning real tissue into false background (an all-black `true/sem` region).
 `FindBoundariesd` therefore restores any connected component the boundary pass
 would remove completely.
 
-## 4.2 SSL crop gates (`ssl_min_foreground`, `ssl_min_std`)
+## 4.2 SSL crop gates (`ssl_min_foreground`, `ssl_min_std`, `ssl_min_autocorr`)
 
 The label-less `ssl` branch can sample crops that are uninformative for
-reconstruction in two distinct ways, each with its own gate (both applied only
+reconstruction in three distinct ways, each with its own gate (all applied only
 to label-less volumes in `LazyVolDataset`; failing crops are re-sampled, and the
-best-seen crop is kept once `max_foreground_retries` is exhausted):
+best-seen crop is kept once `max_foreground_retries` is exhausted). A crop must
+pass *every* enabled gate, and best-seen ranks on the limiting (minimum) score:
 
-- `ssl_min_foreground` — **legacy non-zero gate** used only when `ssl_min_std`
-  is `0`. Rejects literally zero-padded / black crops (non-zero voxel fraction
-  below the threshold).
-- `ssl_min_std` (shipped `0.05`, the active gate) — **local content gate**.
+- `ssl_min_foreground` (shipped `0.8`) — **required non-zero fraction / content
+  fraction**. When both the std and autocorr gates are off it is the *legacy
+  fallback*: a plain non-zero voxel fraction test that rejects literally
+  zero-padded / black crops (fraction below the threshold). When `ssl_min_std`
+  (or `ssl_min_autocorr`) is on it is instead **repurposed as the required
+  *content* fraction** for the block-std gate below (so it composes with the
+  other knobs rather than being disabled). If it is `0` while a std/autocorr gate
+  is on, the required content fraction defaults to `0.5`.
+- `ssl_min_std` (shipped `0.05`) — **local content gate**.
   A global non-zero (or even global-std) test passes a crop that is mostly flat
   resin/embedding medium as long as *some* region is textured. Instead, the crop
   is normalised to `[0, 1]` (per-volume), tiled into `4×16×16` blocks, and each
@@ -187,8 +193,14 @@ best-seen crop is kept once `max_foreground_retries` is exhausted):
   then have a **content fraction `>=` `ssl_min_foreground`** (so the two knobs
   compose: `ssl_min_std` sets the texture threshold, `ssl_min_foreground` the
   required fraction). This rejects flat / half-empty crops (e.g. a COSEM cell
-  edge against resin) that the non-zero gate misses. Best-seen ranks by content
-  fraction.
+  edge against resin) that the non-zero gate misses.
+- `ssl_min_autocorr` (shipped `0.5` in nanocosmos-2B) — **structure gate**.
+  Lag-1 spatial autocorrelation on the per-volume `[0, 1]` scale. Random
+  detector / resin grain has high local variance (so it passes `ssl_min_std`
+  with content fraction `1.0`) yet ~0 spatial coherence, so the content gate
+  cannot catch it. Real ultrastructure is spatially coherent (~0.6–0.8) while
+  noise sits near `0`, so this rejects the noise-dominated crops the std/content
+  gate lets through.
 
 For the **sft** branch, `sft_min_foreground` (shipped `0.8`) is a **dual** gate:
 a crop must have BOTH its label-foreground fraction AND its image non-zero

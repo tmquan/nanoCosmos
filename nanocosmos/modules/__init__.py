@@ -22,8 +22,11 @@ Public surface
 * :class:`BaseCosmosModule` -- adds the freeze schedule and
   ``dit_backbone_lr`` parameter-group split.
 * :class:`BaseVistaModule` -- adds Vista-specific wiring.
-* :class:`Cosmos3Nano3DModule` -- concrete Lightning class for the
-  Cosmos 3 (Nano) omni backbone (16B MoT, no ControlNet).
+* :class:`Cosmos3NanoModule` (alias :class:`Cosmos3Nano3DModule`) --
+  concrete Lightning class for the Cosmos 3 (Nano) omni backbone (16B MoT).
+* :class:`Cosmos3EdgeModule` -- the Cosmos 3 Edge (4B, reduced-from-Nano)
+  backbone.
+* :class:`Cosmos3SuperModule` -- the Cosmos 3 Super (64B) backbone.
 * :class:`CosmosPredict3DModule` -- concrete Lightning class for the
   Cosmos-Predict 2.5 backbone (base DiT).
 * :class:`Vista3DModule` -- concrete Lightning class for the Vista
@@ -31,8 +34,10 @@ Public surface
 * :class:`Joint3DModule` -- joint reconstruction + segmentation recipe
   (:class:`~nanocosmos.losses.Joint3DReconSegLoss`) on the Cosmos 3 Nano
   backbone (``model.type: joint3d``).
-* :class:`JointPredict3DModule` -- the joint recipe on the Cosmos-Predict
-  2.5 2B backbone (``model.type: joint3d_2b`` / ``joint_predict3d``).
+* :class:`JointPredict3DModule` / :class:`JointEdge3DModule` /
+  :class:`JointSuper3DModule` -- the joint recipe on the Cosmos-Predict 2.5
+  2B (``joint3d_2b``), Cosmos 3 Edge (``joint3d_edge``) and Cosmos 3 Super
+  (``joint3d_super``) backbones respectively.
 
 Extending this module
 ---------------------

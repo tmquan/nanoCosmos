@@ -120,31 +120,6 @@ def _find_boundaries_xy(
     return boundary
 
 
-def boundary_mask_batch(
-    labels: torch.Tensor,
-    mode: str = "inner",
-    connectivity: int = 1,
-) -> torch.Tensor:
-    """Batch boundary mask using thinnest connectivity (6-connected in 3D).
-
-    Args:
-        labels: Instance labels [B, *spatial].
-        mode: Boundary mode (``'inner'``, ``'outer'``, ``'thick'``).
-        connectivity: 1 = face-adjacent only (thinnest).
-
-    Returns:
-        Boolean mask [B, *spatial], True at boundary voxels.
-    """
-    parts = []
-    for b in range(labels.shape[0]):
-        bnd = find_boundaries(labels[b], mode=mode, connectivity=connectivity)
-        if isinstance(bnd, np.ndarray):
-            parts.append(torch.from_numpy(bnd).to(labels.device))
-        else:
-            parts.append(bnd)
-    return torch.stack(parts)
-
-
 class FindBoundariesd(MapTransform, Randomizable):
     """Zero out boundary voxels in instance labels (label × (1 − boundary)).
 

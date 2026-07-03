@@ -24,7 +24,7 @@ flowchart LR
     mod --> tr
     tr --> step["training_step"]
     step --> wrap["Backbone wrapper<br/>VAE -> DiT -> affinity+sem+raw head"]
-    wrap -->|"[B, 16, ...]"| loss["AffinityFGLoss"]
+    wrap -->|"[B, N_AFF+2, ...]"| loss["AffinityFGLoss"]
     loss --> log["TensorBoard<br/>scalars + image panels"]
     wrap -.->|"eval"| mws["Mutex Watershed<br/>(instances)"]
 ```
@@ -44,11 +44,17 @@ the loss, and the Mutex Watershed eval, see
 ## What it does
 
 Every backbone trains one **affinity + sem + raw per-voxel head**
-(`HEAD_CHANNELS = N_AFF + 2 = 16`):
+(`HEAD_CHANNELS = N_AFF + 2`).  The head width is config-driven: it is
+derived at runtime from the loss offset set (`head_channels =
+len(loss_offsets) + 2`; see `nanocosmos/modules/base.py`).  The default
+`snemi3d` layout uses `N_AFF = 14` offsets, so `HEAD_CHANNELS = 16`; the
+flagship recipes (`nanocosmos-2B/4B/16B` and the standalone
+`cosmospredict3d` / `cosmos3nano3d`) declare 30 offsets, so
+`HEAD_CHANNELS = 32`:
 
 | channels | field | meaning |
 |---:|---|---|
-| 0 .. N_AFF-1 (14) | `aff` | per-offset affinity logit for `P(label[v] == label[v+offset])` |
+| 0 .. N_AFF-1 | `aff` | per-offset affinity logit for `P(label[v] == label[v+offset])` |
 | N_AFF (1) | `sem` | foreground / boundary logit |
 | N_AFF+1 (1) | `raw` | input-EM reconstruction (linear, L1; target in `[-1, 1]` with `vae_input_pm1`) |
 
@@ -56,9 +62,10 @@ The head emits **raw logits / linear values** (no activation in `forward`);
 `sigmoid` is applied only at the loss, metrics, Mutex Watershed, and
 TensorBoard boundaries.
 
-The affinity offsets (`nanocosmos.losses.AFFINITY_OFFSETS`) are 3 **pull**
-nearest-neighbours plus 11 **push** long-range offsets (anisotropy-aware
-for EM).  `AffinityFGLoss` supervises the
+The default affinity offsets (`nanocosmos.losses.AFFINITY_OFFSETS`) are
+3 **pull** nearest-neighbours plus 11 **push** long-range offsets
+(anisotropy-aware for EM); the flagship recipes override this with a
+30-offset set (5 pull + 25 push).  `AffinityFGLoss` supervises the
 affinities (masked BCE + soft-Dice + focal) directly against the binary
 label-derived target; at evaluation / inference the predicted
 affinities are agglomerated into instances by the **parameter-free
@@ -72,14 +79,16 @@ The full file-by-file map lives in [`doc/STRUCTURE.md`](doc/STRUCTURE.md).
 Skim of the top level:
 
 ```
-nanocosmos/
+nanoCosmos/             repo root
 ├── configs/             Hydra configs (default → snemi3d → combine;
-│                         nanocosmos-16B / nanocosmos-2B = joint SR+seg recipe)
-├── nanocosmos/            importable package (losses, models, modules,
+│                         nanocosmos-16B / nanocosmos-4B / nanocosmos-2B
+│                         = joint SR+seg recipe)
+├── nanocosmos/          importable package (losses, models, modules,
 │                        datasets, datamodules, transforms, inference,
 │                        preprocessors, metrics, visualizer, callbacks)
 ├── doc/                 STRUCTURE / ORGANIZATION / MUTEXWATERSHED / ARCHITECT
 │                        / WALKTHROUGH / GOTCHAS / CONTRIBUTING / INDEX
+│                        / DATASETS / JOINT_TRAINING / RESOLUTION_LADDER
 ├── scripts/             train.py entry point + dataset downloaders
 ├── tests/               pytest suite
 ├── pyproject.toml
@@ -117,9 +126,9 @@ python scripts/train.py --config-name nanocosmos-2B    # Cosmos-Predict 2.5 (2B)
 
 ### GPU memory: avoiding slow OOM drift on long runs
 
-On long DDP runs (especially with `compile: max-autotune` or
-`max_hard_pairs: 0`) the PyTorch caching allocator's reserved pool
-tends to creep upward over hours even though live tensors are stable.
+On long DDP runs (especially with `compile: max-autotune`) the
+PyTorch caching allocator's reserved pool tends to creep upward over
+hours even though live tensors are stable.
 Two settings make the difference between "stable at 90 %" and "OOM at
 epoch 30":
 

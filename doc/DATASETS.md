@@ -30,9 +30,11 @@ recipe** (`configs/nanocosmos-{16B,4B,2B}.yaml`,
 
 All scripts live in `scripts/` and write the on-disk convention described
 in [On-disk convention](#on-disk-convention). The multi-dataset
-"foundation" recipe (`configs/cosmos3nano3d.yaml`) mixes SNEMI3D,
-Neurons, MICrONS, CREMI3D, and FLYEM3D in a single run by listing volumes
-from several `data/<root>` directories under one datamodule.
+"foundation" recipe (`configs/cosmos3nano3d.yaml`) trains on Neurons,
+MICrONS, CREMI3D, and FLYEM3D in a single run by listing volumes from several
+`data/<root>` directories under one datamodule, and holds out SNEMI3D
+(`AC4`) as the benchmark validation / test set (it appears under
+`val_volumes` / `test_volumes`, not `train_volumes`).
 
 ---
 
@@ -82,7 +84,10 @@ python scripts/download_snemi3d.py --source snemi      # AC3 EM + AC4 EM/labels
 python scripts/download_snemi3d.py --link /scratch/SNEMI3D   # or symlink existing
 ```
 
-Files land in `data/SNEMI3D/` (e.g. `AC4_inputs`, `AC4_labels`).
+Files land in `data/SNEMI3D/` (e.g. `AC4_inputs`, `AC4_labels`). The output
+directory flag is `--output` (default `data/SNEMI3D`) — note this differs from
+the `--out-dir` used by the CREMI3D / FLYEM3D / COSEM3D downloaders;
+`download_snemi3d.py` does **not** accept `--out-dir`.
 
 ---
 
@@ -252,6 +257,13 @@ per-volume `[0, 1]` scale (config keys under `data.`):
 | contrast | `ssl_min_std` (0.05) | **flat** resin / embedding medium | fraction of 4×16×16 blocks whose local std clears the threshold (`content_frac`) |
 | **structure** | `ssl_min_autocorr` (0.5) | **noise-dominated** crops (detector / resin grain) | lag-1 spatial autocorrelation |
 
+> All three gate keys are wired into `LazyVolDataset` (via `Joint3DDataModule`),
+> but each defaults to `0` (**disabled**) if the key is absent from the config.
+> The `ssl_min_autocorr: 0.5` **structure** gate is currently set **only in
+> `configs/nanocosmos-2B.yaml`** — `configs/nanocosmos-4B.yaml` and
+> `nanocosmos-16B.yaml` do not set it, so the structure gate is **off** there and
+> the noise-dominated SSL crops below are **not** rejected in those two recipes.
+
 **Why the structure gate is needed.** A variance/std test *cannot* tell real
 ultrastructure from noise — random detector/resin grain has **high** local
 variance, so it passes `ssl_min_std` with `content_frac = 1.0`. This surfaced as
@@ -312,8 +324,14 @@ python scripts/collect_meaningful_crops.py --source flyem3d --dataset malecns --
 ### Known NOT-MEANINGFUL crops (excluded from config; files kept on disk)
 
 The `.h5` files below **remain on disk** (not deleted, in case anyone wants to
-re-inspect them) but are **removed from every config** -- do not re-add them.
-Each was confirmed junk by the audit above (not a one-off borderline score):
+re-inspect them) but are **removed from `configs/nanocosmos-2B.yaml`** -- do not
+re-add them. (`configs/nanocosmos-4B.yaml` / `nanocosmos-16B.yaml` are **not yet
+updated**: they still list `mitoem2_jurkat_train02`, `mitoem2_macro_train02`,
+`mitoem2_stem_train01`, `mitoem2_stem_train02`, and `mitoem2_stem_test01`, and
+neither sets the `ssl_min_autocorr` gate -- so in those two recipes the
+pure-noise `jurkat_train02` / `macro_train02` volumes are neither excluded from
+config nor gated out at read time and **will be trained on**.) Each file below
+was confirmed junk by the audit above (not a one-off borderline score):
 
 | file | root | measured | verdict |
 | --- | --- | --- | --- |
@@ -450,6 +468,15 @@ Validated directly against real MICrONS data: 40 sampled crops with the gate
 active had `n_inst` min **14** (previously as low as 1), zero single-instance
 crops slipped through.
 
+The code plumbing (both `LazyVolDataset` and `Joint3DDataModule`) is in place,
+but these keys default to `0` (**disabled**) when absent and the
+instance-diversity gate (`sft_min_instances` / `sft_max_inst_frac`) is
+**currently set only in `configs/nanocosmos-2B.yaml`**; `nanocosmos-4B.yaml`
+and `nanocosmos-16B.yaml` do not set it, so single-instance MICrONS crops are
+**not** rejected there. (The SSL structure gate `ssl_min_autocorr: 0.5`, by
+contrast, is now set in all three joint configs — it is what rejects the
+pure-noise MitoEM2 volumes wherever they are listed.)
+
 **An experimental image-label alignment check -- tested, and rejected.** To
 rigorously check whether an image/label *pair* could be mismatched or
 corrupted (as opposed to each half being individually fine), a metric was
@@ -515,11 +542,15 @@ Notes on the stem fields:
   (key `main`, axes transposed `X,Y,Z` → `Z,Y,X`) and used **image-only in the
   `ssl` branch**.  The folder's own split is honoured: `imagesTr` → ssl **train**,
   `imagesTs` → ssl **validation** holdout (`task: ssl` recon).  As of the Jul
-  2026 refresh (see below) the joint configs carry **30 train / 10 val**
-  volumes; see `doc/data.csv` for the exact per-subset counts.  Two native
+  2026 refresh (see below) `configs/nanocosmos-2B.yaml` carries **30 train /
+  10 val** volumes; `configs/nanocosmos-4B.yaml` / `nanocosmos-16B.yaml` still
+  reflect the pre-refresh **32 train / 7 val** layout and need the same update.
+  See `doc/data.csv` for the exact per-subset counts.  Two native
   resolutions: `[16,16,16]` (Beta/Jurkat/Macro/Podo/Sperm) and `[30,8,8]`
   (Mossy/Pyra/Stem).  Labels (mito/boundary) are unused.
-  **`jurkat_train02` / `macro_train02` REMOVED** (no longer in the config):
+  **`jurkat_train02` / `macro_train02` REMOVED** (no longer in
+  `configs/nanocosmos-2B.yaml`; still present in `nanocosmos-4B.yaml` /
+  `nanocosmos-16B.yaml`, which are not yet updated):
   audited as **pure uniform random noise** (min=0, max=255, all 256 values
   present, std≈73.9 ≈ the theoretical max for uniform `[0,255]` data) -- a
   genuine, **checksum-confirmed** bug in the upstream MitoEM 2.0 release, not
@@ -573,18 +604,22 @@ GB after dropping the now-redundant zips / extracted `.nii.gz`).
 3. **`jurkat_train01` / `macro_train01` are good and were restored.** An older
    doc note said these were "removed as empty" (in whatever earlier release
    version that referred to); freshly audited against v6 they are genuine,
-   well-structured EM (autocorr 0.79 / 0.59) -- so both are back in the
-   config, meaning `jurkat` / `macro` each now contribute 1 real train crop
-   again (down from the illusion of "2" when one was actually noise).
+   well-structured EM (autocorr 0.79 / 0.59) -- so both are back in
+   `configs/nanocosmos-2B.yaml`, meaning `jurkat` / `macro` each now contribute
+   1 real train crop again (down from the illusion of "2" when one was actually
+   noise). (Not yet restored in `nanocosmos-4B.yaml` / `nanocosmos-16B.yaml`.)
 4. **v6 ships additional test crops** not present in the old copy:
    `beta_test01` / `beta_test03` (previously only `test02` existed),
    `jurkat_test01`, `macro_test01` -- all audited good and added to
-   `val_volumes`.
+   `val_volumes` in `configs/nanocosmos-2B.yaml` (not yet in `nanocosmos-4B.yaml`
+   / `nanocosmos-16B.yaml`).
 5. **`stem_train01` / `stem_train02` / `stem_test01` persist as low-structure**
    in v6 (same autocorr ~0.37-0.49 as before) -- still excluded; see the
    "excluded crops" table above.
 
-Net effect on the config across this whole cleanup pass: MitoEM2 SSL
+Net effect in `configs/nanocosmos-2B.yaml` across this whole cleanup pass
+(only 2B has been updated so far; `nanocosmos-4B.yaml` / `nanocosmos-16B.yaml`
+still carry the pre-refresh **32 train / 7 val** layout): MitoEM2 SSL
 **train 32 → 30** (`-2` corrupt `jurkat_train02`/`macro_train02`, `-2`
 low-structure `stem_train01`/`train02`, `+2` restored `jurkat_train01`/
 `macro_train01`; wash on `beta`/`podo`/`sperm`/`mossy`/`pyra`), **val 7 → 10**

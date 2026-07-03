@@ -22,9 +22,9 @@ Companion docs: [`WALKTHROUGH.md`](./WALKTHROUGH.md),
 **Symptom.** "How is Lightning loading my checkpoint without a
 `safe_globals` warning when I have new objects in callback state?"
 
-**Where.** `scripts/train.py::_install_runtime_patches` (~line 126).
+**Where.** `scripts/train.py::_install_runtime_patches` (~line 129).
 This helper rebinds `torch.load` to a wrapper that forces
-`weights_only=False`.  It is **called from `main()` (~line 794)**, not
+`weights_only=False`.  It is **called from `main()` (~line 843)**, not
 at import time, so `import scripts.train` from a notebook or test no
 longer mutates the global `torch` module silently.
 
@@ -46,26 +46,35 @@ than calling `main()`.
 
 ## 2. Loss-config schema is silently both flat and nested
 
-**Symptom.** Two YAML files mix `weight_sem: 0.5` with
-`weight_sem: { weight: 0.5, lambda_bce: 1.0, lambda_dice: 1.0,
-lambda_focal: 1.0, gamma: 2.0 }` and both work, but you can't tell
-which one is in effect from the config alone.
+**Symptom.** A field like `weight_sem` can appear either as a scalar
+(`weight_sem: 0.5`) or as a nested mapping
+(`weight_sem: { weight: 0.5, lambda_bce: 1.0, lambda_dice: 1.0,
+lambda_focal: 1.0, gamma: 2.0 }`) and both work, but you can't tell
+from the field's value alone which sub-terms are active.
 
 A scalar (`weight_sem: 0.5`) sets only the field weight; the nested
-mapping additionally configures the `sem` head's `DiceBCEFocalLoss`
-sub-terms (`lambda_{bce,dice,focal}`, `gamma`).  `weight_aff` /
-`weight_raw` are plain scalars.
+mapping additionally configures that head's sub-terms.  This scalar-or-
+nested duality applies uniformly to **all three** fields —
+`weight_aff`, `weight_sem`, and `weight_raw` — not just `weight_sem`.
+The nested keys differ per field: `weight_aff` adds
+`lambda_{bce,dice,focal}` / `gamma` / `pull_weight` / `push_weight` /
+`class_balance` / `mask_to_foreground` / …; `weight_sem` adds
+`lambda_{bce,dice,focal}` / `gamma` / `class_balance` / …; `weight_raw`
+adds `{weight, loss}` (`loss: l1 / mse / smooth_l1`).  Every shipped
+recipe uses the **nested** form for all three.
 
 **Where.**
 [`nanocosmos/losses/affinity.py`](../nanocosmos/losses/affinity.py)
-(`AffinityFGLoss.__init__` splits scalar vs nested for `weight_sem`),
-read consistently by `nanocosmos/modules/base.py`.
+(`AffinityFGLoss.__init__` calls `_split_field` for `weight_aff`,
+`weight_sem`, and `weight_raw` alike), read consistently by
+`nanocosmos/modules/base.py`.
 
-**Why.** A scalar is the common case; the nested form exists so the
-foreground supervision can be tuned without a separate knob block.
+**Why.** A scalar is the compact shorthand
+(`weight_sem: 1.0` == `weight_sem: {weight: 1.0}`); the nested form
+exists so each head can be tuned without a separate knob block.
 
-**Remediation.** Prefer the nested form for `weight_sem` when you
-touch its sub-terms; leave it scalar otherwise.
+**Remediation.** Prefer the nested form when you touch a field's
+sub-terms; leave it scalar otherwise.
 
 ---
 
@@ -108,7 +117,7 @@ rebuilding the optimizer or resetting the LR scheduler.
 
 Negative ints and non-bool / non-int values raise at construction
 rather than being silently coerced to truthy.  See also [`ARCHITECT.md`
-§1.7](./ARCHITECT.md#17-freeze-flags--what-actually-moves).
+§1.6](./ARCHITECT.md#16-freeze-flags--what-actually-moves).
 
 ---
 
@@ -119,15 +128,18 @@ silently re-computes normalisation stats on every worker, slowing
 startup and producing slightly different statistics across workers.
 
 **Where.** `nanocosmos/datasets/lazy.py:_read_norm_cache` and
-`_write_norm_cache` -- both wrap their I/O in `except Exception:
-return None / pass`.
+`_write_norm_cache` -- both swallow expected I/O / parse failures so a
+missing, unwritable, or corrupt `.norm.json` just falls back to
+recomputing stats instead of crashing.
 
 **Why.** The cache is an optimisation; we never want a permission
 error or a stale file to crash a long DDP run.
 
-**Remediation.** The handlers narrow to
-`(OSError, json.JSONDecodeError)` so a real bug surfaces; if your
-workers are slow on the first epoch, check the data root is writable.
+**Remediation.** The handlers already catch only a narrow, explicit
+exception set — `(OSError, ValueError, KeyError, json.JSONDecodeError)`
+on read, `OSError` on write — so any *unexpected* error still surfaces
+as a real bug.  If your workers are slow on the first epoch, check the
+data root is writable.
 
 ---
 
@@ -144,46 +156,66 @@ never closes them.
 expectation was that workers are short-lived.  With
 `persistent_workers=True` (default), they aren't.
 
-**Remediation.** Either bump `ulimit -n`, set
-`persistent_workers=false` for very-many-volume datasets, or close
-the cache periodically.  The lazy dataset's `__del__` closes handles
-on teardown.
+**Remediation.** Handles are **not** closed automatically — there is no
+`__del__`, `close()`, `atexit` hook, or `weakref.finalize` in
+`lazy.py`, so the thread-local `h5py.File` cache lives for the lifetime
+of each worker.  The only mitigations are to bump `ulimit -n` or set
+`persistent_workers=false` for very-many-volume datasets.
 
 ---
 
-## 9. Empty `train_volumes` -> `None` train dataset
+## 9. Empty `train_volumes` behaves differently per datamodule
 
 **Symptom.** You comment out the entire `train_volumes:` block to do
-a val-only run, and `trainer.fit` either crashes or trains on nothing.
+a val-only run and get inconsistent results across recipes: SNEMI3D
+quietly trains on something you didn't ask for, while MICRONS / Neurons
+abort at `setup` with a `ValueError`.
 
 **Where.**
 [`nanocosmos/datamodules/snemi3d.py`, `microns.py`, `neurons.py`]
--- each `setup` only creates `self.train_dataset` if `train_volumes`
-is non-empty; otherwise it stays `None`.
+-- in lazy 3-D mode (`slice_mode: false`):
 
-**Why.** Originally written so `trainer.test` could be invoked
-without populating the train split.
+* `snemi3d.py` (`train_vols = self.train_volumes or self._DEFAULT_VOLUMES`)
+  **silently falls back** to its built-in `_DEFAULT_VOLUMES` (AC4) —
+  never `None`.
+* `microns.py` / `neurons.py` **raise `ValueError`** telling you to set
+  a non-empty `train_volumes` or switch to `slice_mode: true`.
 
-**Remediation.** An empty `train_volumes` yields a `None` train
-dataset rather than an error; point `train_volumes` at a
-single-volume placeholder when you really want a val-only run.
+In the non-lazy slice path, the base `setup`
+([`nanocosmos/datamodules/base.py`](../nanocosmos/datamodules/base.py))
+unconditionally constructs the train dataset from whatever
+`train_volumes` is — also never `None`.
+
+**Why.** SNEMI3D ships a sensible default volume set so the smallest
+recipe runs out of the box; MICRONS / Neurons have no meaningful
+default, so they fail loudly rather than guess.
+
+**Remediation.** Don't rely on an empty `train_volumes` to mean
+"val-only" — the datamodules never leave `train_dataset` as `None`.
+Point `train_volumes` at a single-volume placeholder if you want a
+minimal train split.
 
 ---
 
-## 10. `MICRONSDataset._load_volume` ignores `vol_spec["root"]`
+## 10. `MICRONSDataset._load_volume` per-volume `root` — RESOLVED
 
-**Symptom.** You set `vol_spec = {"vol": "...", "seg": "...", "root":
-"/scratch/alt"}` to override the root for one volume, and it's still
-loaded from the global `root_dir`.
+**Status.** Fixed — kept here for history.  `MICRONSDataset` now
+honours the per-volume `root` key exactly like SNEMI3D / Neurons; the
+old bug (below) no longer applies.
 
-**Where.** `nanocosmos/datasets/microns.py:_load_volume` (~line 101)
-hard-codes `self.root_dir`.
+**Former symptom.** You set `vol_spec = {"vol": "...", "seg": "...",
+"root": "/scratch/alt"}` to override the root for one volume, and it was
+still loaded from the global `root_dir`.
 
-**Why.** Oversight when `root` was added to SNEMI3D and Neurons; the
-MICRONS leaf wasn't updated.
+**Where.** `nanocosmos/datasets/microns.py:_load_volume` (~line 106)
+takes a `root_dir=None` argument and uses
+`search_dir = root_dir if root_dir is not None else self.root_dir`; the
+caller threads `vol_root = Path(vol_spec["root"]) if "root" in vol_spec
+else None` into every `_load_volume` call.  The class docstring
+documents `root: override root_dir for this volume`.
 
-**Remediation.** Set the data `root` globally for MICRONS, or use the
-SNEMI3D / Neurons leaves, which honour the per-volume `root` key.
+**Remediation.** Use the per-volume `root` key on MICRONS volumes just
+like on SNEMI3D / Neurons.
 
 ---
 
@@ -210,15 +242,21 @@ ImageLogger's predictions for non-visualisation purposes.
 and task heads do not have any `torch.compile` overhead -- and you
 can't figure out why "compile" gives only a 10% speedup.
 
-**Where.** `scripts/train.py:446-456`.  Only `module.model.dit` is
-wrapped in `torch.compile`; the rest of the wrapper isn't.
+**Where.** `scripts/train.py::_maybe_compile` (~lines 398-439).  Only
+`module.model.dit` is wrapped in `torch.compile` (the
+`module.model.dit = torch.compile(...)` line, ~435); the rest of the
+wrapper isn't.
 
 **Why.** `torch.compile + DDP` runs frozen subgraphs in
 `inference_mode`, producing tensors that can't be saved for backward.
-Compiling only the trainable DiT avoids that.
+Compiling only the trainable DiT avoids that.  Compile is also
+auto-skipped entirely when `model.gradient_checkpointing=true`, since
+dynamo cannot trace the `torch.utils.checkpoint` HOP inside the
+backbone.
 
-**Remediation.** **Intentional.**  See the comment in `train.py:434-445`
-for the full rationale.
+**Remediation.** **Intentional.**  See the docstring and comments in
+`_maybe_compile` (`train.py` ~401-403 for the DiT-only rationale,
+~419-428 for the gradient-checkpointing skip).
 
 ---
 
@@ -228,8 +266,10 @@ for the full rationale.
 with "tensor with version != 0 used in inference_mode".
 
 **Where.** Same code path as #13, but with
-`fullgraph=True`.  `default.yaml` says it's safe-to-leave-off; some
-recipes (`snemi3d.yaml:222`) had it on.
+`fullgraph=True`.  `default.yaml` says it's safe-to-leave-off, and
+`snemi3d.yaml:493` and `combine.yaml:54` both keep it `false`.  The
+recipe that actually turns it on is `cosmospredict3d.yaml:402`
+(`compile_fullgraph: true`, with `compile: true`).
 
 **Why.** Same DDP + inference_mode interaction; `fullgraph` magnifies
 it because graph breaks are no longer tolerated.
@@ -241,7 +281,9 @@ it because graph breaks are no longer tolerated.
 ## 16. `combine.yaml` drops AC4 from train
 
 **Symptom.** You expect "combine" to literally mean SNEMI3D-AC3 +
-SNEMI3D-AC4 + neurons + MICrONS, but training only sees AC3.
+SNEMI3D-AC4 + neurons + MICrONS, but training only sees the neurons
+cylinder + the 10 MICrONS crops — no SNEMI3D AC3 *or* AC4 in the train
+set at all.  AC4 is reserved for val/test.
 
 **Where.** `configs/combine.yaml::data.train_volumes`.
 

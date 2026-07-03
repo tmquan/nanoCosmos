@@ -9,6 +9,12 @@ Endpoints:
   /api/volumes/{id}/seg_chunk  – RGBA palette-coloured seg for 3-D textures
   /api/volumes/{id}/seg_id_chunk – uint8 seg IDs (mod 256) for selection
   /api/volumes/{id}/labels     – unique label list + palette
+
+Note: the shipped WebGL frontend drives the 3-D texture path (``/chunk``,
+``/seg_chunk``, ``/seg_id_chunk``, ``/meta``).  The server-side PNG-slice and
+label-query endpoints (``POST /api/volumes``, ``/slice``, ``/labels``,
+``get_label_at``) are a still-supported HTTP API not used by the current UI --
+kept intentionally, not dead code.
 """
 
 from __future__ import annotations

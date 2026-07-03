@@ -91,6 +91,13 @@ data:
   # scale.  Tune up if low-content crops still appear, down if the foreground
   # retry budget is exhausted (best-seen fallback warns in the log).  0 = off.
   ssl_min_std: 0.05
+  # Structure gate (lag-1 spatial autocorrelation on the per-volume [0,1]
+  # scale): reject NOISE-dominated ssl crops that the variance gate cannot
+  # catch (random grain has high std but ~0 autocorrelation). This is what
+  # rejects the confirmed pure-noise MitoEM2 volumes (jurkat_train02 /
+  # macro_train02, autocorr ~0) still listed below, matching nanocosmos-2B.
+  # Real ultrastructure sits at ~0.6-0.8; 0.5 separates cleanly. 0 = off.
+  ssl_min_autocorr: 0.5
   # Round-robin grouping/scheduling unit: each batch is drawn from one group.
   #   "resolution" -- one group per (task, native_resolution); within a group
   #                   volumes are picked voxel-count-weighted (big volumes win).
@@ -533,8 +540,9 @@ loss:
   recon_loss: l1
   weight_rec: 1.0
   weight_seg: 1.0
-  # Per-branch multipliers (independent of draw frequency).
-  weight_ssl: 10. # 1.0
+  # Per-branch multipliers (independent of draw frequency). The SSL recon
+  # branch is weighted 10x the SFT seg branch (matches the shipped checkpoint).
+  weight_ssl: 10.0
   weight_sft: 1.0
   seg:
     ignore_index: -100

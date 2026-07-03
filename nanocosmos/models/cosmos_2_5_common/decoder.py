@@ -114,6 +114,16 @@ class _DecoderAdapter3D(nn.Module):
       - Last up-block + output norm: trainable
       - Task head: trainable (randomly initialised)
       - Preserved ``original_conv_out``: frozen (pretrained weights only).
+
+    CHECKPOINT INVARIANT: which submodules exist here is conditional. With a
+    pretrained VAE (``pretrained=True``) this holds ``to_latent`` +
+    ``original_conv_out`` and ``decoder_body`` is the Wan decoder; the
+    standalone path (``pretrained=False``) drops ``to_latent`` and uses a
+    ``_ProgressiveUpsampler3D`` body instead. ``highres_skip=True`` additionally
+    adds ``skip_stem.*`` keys AND widens the head's first conv. The shipped
+    last.ckpt is the (pretrained=True, highres_skip=False) combination
+    (head_in = hidden_ch = 96); changing either flag on resume adds/removes
+    keys and breaks the strict load. See doc/CURRENT_STATE.md checkpoint rules.
     """
 
     def __init__(
