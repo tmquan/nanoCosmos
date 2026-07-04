@@ -416,7 +416,7 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
 
-  val_batch_size: 3
+  val_batch_size: 2
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
   # SNEMI3D AC4 (labeled holdout).
