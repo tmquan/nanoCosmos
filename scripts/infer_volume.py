@@ -178,7 +178,11 @@ def _save_preview(
         ax.imshow(arr, cmap="gray")
         ax.set_title(title)
         ax.axis("off")
-    seg_rgb = _label_to_rgb(_to_2d(seg[:1].long()))[0].permute(1, 2, 0).cpu().numpy()
+    # ``seg`` is [B, D, H, W] (no channel dim); _to_2d needs 5D [B, C, D, H, W]
+    # to know which axis to slice, so add + drop a singleton channel dim
+    # around the call (matches the pattern in joint3d_logger.py).
+    seg_2d = _to_2d(seg[:1].long().unsqueeze(1))[:, 0]  # [1, D, H, W] -> [1, H, W]
+    seg_rgb = _label_to_rgb(seg_2d)[0].permute(1, 2, 0).cpu().numpy()
     axes[3].imshow(seg_rgb)
     axes[3].set_title("pred/label (Mutex Watershed)")
     axes[3].axis("off")
