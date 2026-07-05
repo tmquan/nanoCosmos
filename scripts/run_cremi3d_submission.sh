@@ -13,10 +13,14 @@
 # DISK COST: CREMI's padded fine grid is ~2000x3072x3072 -- the Phase A
 # accumulator at the defaults below is on the order of 2+ TB of scratch disk
 # PER SAMPLE (independent of STRIDE_FRAC; only the I/O volume against it
-# scales with STRIDE_FRAC/window count). Run with --dry-run first (copy the
-# python invocation below and add --dry-run) to see the exact numbers for
-# your hardware, and raise STRIDE_FRAC / shrink WINDOW_SIZE if that's
-# impractical for your scratch space.
+# scales with STRIDE_FRAC/window count). The --save-fine-grid diagnostics
+# (pred_raw/pred_sem/pred_label_fine, SAVE_FINE_GRID below) ADD roughly
+# another ~300 GB per sample at that resolution (three single-channel
+# volumes over the real, unpadded fine grid) -- set SAVE_FINE_GRID=false to
+# skip them and only get the native-resolution submission artifact. Run
+# with --dry-run first (copy the python invocation below and add --dry-run)
+# to see the exact numbers for your hardware, and raise STRIDE_FRAC / shrink
+# WINDOW_SIZE if the accumulator itself is impractical for your scratch space.
 #
 # Edit CKPT below to point at whichever checkpoint you want to submit with
 # (the freshest available -- see doc/CURRENT_STATE.md / the training run's
@@ -63,6 +67,12 @@ FINE_CORE_SIZE="${FINE_CORE_SIZE:-600 384 384}"
 FINE_CONTEXT="${FINE_CONTEXT:-100 64 64}"
 MWS_BACKEND="${MWS_BACKEND:-cpu}"
 MWS_WORKERS="${MWS_WORKERS:-6}"
+
+# Fine-grid (network-native resolution) diagnostics on top of the always-
+# produced native-resolution segmentation: pred_raw (reconstruction),
+# pred_sem (semantic probability), pred_label_fine (segmentation before the
+# native downsample). Set to "false" to skip them (see DISK COST above).
+SAVE_FINE_GRID="${SAVE_FINE_GRID:-true}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [ ! -f "${CKPT}" ]; then
@@ -87,6 +97,10 @@ for s in A B C; do
   if [ -n "${GPU_IDS}" ]; then
     GPU_ARGS=(--gpu-ids ${GPU_IDS})
   fi
+  FINE_GRID_ARG="--save-fine-grid"
+  if [ "${SAVE_FINE_GRID}" = "false" ]; then
+    FINE_GRID_ARG="--no-save-fine-grid"
+  fi
 
   python scripts/infer_submission.py \
     --config-name "${CONFIG_NAME}" \
@@ -102,6 +116,7 @@ for s in A B C; do
     --fine-core-size ${FINE_CORE_SIZE} \
     --fine-context ${FINE_CONTEXT} \
     --mws-workers ${MWS_WORKERS} \
+    "${FINE_GRID_ARG}" \
     --overrides "training.mutex_watershed.backend=${MWS_BACKEND}" \
     --out-dir "${out_dir}"
   echo
