@@ -35,15 +35,32 @@ NATIVE_RES="30 6 6"   # SNEMI3D: z y x nm
 VOL="AC3_inputs"
 
 # Phase A: full network field of view (400x256x256 @ 4nm), 1/4-stride
-# (75%) overlap between neighbouring windows.
+# (75%) overlap between neighbouring windows, forwarded through the network
+# BLEND_BATCH_SIZE windows at a time (keeps the GPU busy instead of one
+# window at a time) with BLEND_IO_WORKERS threads reading/resampling
+# windows in the background (overlaps disk I/O with GPU compute).
+#
+# Set GPU_IDS to scale across multiple GPUs (e.g. GPU_IDS="0 1 2 3"); leave
+# unset for the original single --device behaviour. WORKERS_PER_GPU > 1
+# runs that many concurrent batches per GPU, EACH WITH ITS OWN MODEL
+# REPLICA (required -- see infer_submission.py docstring for why sharing
+# one instance across threads corrupts results), so it costs that many x
+# the model's GPU memory per GPU it applies to.
 WINDOW_SIZE="${WINDOW_SIZE:-400 256 256}"
 STRIDE_FRAC="${STRIDE_FRAC:-0.25}"
+BLEND_BATCH_SIZE="${BLEND_BATCH_SIZE:-4}"
+BLEND_IO_WORKERS="${BLEND_IO_WORKERS:-4}"
+GPU_IDS="${GPU_IDS:-}"
+WORKERS_PER_GPU="${WORKERS_PER_GPU:-1}"
 
 # Phase B (Mutex Watershed on the blended field -- no network inference, so
-# this can be a coarse chunking purely for MWS memory).
+# this can be a coarse chunking purely for MWS memory). MWS_WORKERS chunks
+# run concurrently; the CPU backend (mws_np) is numba nogil=True, so this
+# gives real multi-core speedup there (GPU backend mostly overlaps I/O).
 FINE_CORE_SIZE="${FINE_CORE_SIZE:-600 384 384}"
 FINE_CONTEXT="${FINE_CONTEXT:-100 64 64}"
 MWS_BACKEND="${MWS_BACKEND:-cpu}"
+MWS_WORKERS="${MWS_WORKERS:-4}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [ ! -f "${CKPT}" ]; then
@@ -58,6 +75,11 @@ echo "Volume:     ${VOL} (${DATA_ROOT})"
 echo "Output:     ${OUT_DIR}"
 echo
 
+GPU_ARGS=()
+if [ -n "${GPU_IDS}" ]; then
+  GPU_ARGS=(--gpu-ids ${GPU_IDS})
+fi
+
 python scripts/infer_submission.py \
   --config-name "${CONFIG_NAME}" \
   --ckpt "${CKPT}" \
@@ -65,8 +87,13 @@ python scripts/infer_submission.py \
   --native-resolution ${NATIVE_RES} \
   --window-size ${WINDOW_SIZE} \
   --stride-frac ${STRIDE_FRAC} \
+  --blend-batch-size ${BLEND_BATCH_SIZE} \
+  --blend-io-workers ${BLEND_IO_WORKERS} \
+  --workers-per-gpu ${WORKERS_PER_GPU} \
+  "${GPU_ARGS[@]}" \
   --fine-core-size ${FINE_CORE_SIZE} \
   --fine-context ${FINE_CONTEXT} \
+  --mws-workers ${MWS_WORKERS} \
   --submission-format snemi3d \
   --overrides "training.mutex_watershed.backend=${MWS_BACKEND}" \
   --out-dir "${OUT_DIR}"

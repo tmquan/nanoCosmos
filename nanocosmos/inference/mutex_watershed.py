@@ -29,7 +29,11 @@ backends are provided:
 * CPU exact (``mws_np``) -- the sequential Kruskal MWS above, JIT-compiled
   with numba over flat numpy arrays.  The mutex constraints are stored as
   per-root singly-linked lists in flat int64 arrays (O(1) splice on union),
-  so the whole pass stays in nopython mode.
+  so the whole pass stays in nopython mode. The two Python-facing entry
+  points (``_mws_core`` / ``_resolve_all``) are ``nogil=True``, so calling
+  ``mutex_watershed()`` from multiple threads (e.g. one thread per chunk in
+  a blockwise inference pipeline) actually runs on separate CPU cores in
+  parallel instead of serialising on the GIL.
 * GPU approximate (``mws_th`` default on CUDA; optional ``mws_cp`` with
   cupy) -- a bucketed Boruvka-style relaxation; faster but an approximation
   of the exact sequential result.
@@ -95,7 +99,7 @@ def _find(parent: np.ndarray, x: int) -> int:
     return root
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _mws_core(
     edge_u: np.ndarray,
     edge_v: np.ndarray,
@@ -381,7 +385,7 @@ def mutex_watershed(
     return out
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _resolve_all(parent: np.ndarray) -> np.ndarray:
     n = parent.shape[0]
     roots = np.empty(n, dtype=np.int64)

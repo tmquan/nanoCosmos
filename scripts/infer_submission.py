@@ -17,16 +17,43 @@ e.g. 400 x 256 x 256 @ 4 nm), advancing by a stride of
 ``--stride-frac * window-size`` (default 0.25, i.e. 75% overlap between
 neighbouring windows -- this is the same idea as
 ``nanocosmos/inference/sliding_window.py``'s per-patch Gaussian blending,
-just applied at the whole-volume scale). For every window: run the network
-once (a single forward pass, since the window equals the native patch), take
-the raw (pre-sigmoid) affinity + semantic channels (drop the raw-recon
-channel -- not needed for segmentation), multiply by a 3-D Gaussian weight
-(peak at the window center, tapering to the edges), and accumulate both the
-weighted logits and the weight itself into an on-disk HDF5 accumulator
-covering the whole (padded) fine grid. If the real volume doesn't divide
-evenly into an integer number of window strides, the fine grid is rounded UP
-to the next multiple and the extra region is zero-padded (never a smaller/
-ragged window) -- see ``_read_native_region``.
+just applied at the whole-volume scale). Windows are processed in batches of
+``--blend-batch-size`` (a single forward pass per batch, since each window
+equals the native patch) to keep the GPU busy instead of one window at a
+time; reading + resampling each window (I/O-bound) is parallelised across
+``--blend-io-workers`` background threads feeding a shared work queue. For
+every window: take the raw (pre-sigmoid) affinity + semantic channels (drop
+the raw-recon channel -- not needed for segmentation), multiply by a 3-D
+Gaussian weight (peak at the window center, tapering to the edges), and
+accumulate both the weighted logits and the weight itself into an on-disk
+HDF5 accumulator covering the whole (padded) fine grid. If the real volume
+doesn't divide evenly into an integer number of window strides, the fine
+grid is rounded UP to the next multiple and the extra region is zero-padded
+(never a smaller/ragged window) -- see ``_read_native_region``.
+
+Phase A scales two ways, both via that shared queue (I/O threads produce
+ready batches; consumer threads pull and forward them):
+  * ``--workers-per-gpu N`` (N > 1) runs multiple batches *concurrently on
+    one GPU*: PyTorch gives each Python thread its own default CUDA stream
+    per device, so independent forward passes from separate threads on the
+    same GPU genuinely overlap on-device instead of serialising -- useful
+    when a single batch doesn't saturate the GPU. Each worker gets its own
+    full model replica (see below), so GPU memory use scales with N too.
+  * ``--gpu-ids 0 1 2 3`` scales *across GPUs*: one or more model replicas
+    per id (``workers-per-gpu`` each), all accumulating into the SAME
+    on-disk file (writes are lock-protected, so this is safe regardless of
+    which worker finishes a given window first). Total Phase A concurrency
+    is ``len(gpu_ids) * workers_per_gpu`` forward passes in flight.
+Omitting ``--gpu-ids`` keeps the original single-``--device`` behaviour.
+
+IMPORTANT: every worker gets its OWN model replica, never a shared
+instance -- the cosmos_2_5_common DiT backbone keeps its intermediate-
+feature hook buffer as INSTANCE state during ``forward()``
+(``self._hook_buffer``), so two threads calling ``forward()`` concurrently
+on the same instance corrupt each other's buffers (manifests as bogus
+tensor-shape-mismatch crashes). This means ``--workers-per-gpu N`` costs
+N x the model's GPU memory per GPU it's applied to, on top of N x the
+activation memory from running N batches at once -- budget accordingly.
 
 Once every window has been accumulated, the blended field at each voxel is
 ``sum(weight_i * logit_i) / sum(weight_i)`` -- exactly the weighted average
@@ -45,6 +72,16 @@ crop away the context margin (keep only the CORE), relabel with a running id
 offset so ids never collide between chunks, resample down to **native**
 resolution (nearest-neighbour) and write into the pre-allocated full-native
 output ``.h5`` (chunked on disk -- never held fully in memory).
+
+Chunks are processed concurrently on a ``--mws-workers``-thread pool. The
+CPU MWS backend (``mws_np``) is numba-JIT'd with ``nogil=True`` (see
+``nanocosmos/inference/mutex_watershed.py``), so concurrent chunks actually
+run on separate CPU cores instead of serialising on the GIL -- the id-offset
+bookkeeping and the reads/writes against the shared blend file / output
+dataset are lock-protected, so this is safe regardless of completion order
+(ids stay globally unique, just not assigned in chunk order). The GPU MWS
+backend still executes on one device/stream, so extra workers there mostly
+overlap I/O with compute rather than parallelising MWS itself.
 
 Once every chunk is written, save the challenge submission file in the right
 format for the target challenge (``--submission-format``, default ``auto``):
@@ -118,8 +155,9 @@ import argparse
 import itertools
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import h5py
 import numpy as np
@@ -261,71 +299,171 @@ def _clip_window(
 # Phase A -- Gaussian-weighted blending of raw sem+aff logits
 # ----------------------------------------------------------------------
 
+def _prepare_window(
+    vol_path: Path, block: Block, native_resolution: Sequence[float], fine_nm: float,
+    vmin: float, vmax: float, window: Tuple[int, int, int],
+) -> Optional[torch.Tensor]:
+    """Read + normalise + resample one window's native region onto the fine
+    grid (on CPU, so this can run in a background thread while the GPU is
+    busy with a previous batch). Returns a ``[1, D, H, W]`` CPU tensor ready
+    to be stacked into a batch, or ``None`` if the region has no content
+    (skip -- saves a wasted forward pass)."""
+    native_lo = _fine_to_native(block.padded_lo, native_resolution, fine_nm)
+    native_hi = _fine_to_native(block.padded_hi, native_resolution, fine_nm)
+    native_size = tuple(max(1, native_hi[d] - native_lo[d]) for d in range(3))
+    region = _read_native_region(vol_path, native_lo, native_size)
+    if not region.any():
+        return None
+    image01 = np.clip((region - vmin) / max(vmax - vmin, 1e-6), 0.0, 1.0)
+    t = torch.from_numpy(image01)[None, None]  # [1, 1, d, h, w]
+    return F.interpolate(t, size=window, mode="trilinear", align_corners=False)[0]  # [1, D, H, W]
+
+
 def _accumulate_blend(
-    module, vol_path: Path, native_resolution: Sequence[float], fine_nm: float,
+    replicas: "List[Tuple[torch.device, Any]]",
+    vol_path: Path, native_resolution: Sequence[float], fine_nm: float,
     vmin: float, vmax: float, window: Sequence[int], blocks: Sequence[Block],
-    padded_fine_shape: Sequence[int], device: torch.device, acc_path: Path,
+    padded_fine_shape: Sequence[int], acc_path: Path,
+    batch_size: int = 4, io_workers: int = 4,
 ) -> int:
-    """Run the network once per (heavily overlapping) window in ``blocks``,
-    weight its raw sem+aff logits by a 3-D Gaussian centered on the window,
-    and accumulate both the weighted logits and the weight itself into an
-    on-disk HDF5 file at ``acc_path`` (datasets ``"acc"`` and ``"weight"``,
-    covering ``padded_fine_shape``). Returns the number of field channels
+    """Run the network on batches of (heavily overlapping) windows from
+    ``blocks`` -- ``batch_size`` windows per forward pass, keeping the
+    GPU(s) busy instead of one window at a time -- weight each window's raw
+    sem+aff logits by a 3-D Gaussian centered on it, and accumulate both the
+    weighted logits and the weight itself into an on-disk HDF5 file at
+    ``acc_path`` (datasets ``"acc"`` and ``"weight"``, covering
+    ``padded_fine_shape``). Returns the number of field channels
     accumulated (``N_AFF + 1``, i.e. affinities + semantic; the raw-recon
-    channel is dropped)."""
+    channel is dropped).
+
+    Scales via a shared producer/consumer pipeline: a dedicated thread pool
+    reads + resamples windows (I/O-bound) and pushes ready batches onto a
+    bounded queue; one consumer thread per ``(device, module)`` pair in
+    ``replicas`` pulls batches and runs the forward pass on its own model
+    instance.
+
+    - Multiple entries with the *same* device run concurrent batches on
+      *one GPU* (PyTorch gives each thread its own default CUDA stream per
+      device, so independent forward passes from separate threads on one
+      GPU genuinely overlap on-device -- useful when a single batch doesn't
+      saturate it).
+    - Entries with *different* devices scale *across GPUs*.
+
+    IMPORTANT: every worker needs its OWN model instance -- the
+    cosmos_2_5_common DiT wrapper keeps its intermediate-feature hook
+    buffer as INSTANCE state during ``forward()`` (``self._hook_buffer``,
+    see ``nanocosmos/models/cosmos_2_5_common/wrapper_base.py``), so two
+    threads calling ``forward()`` concurrently on the *same* instance
+    corrupt each other's buffers (silent shape-mismatch crashes). The
+    caller is responsible for building ``len(replicas)`` independent
+    replicas; never pass the same module twice.
+
+    All consumers share one accumulator file and a running progress
+    counter, both lock-protected -- safe regardless of which worker/device
+    finishes a given window first."""
+    import queue
+    import threading
+
     from nanocosmos.inference.sliding_window import create_gaussian_weight
 
     window = tuple(int(w) for w in window)
-    gw = create_gaussian_weight(window, device=device)  # [D, H, W], peak 1.0
-    gw_np = gw.detach().cpu().numpy().astype(np.float32)
+    primary_device, primary_module = replicas[0]
+    gw_by_id = {id(mod): create_gaussian_weight(window, device=dev) for dev, mod in replicas}
+    gw_np = gw_by_id[id(primary_module)].detach().cpu().numpy().astype(np.float32)
 
     with torch.no_grad():
-        dummy = torch.zeros((1, 1) + window, device=device)
-        n_fields = int(module(dummy).shape[1]) - 1  # drop the trailing raw-recon channel
+        dummy = torch.zeros((1, 1) + window, device=primary_device)
+        n_fields = int(primary_module(dummy).shape[1]) - 1  # drop the raw-recon channel
 
     rdcc = dict(rdcc_nbytes=2 * 1024 ** 3, rdcc_nslots=1_000_003)
+    acc_file = h5py.File(str(acc_path), "w", **rdcc)
+    acc_ds = acc_file.create_dataset(
+        "acc", shape=(n_fields,) + tuple(padded_fine_shape), dtype=np.float32,
+        chunks=(n_fields,) + tuple(min(s, 128) for s in padded_fine_shape),
+    )
+    w_ds = acc_file.create_dataset(
+        "weight", shape=tuple(padded_fine_shape), dtype=np.float32,
+        chunks=tuple(min(s, 128) for s in padded_fine_shape),
+    )
+
     t0 = time.time()
-    with h5py.File(str(acc_path), "w", **rdcc) as f:
-        acc_ds = f.create_dataset(
-            "acc", shape=(n_fields,) + tuple(padded_fine_shape), dtype=np.float32,
-            chunks=(n_fields,) + tuple(min(s, 128) for s in padded_fine_shape),
-        )
-        w_ds = f.create_dataset(
-            "weight", shape=tuple(padded_fine_shape), dtype=np.float32,
-            chunks=tuple(min(s, 128) for s in padded_fine_shape),
-        )
-        for bi, block in enumerate(blocks):
-            elapsed = time.time() - t0
-            clipped_lo, clipped_hi, src_lo, src_hi = _clip_window(block.padded_lo, block.padded_hi, padded_fine_shape)
-            if any(clipped_hi[d] <= clipped_lo[d] for d in range(3)):
-                print(f"  [blend] window {bi + 1}/{len(blocks)}  {block}  (outside padded grid, skipped)  [{elapsed:.0f}s]")
-                continue
+    n_done = [0]
+    progress_lock = threading.Lock()
+    write_lock = threading.Lock()
 
-            native_lo = _fine_to_native(block.padded_lo, native_resolution, fine_nm)
-            native_hi = _fine_to_native(block.padded_hi, native_resolution, fine_nm)
-            native_size = tuple(max(1, native_hi[d] - native_lo[d]) for d in range(3))
-            region = _read_native_region(vol_path, native_lo, native_size)
-            if not region.any():
-                print(f"  [blend] window {bi + 1}/{len(blocks)}  {block}  (empty, skipped)  [{elapsed:.0f}s]")
-                continue
+    batches = [blocks[i:i + batch_size] for i in range(0, len(blocks), batch_size)]
+    n_consumers = len(replicas)
+    work_q: "queue.Queue" = queue.Queue(maxsize=max(2, n_consumers * 2))
 
-            image01 = np.clip((region - vmin) / max(vmax - vmin, 1e-6), 0.0, 1.0)
-            t = torch.from_numpy(image01)[None, None].to(device)
-            fine_image = F.interpolate(t, size=window, mode="trilinear", align_corners=False)
-            with torch.no_grad():
-                head = module(fine_image)[0, :n_fields]  # [n_fields, D, H, W]
-            weighted = (head * gw).cpu().numpy().astype(np.float32)
+    def _producer() -> None:
+        with ThreadPoolExecutor(max_workers=io_workers) as io_pool:
+            for batch_blocks in batches:
+                prepared = list(io_pool.map(
+                    lambda b: _prepare_window(vol_path, b, native_resolution, fine_nm, vmin, vmax, window),
+                    batch_blocks,
+                ))
+                work_q.put((batch_blocks, prepared))
+        for _ in range(n_consumers):
+            work_q.put(None)  # one sentinel per consumer
 
-            dst_sl = (slice(None),) + tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
-            src_sl = (slice(None),) + tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
-            acc_ds[dst_sl] += weighted[src_sl]
-            w_dst_sl = tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
-            w_src_sl = tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
-            w_ds[w_dst_sl] += gw_np[w_src_sl]
+    def _consumer(dev: torch.device, mod) -> None:
+        gw = gw_by_id[id(mod)]
+        while True:
+            item = work_q.get()
+            if item is None:
+                work_q.task_done()
+                return
+            batch_blocks, prepared = item
+            valid = [(b, img) for b, img in zip(batch_blocks, prepared) if img is not None]
+            for b, img in zip(batch_blocks, prepared):
+                if img is None:
+                    with progress_lock:
+                        n_done[0] += 1
+                        bi, elapsed = n_done[0], time.time() - t0
+                    print(f"  [blend] window {bi}/{len(blocks)}  {b}  (empty, skipped)  [{elapsed:.0f}s]")
+            if valid:
+                batch_t = torch.stack([img for _, img in valid], dim=0).to(dev, non_blocking=True)
+                with torch.no_grad():
+                    heads = mod(batch_t)[:, :n_fields]  # [B, n_fields, D, H, W]
+                weighted = (heads * gw).cpu().numpy().astype(np.float32)  # gw broadcasts over B and channel dims
 
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-            print(f"  [blend] window {bi + 1}/{len(blocks)}  {block}  [{elapsed:.0f}s]")
+                for (block, _), w_arr in zip(valid, weighted):
+                    with progress_lock:
+                        n_done[0] += 1
+                        bi, elapsed = n_done[0], time.time() - t0
+                    clipped_lo, clipped_hi, src_lo, src_hi = _clip_window(block.padded_lo, block.padded_hi, padded_fine_shape)
+                    if any(clipped_hi[d] <= clipped_lo[d] for d in range(3)):
+                        print(f"  [blend] window {bi}/{len(blocks)}  {block}  (outside padded grid, skipped)  [{elapsed:.0f}s]")
+                        continue
+                    dst_sl = (slice(None),) + tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
+                    src_sl = (slice(None),) + tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
+                    w_dst_sl = tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
+                    w_src_sl = tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
+                    with write_lock:
+                        acc_ds[dst_sl] += w_arr[src_sl]
+                        w_ds[w_dst_sl] += gw_np[w_src_sl]
+                    print(f"  [blend] window {bi}/{len(blocks)}  {block}  (batch of {len(valid)})  [{dev}]  [{elapsed:.0f}s]")
+
+                if dev.type == "cuda":
+                    torch.cuda.empty_cache()
+            work_q.task_done()
+
+    try:
+        if not batches:
+            return n_fields
+        producer = threading.Thread(target=_producer, daemon=True)
+        producer.start()
+        consumers = [
+            threading.Thread(target=_consumer, args=(dev, mod), daemon=True)
+            for dev, mod in replicas
+        ]
+        for c in consumers:
+            c.start()
+        producer.join()
+        for c in consumers:
+            c.join()
+    finally:
+        acc_file.close()
     return n_fields
 
 
@@ -337,79 +475,116 @@ def _mws_from_blend(
     module, blend_path: Path, blocks: Sequence[Block], padded_fine_shape: Sequence[int],
     native_resolution: Sequence[float], fine_nm: float, native_shape: Sequence[int],
     device: torch.device, sem_threshold: float, full_ds, next_id_start: int,
+    num_workers: int = 1,
 ) -> int:
     """Read the ALREADY Gaussian-blended (but not yet normalised) sem+aff
     logits for each MWS chunk in ``blocks``, normalise by the accumulated
     weight, sigmoid, run Mutex Watershed once, crop to the chunk's core,
     relabel, resample to native resolution and write into ``full_ds``.
-    Returns the next free instance id."""
-    next_id = next_id_start
+
+    When ``num_workers > 1``, chunks are processed concurrently on a thread
+    pool: MWS's CPU backend (``mws_np``) is JIT-compiled with numba's
+    ``nogil=True`` (see ``nanocosmos/inference/mutex_watershed.py``), so
+    separate chunks' agglomeration genuinely runs on separate CPU cores
+    instead of serialising on the GIL. (The GPU backends still execute on
+    one device/stream, so extra workers there mainly overlap I/O with
+    compute rather than parallelising MWS itself.) Reads/writes against the
+    shared blend file and ``full_ds``, and the running id offset, are
+    lock-protected so concurrent chunks can't race; completion order (and
+    hence which chunk gets which id range) is nondeterministic but ids are
+    still guaranteed unique. Returns the next free instance id."""
+    import threading
+
     rdcc = dict(rdcc_nbytes=2 * 1024 ** 3, rdcc_nslots=1_000_003)
     t0 = time.time()
-    with h5py.File(str(blend_path), "r", **rdcc) as f:
-        acc_ds = f["acc"]
-        w_ds = f["weight"]
-        n_fields = acc_ds.shape[0]
-        for bi, block in enumerate(blocks):
-            elapsed = time.time() - t0
-            window = tuple(block.padded_hi[d] - block.padded_lo[d] for d in range(3))
-            clipped_lo, clipped_hi, src_lo, src_hi = _clip_window(block.padded_lo, block.padded_hi, padded_fine_shape)
-            if any(clipped_hi[d] <= clipped_lo[d] for d in range(3)):
-                print(f"  [mws] chunk {bi + 1}/{len(blocks)}  {block}  (outside padded grid, skipped)  [{elapsed:.0f}s]")
-                continue
+    io_lock = threading.Lock()
+    id_lock = threading.Lock()
+    write_lock = threading.Lock()
+    next_id = [next_id_start]
+    n_done = [0]
 
-            buf = np.zeros((n_fields,) + window, dtype=np.float32)
-            wbuf = np.zeros(window, dtype=np.float32)
-            dst_sl = (slice(None),) + tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
-            src_sl = (slice(None),) + tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
+    blend_file = h5py.File(str(blend_path), "r", **rdcc)
+    acc_ds = blend_file["acc"]
+    w_ds = blend_file["weight"]
+    n_fields = acc_ds.shape[0]
+
+    def _process(block: Block) -> None:
+        window = tuple(block.padded_hi[d] - block.padded_lo[d] for d in range(3))
+        clipped_lo, clipped_hi, src_lo, src_hi = _clip_window(block.padded_lo, block.padded_hi, padded_fine_shape)
+        with io_lock:
+            n_done[0] += 1
+            bi = n_done[0]
+        elapsed = time.time() - t0
+        if any(clipped_hi[d] <= clipped_lo[d] for d in range(3)):
+            print(f"  [mws] chunk {bi}/{len(blocks)}  {block}  (outside padded grid, skipped)  [{elapsed:.0f}s]")
+            return
+
+        buf = np.zeros((n_fields,) + window, dtype=np.float32)
+        wbuf = np.zeros(window, dtype=np.float32)
+        dst_sl = (slice(None),) + tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
+        src_sl = (slice(None),) + tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
+        w_dst_sl = tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
+        w_src_sl = tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
+        with io_lock:
             buf[dst_sl] = acc_ds[src_sl]
-            w_dst_sl = tuple(slice(src_lo[d], src_hi[d]) for d in range(3))
-            w_src_sl = tuple(slice(clipped_lo[d], clipped_hi[d]) for d in range(3))
             wbuf[w_dst_sl] = w_ds[w_src_sl]
 
-            if not wbuf.any():
-                print(f"  [mws] chunk {bi + 1}/{len(blocks)}  {block}  (empty, skipped)  [{elapsed:.0f}s]")
-                continue
+        if not wbuf.any():
+            print(f"  [mws] chunk {bi}/{len(blocks)}  {block}  (empty, skipped)  [{elapsed:.0f}s]")
+            return
 
-            blended = buf / (wbuf[None] + 1e-8)  # weighted-average of participating windows
-            t = torch.from_numpy(blended).to(device)
-            aff = t[:-1].sigmoid().float()[None]  # [1, N_AFF, D, H, W]
-            sem = t[-1:].sigmoid().float()[None]  # [1, 1, D, H, W]
-            sem_fg = (sem[:, 0] > sem_threshold) if getattr(module.agglomerator, "gate_with_sem", True) else None
-            seg_padded = module.agglomerator(aff, sem_fg)[0]
+        blended = buf / (wbuf[None] + 1e-8)  # weighted-average of participating windows
+        t = torch.from_numpy(blended).to(device)
+        aff = t[:-1].sigmoid().float()[None]  # [1, N_AFF, D, H, W]
+        sem = t[-1:].sigmoid().float()[None]  # [1, 1, D, H, W]
+        sem_fg = (sem[:, 0] > sem_threshold) if getattr(module.agglomerator, "gate_with_sem", True) else None
+        seg_padded = module.agglomerator(aff, sem_fg)[0]
 
-            off = tuple(block.core_lo[d] - block.padded_lo[d] for d in range(3))
-            sz = tuple(block.core_hi[d] - block.core_lo[d] for d in range(3))
-            seg_core_fine = seg_padded[off[0]:off[0] + sz[0], off[1]:off[1] + sz[1], off[2]:off[2] + sz[2]]
-            seg_core_fine = seg_core_fine.cpu().numpy().astype(np.int64)
-            if not seg_core_fine.any():
-                print(f"  [mws] chunk {bi + 1}/{len(blocks)}  {block}  (no instances, skipped)  [{elapsed:.0f}s]")
-                continue
-            n_local = int(seg_core_fine.max())
-            seg_core_fine = np.where(seg_core_fine > 0, seg_core_fine + next_id - 1, 0)
-            next_id += n_local
+        off = tuple(block.core_lo[d] - block.padded_lo[d] for d in range(3))
+        sz = tuple(block.core_hi[d] - block.core_lo[d] for d in range(3))
+        seg_core_fine = seg_padded[off[0]:off[0] + sz[0], off[1]:off[1] + sz[1], off[2]:off[2] + sz[2]]
+        seg_core_fine = seg_core_fine.cpu().numpy().astype(np.int64)
+        if not seg_core_fine.any():
+            print(f"  [mws] chunk {bi}/{len(blocks)}  {block}  (no instances, skipped)  [{elapsed:.0f}s]")
+            return
+        n_local = int(seg_core_fine.max())
+        with id_lock:
+            offset = next_id[0]
+            next_id[0] += n_local
+        seg_core_fine = np.where(seg_core_fine > 0, seg_core_fine + offset - 1, 0)
 
-            native_lo = _fine_to_native(block.core_lo, native_resolution, fine_nm)
-            native_hi = _fine_to_native(block.core_hi, native_resolution, fine_nm)
-            native_size_full = tuple(max(1, native_hi[d] - native_lo[d]) for d in range(3))
-            seg_core_native_full = F.interpolate(
-                torch.from_numpy(seg_core_fine)[None, None].float(), size=native_size_full, mode="nearest",
-            )[0, 0].numpy().astype(np.int64)
+        native_lo = _fine_to_native(block.core_lo, native_resolution, fine_nm)
+        native_hi = _fine_to_native(block.core_hi, native_resolution, fine_nm)
+        native_size_full = tuple(max(1, native_hi[d] - native_lo[d]) for d in range(3))
+        seg_core_native_full = F.interpolate(
+            torch.from_numpy(seg_core_fine)[None, None].float(), size=native_size_full, mode="nearest",
+        )[0, 0].numpy().astype(np.int64)
 
-            # Clip to the REAL (unpadded) native volume -- boundary chunks may
-            # extend past it since the fine grid was rounded up for tiling.
-            clip_lo = tuple(max(0, min(native_lo[d], native_shape[d])) for d in range(3))
-            clip_hi = tuple(max(0, min(native_hi[d], native_shape[d])) for d in range(3))
-            if any(clip_hi[d] <= clip_lo[d] for d in range(3)):
-                print(f"  [mws] chunk {bi + 1}/{len(blocks)}  {block}  (fully outside real volume, skipped)  [{elapsed:.0f}s]")
-                continue
-            rel_lo = tuple(clip_lo[d] - native_lo[d] for d in range(3))
-            rel_hi = tuple(clip_hi[d] - native_lo[d] for d in range(3))
-            seg_core_native = seg_core_native_full[rel_lo[0]:rel_hi[0], rel_lo[1]:rel_hi[1], rel_lo[2]:rel_hi[2]]
-            sl = tuple(slice(clip_lo[d], clip_hi[d]) for d in range(3))
+        # Clip to the REAL (unpadded) native volume -- boundary chunks may
+        # extend past it since the fine grid was rounded up for tiling.
+        clip_lo = tuple(max(0, min(native_lo[d], native_shape[d])) for d in range(3))
+        clip_hi = tuple(max(0, min(native_hi[d], native_shape[d])) for d in range(3))
+        if any(clip_hi[d] <= clip_lo[d] for d in range(3)):
+            print(f"  [mws] chunk {bi}/{len(blocks)}  {block}  (fully outside real volume, skipped)  [{elapsed:.0f}s]")
+            return
+        rel_lo = tuple(clip_lo[d] - native_lo[d] for d in range(3))
+        rel_hi = tuple(clip_hi[d] - native_lo[d] for d in range(3))
+        seg_core_native = seg_core_native_full[rel_lo[0]:rel_hi[0], rel_lo[1]:rel_hi[1], rel_lo[2]:rel_hi[2]]
+        sl = tuple(slice(clip_lo[d], clip_hi[d]) for d in range(3))
+        with write_lock:
             full_ds[sl] = seg_core_native
-            print(f"  [mws] chunk {bi + 1}/{len(blocks)}  {block}  {n_local} local ids  [{elapsed:.0f}s]")
-    return next_id
+        print(f"  [mws] chunk {bi}/{len(blocks)}  {block}  {n_local} local ids  [{elapsed:.0f}s]")
+
+    try:
+        if num_workers <= 1:
+            for block in blocks:
+                _process(block)
+        else:
+            with ThreadPoolExecutor(max_workers=num_workers) as pool:
+                list(pool.map(_process, blocks))
+    finally:
+        blend_file.close()
+    return next_id[0]
 
 
 # ----------------------------------------------------------------------
@@ -431,6 +606,11 @@ def infer_submission(
     window_size: Optional[Sequence[int]] = None,
     stride_frac: float = 0.25,
     keep_blend_cache: bool = False,
+    blend_batch_size: int = 4,
+    blend_io_workers: int = 4,
+    mws_workers: int = 4,
+    gpu_ids: Optional[Sequence[int]] = None,
+    workers_per_gpu: int = 1,
 ) -> Optional[Path]:
     """Run two-phase blockwise inference over the full volume and write a
     challenge submission file (see module docstring for Phase A/B details).
@@ -449,6 +629,28 @@ def infer_submission(
         keep_blend_cache: Keep the (potentially very large -- see module
             docstring) Phase A accumulator file instead of deleting it once
             Phase B finishes.
+        blend_batch_size: Number of Phase A windows forwarded through the
+            network in a single batch (keeps the GPU busy instead of
+            running one window at a time). Increase while GPU memory
+            allows; each window is already the model's full field of view,
+            so activation memory scales roughly linearly with this.
+        blend_io_workers: Number of background threads used to read +
+            resample windows (I/O-bound) concurrently, and to prefetch the
+            next batch while the current one runs on the GPU.
+        mws_workers: Number of MWS chunks processed concurrently in Phase B
+            (thread pool). Real multi-core speedup requires numba (the CPU
+            MWS backend releases the GIL); with the GPU backend, extra
+            workers mainly overlap I/O with compute since MWS itself still
+            runs on one device.
+        gpu_ids: Phase A only -- CUDA device indices to scale across, e.g.
+            ``[0, 1, 2, 3]``. ``None`` (default) uses the single ``device``
+            below, unchanged.
+        workers_per_gpu: Phase A only -- concurrent worker threads per GPU,
+            each with its OWN model replica (each thread gets its own
+            default CUDA stream, so >1 runs multiple batches at once on the
+            same GPU -- helpful when one batch doesn't saturate it, at the
+            cost of N x that GPU's model memory). Total Phase A concurrency
+            (and replica count) is ``len(gpu_ids or [1]) * workers_per_gpu``.
         submission_format: ``"auto"`` (default) picks the format from whether
             the volume carries ``cropped_region_*`` attrs (CREMI padded
             downloads only -- see ``scripts/download_cremi3d.py --padded``):
@@ -489,11 +691,20 @@ def infer_submission(
         f"Fine grid: {fine_shape} @ {fine_nm} nm"
         + (f"  (padded to {padded_fine_shape} for exact window tiling)" if padded_fine_shape != fine_shape else "")
     )
+    n_devices = len(gpu_ids) if gpu_ids else 1
+    n_concurrent = n_devices * max(1, workers_per_gpu)
     print(
         f"Phase A (Gaussian blend): window {window}, stride {blend_core} "
-        f"({stride_frac:g}x window, context {blend_ctx_lo}+{blend_ctx_hi}) -> {len(blend_blocks)} overlapping windows"
+        f"({stride_frac:g}x window, context {blend_ctx_lo}+{blend_ctx_hi}) -> {len(blend_blocks)} overlapping windows "
+        f"(batch {blend_batch_size}, {blend_io_workers} I/O workers -> "
+        f"{-(-len(blend_blocks) // blend_batch_size)} forward passes; "
+        f"{n_devices} GPU{'s' if n_devices != 1 else ''}"
+        f"{' (' + ','.join(str(g) for g in gpu_ids) + ')' if gpu_ids else ''}"
+        f" x {workers_per_gpu} worker{'s' if workers_per_gpu != 1 else ''}/GPU "
+        f"= {n_concurrent}-way concurrent)"
     )
-    print(f"Phase B (Mutex Watershed): core {mws_core}, context {mws_ctx} -> {len(mws_blocks)} chunks on the blended field")
+    print(f"Phase B (Mutex Watershed): core {mws_core}, context {mws_ctx} -> {len(mws_blocks)} chunks on the blended field "
+          f"({mws_workers} worker{'s' if mws_workers != 1 else ''})")
     print(f"Blend accumulator (Phase A): ~{acc_gb:.0f} GB logits + ~{weight_gb:.1f} GB weight on disk "
           f"(shrink via --window-size / raise --stride-frac if impractical)")
     if dry_run:
@@ -509,18 +720,36 @@ def infer_submission(
     vmin, vmax = _norm_range(vol_path, region0)
     del region0
 
-    device_t = torch.device(device if torch.cuda.is_available() else "cpu")
-    module = build_module(cfg)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    module.load_state_dict(ckpt.get("state_dict", ckpt), strict=False)
-    module.to(device_t).eval()
+    state_dict = ckpt.get("state_dict", ckpt)
+
+    blend_devices = (
+        [torch.device(f"cuda:{gid}") for gid in gpu_ids] if gpu_ids
+        else [torch.device(device if torch.cuda.is_available() else "cpu")]
+    )
+    # One full model replica per CONCURRENT WORKER (device x workers_per_gpu),
+    # never shared -- the cosmos_2_5_common DiT wrapper keeps its
+    # intermediate-feature hook buffer as instance state during forward()
+    # (self._hook_buffer), so two threads calling forward() on the SAME
+    # instance concurrently corrupt each other's buffers. Built + loaded
+    # fresh per replica (rather than deep-copied) so peak CPU RAM stays at
+    # one model's worth at a time.
+    replicas: List[Tuple[torch.device, Any]] = []
+    for dev in blend_devices:
+        for _ in range(max(1, workers_per_gpu)):
+            rep = build_module(cfg)
+            rep.load_state_dict(state_dict, strict=False)
+            rep.to(dev).eval()
+            replicas.append((dev, rep))
+    device_t, module = replicas[0]  # used by Phase B below (unaffected by Phase A scaling)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     blend_path = out_dir / f"{vol_path.stem}_blend_acc.h5"
     print(f"Phase A: accumulating Gaussian-blended sem+aff logits -> {blend_path}")
     n_fields = _accumulate_blend(
-        module, vol_path, native_resolution, fine_nm, vmin, vmax,
-        window, blend_blocks, padded_fine_shape, device_t, blend_path,
+        replicas, vol_path, native_resolution, fine_nm, vmin, vmax,
+        window, blend_blocks, padded_fine_shape, blend_path,
+        batch_size=blend_batch_size, io_workers=blend_io_workers,
     )
     print(f"Phase A done: {n_fields} field channels (aff x{n_fields - 1} + sem) blended over {padded_fine_shape} fine-grid voxels.")
 
@@ -534,7 +763,7 @@ def infer_submission(
         next_id = _mws_from_blend(
             module, blend_path, mws_blocks, padded_fine_shape,
             native_resolution, fine_nm, native_shape, device_t, sem_threshold,
-            full_ds, next_id_start=1,
+            full_ds, next_id_start=1, num_workers=mws_workers,
         )
         full_ds.attrs["resolution_zyx_nm"] = np.asarray(native_resolution, dtype=np.float64)
         full_ds.attrs["source"] = (
@@ -647,6 +876,39 @@ def _parse_args() -> argparse.Namespace:
         help="Keep the (potentially very large, see docstring) Phase A "
              "blended-logits HDF5 cache instead of deleting it after Phase B.",
     )
+    p.add_argument(
+        "--blend-batch-size", type=int, default=4,
+        help="Number of Phase A windows forwarded through the network in a "
+             "single batch, to keep the GPU busy instead of running one "
+             "window at a time. Raise while GPU memory allows.",
+    )
+    p.add_argument(
+        "--blend-io-workers", type=int, default=4,
+        help="Background threads used to read/resample Phase A windows "
+             "concurrently and to prefetch the next batch while the "
+             "current one runs on the GPU.",
+    )
+    p.add_argument(
+        "--mws-workers", type=int, default=4,
+        help="Number of Phase B (Mutex Watershed) chunks processed "
+             "concurrently on a thread pool. Real multi-core speedup "
+             "requires numba (the CPU MWS backend releases the GIL); with "
+             "the GPU backend this mainly overlaps I/O with compute.",
+    )
+    p.add_argument(
+        "--gpu-ids", type=int, nargs="+", default=None, metavar="GPU_ID",
+        help="Phase A only: CUDA device indices to scale across, e.g. "
+             "'--gpu-ids 0 1 2 3'. Default (unset): use the single --device "
+             "below.",
+    )
+    p.add_argument(
+        "--workers-per-gpu", type=int, default=1,
+        help="Phase A only: concurrent worker threads per GPU, each with "
+             "its own model replica (own default CUDA stream, so >1 runs "
+             "multiple batches at once on the same GPU -- helpful when one "
+             "batch doesn't saturate it, at the cost of N x that GPU's "
+             "model memory).",
+    )
     p.add_argument("--device", default="cuda")
     p.add_argument("--sem-threshold", type=float, default=0.5)
     p.add_argument(
@@ -691,6 +953,11 @@ def main() -> None:
         window_size=args.window_size,
         stride_frac=args.stride_frac,
         keep_blend_cache=args.keep_blend_cache,
+        blend_batch_size=args.blend_batch_size,
+        blend_io_workers=args.blend_io_workers,
+        mws_workers=args.mws_workers,
+        gpu_ids=args.gpu_ids,
+        workers_per_gpu=args.workers_per_gpu,
         device=args.device,
         sem_threshold=args.sem_threshold,
         dry_run=args.dry_run,
