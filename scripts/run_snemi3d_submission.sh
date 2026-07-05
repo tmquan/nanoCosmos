@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full SNEMI3D challenge submission run: AC3 (non-padded test volume),
-# chunked blockwise inference via scripts/infer_cremi_submission.py.
+# chunked blockwise inference via scripts/infer_submission.py.
 #
 # Output format is SNEMI3D's own (auto-detected, since AC3 carries no
 # cropped_region_* attrs): a ZIP containing a single test-input.h5 with
@@ -44,7 +44,7 @@ echo "Volume:     ${VOL} (${DATA_ROOT})"
 echo "Output:     ${OUT_DIR}"
 echo
 
-python scripts/infer_cremi_submission.py \
+python scripts/infer_submission.py \
   --config-name "${CONFIG_NAME}" \
   --ckpt "${CKPT}" \
   --vol "${VOL}" --root "${DATA_ROOT}" \

@@ -30,7 +30,7 @@ i.e. ``offset (z, y, x) = (37, 911, 911)``, ``cropped shape = (125, 1250, 1250)`
 Pass ``--padded`` to fetch the padded version instead of the default cropped
 one; the offset/shape are recorded as ``.h5`` attributes on the converted
 padded volume for later crop-back (e.g. before a challenge submission -- see
-``scripts/infer_cremi_submission.py``).
+``scripts/infer_submission.py``).
 
 The official files pack raw + labels into a single nested ``.hdf``
 (``volumes/raw`` + ``volumes/labels/neuron_ids``), which ``LazyVolDataset``
