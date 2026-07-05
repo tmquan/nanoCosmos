@@ -28,13 +28,23 @@ block's border, not a hard zero-padded edge:
    resolution (nearest-neighbour) and write it into the pre-allocated
    full-native-resolution output ``.h5`` (chunked on disk -- never held fully
    in GPU memory).
-5. Once every block is written, if the volume carries the
-   ``cropped_region_offset_zyx`` / ``cropped_region_shape_zyx`` attributes
-   (written by ``scripts/download_cremi3d.py --padded``), crop the full
-   padded-resolution output down to exactly the region CREMI expects and save
-   it in the CREMI submission format (``volumes/labels/neuron_ids`` + a
-   ``resolution`` attribute). Volumes without those attributes (e.g. SNEMI3D
-   AC3, which is not padded) are submitted as-is, uncropped.
+5. Once every block is written, save the challenge submission file in the
+   right format for the target challenge (``--submission-format``, default
+   ``auto``):
+   * **CREMI** -- if the volume carries the ``cropped_region_offset_zyx`` /
+     ``cropped_region_shape_zyx`` attributes (written by
+     ``scripts/download_cremi3d.py --padded``), crop the full
+     padded-resolution output down to exactly the region CREMI expects and
+     write ``volumes/labels/neuron_ids`` (+ a ``resolution`` attribute) into
+     a plain ``.hdf``.
+   * **SNEMI3D** (e.g. AC3, which is not a padded download and has no such
+     attributes) -- no cropping (AC3 already *is* the exact test region); the
+     official format is completely different from CREMI's -- a **zip file**
+     containing exactly one ``test-input.h5`` with dataset ``main`` (pixels
+     with equal values = one 3-D object), per
+     https://snemi3d.grand-challenge.org/.
+   ``auto`` picks CREMI when the crop attributes are present, SNEMI3D
+   otherwise; pass ``cremi`` / ``snemi3d`` explicitly to override.
 
 KNOWN LIMITATION -- read before trusting a submission
 -------------------------------------------------------
@@ -59,8 +69,9 @@ Examples
         --native-resolution 40 4 4 \\
         --out-dir outputs/submission/cremi_A+
 
-    # SNEMI3D AC3 (non-padded, 30x6x6 nm) -- identical invocation, no crop-back
-    # (AC3 carries no cropped_region_* attrs, so the full volume is submitted):
+    # SNEMI3D AC3 (non-padded, 30x6x6 nm) -- identical invocation, no crop-back;
+    # AC3 carries no cropped_region_* attrs so this auto-writes the SNEMI3D
+    # zip format (test-input.h5 / dataset 'main') instead of CREMI's:
     python scripts/infer_cremi_submission.py \\
         --config-name nanocosmos-2B --ckpt <ckpt> \\
         --vol AC3_inputs --root data/SNEMI3D \\
@@ -235,7 +246,21 @@ def infer_submission(
     device: str = "cuda",
     sem_threshold: float = 0.5,
     dry_run: bool = False,
+    submission_format: str = "auto",
 ) -> Optional[Path]:
+    """Run blockwise inference over the full volume and write a challenge
+    submission file.
+
+    Args:
+        submission_format: ``"auto"`` (default) picks the format from whether
+            the volume carries ``cropped_region_*`` attrs (CREMI padded
+            downloads only -- see ``scripts/download_cremi3d.py --padded``):
+            present -> ``"cremi"`` (``volumes/labels/neuron_ids`` HDF5,
+            cropped back to the official region); absent -> ``"snemi3d"``
+            (a ZIP containing ``test-input.h5`` with dataset ``main``, no
+            cropping -- matches https://snemi3d.grand-challenge.org/). Pass
+            ``"cremi"`` / ``"snemi3d"`` explicitly to override the detection.
+    """
     fine_nm = float(cfg.data.pixel_size[0])
     patch_size = tuple(int(s) for s in cfg.data.patch_size)
 
@@ -306,9 +331,37 @@ def infer_submission(
 
     # ---- crop back to the official submission region, if applicable ----
     crop = _read_submission_crop_attrs(vol_path)
+    fmt = submission_format
+    if fmt == "auto":
+        fmt = "cremi" if crop is not None else "snemi3d"
+    print(f"Submission format: {fmt}"
+          f"{' (auto-detected from cropped_region_* attrs)' if submission_format == 'auto' else ''}")
+
+    if fmt == "snemi3d":
+        # SNEMI3D / Grand Challenge format: a ZIP containing exactly one file
+        # named ``test-input.h5`` with a dataset ``main`` -- NOT the CREMI
+        # ``volumes/labels/neuron_ids`` layout. AC3 is the test volume as-is
+        # (not a padded download), so no crop-back is applied here.
+        if crop is not None:
+            print("  (note: this volume DOES carry cropped_region_* attrs but "
+                  "--submission-format snemi3d was requested/auto-detected as "
+                  "not applicable -- using the full volume, uncropped, as SNEMI3D expects.)")
+        import zipfile
+
+        h5_name = "test-input.h5"
+        tmp_h5 = out_dir / h5_name
+        with h5py.File(str(full_path), "r") as fsrc, h5py.File(str(tmp_h5), "w") as fdst:
+            fdst.create_dataset("main", data=fsrc["main"][:].astype(np.uint32))
+        submission_path = out_dir / f"{vol_path.stem}_submission.zip"
+        with zipfile.ZipFile(str(submission_path), "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(str(tmp_h5), arcname=h5_name)
+        tmp_h5.unlink()
+        print(f"Submission zip written: {submission_path}  (contains {h5_name}, dataset 'main')")
+        return submission_path
+
     if crop is None:
         print("No cropped_region_* attrs on this volume -- submitting the full volume as-is "
-              "(e.g. SNEMI3D AC3, which is not a padded download).")
+              "in CREMI format (volumes/labels/neuron_ids).")
         submission_path = out_dir / f"{vol_path.stem}_submission.hdf"
         with h5py.File(str(full_path), "r") as fsrc, h5py.File(str(submission_path), "w") as fdst:
             data = fsrc["main"][:]
@@ -355,6 +408,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="cuda")
     p.add_argument("--sem-threshold", type=float, default=0.5)
     p.add_argument(
+        "--submission-format", choices=("auto", "cremi", "snemi3d"), default="auto",
+        help="'auto' (default) picks CREMI format (volumes/labels/neuron_ids, "
+             "cropped to the official region) if the volume carries "
+             "cropped_region_* attrs (padded CREMI downloads), else SNEMI3D "
+             "format (a zip containing test-input.h5, dataset 'main', uncropped "
+             "-- see https://snemi3d.grand-challenge.org/). Override explicitly "
+             "with 'cremi' / 'snemi3d' if needed.",
+    )
+    p.add_argument(
         "--dry-run", action="store_true",
         help="Print the block plan (count, sizes, accumulator memory estimate) and exit -- no inference.",
     )
@@ -387,6 +449,7 @@ def main() -> None:
         device=args.device,
         sem_threshold=args.sem_threshold,
         dry_run=args.dry_run,
+        submission_format=args.submission_format,
     )
 
 
