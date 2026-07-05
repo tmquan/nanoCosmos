@@ -363,6 +363,9 @@ class Joint3DDataModule(pl.LightningDataModule):
         # MICrONS
         if n.startswith("minnie65"):
             return "minnie65"
+        # FlyWire FAFB v783
+        if n.startswith("flywire_"):
+            return "flywire"
         # CREMI: cremi3d_sample_A / A+ -> cremi3d (train) / cremi3d_test (image-only)
         m = re.match(r"^(cremi3d)_sample_[A-Za-z]+(\+?)", n)
         if m:

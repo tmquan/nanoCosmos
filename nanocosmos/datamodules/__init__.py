@@ -19,8 +19,9 @@ Public surface
   any per-leaf overrides.
 * :class:`SNEMI3DDataModule`, :class:`MICRONSDataModule`,
   :class:`NeuronsDataModule`, :class:`CREMI3DDataModule`,
-  :class:`FLYEM3DDataModule` -- one leaf per dataset (the last two are
-  thin metadata subclasses of :class:`MICRONSDataModule`).
+  :class:`FLYEM3DDataModule`, :class:`FLYWIREDataModule` -- one leaf per
+  dataset (the last three are thin metadata subclasses of
+  :class:`MICRONSDataModule`).
 
 Extending this module
 ---------------------
@@ -33,6 +34,7 @@ from nanocosmos.datamodules.base import CircuitDataModule
 from nanocosmos.datamodules.snemi3d import SNEMI3DDataModule
 from nanocosmos.datamodules.microns import MICRONSDataModule
 from nanocosmos.datamodules.flyem3d import FLYEM3DDataModule
+from nanocosmos.datamodules.flywire import FLYWIREDataModule
 from nanocosmos.datamodules.cremi3d import CREMI3DDataModule
 from nanocosmos.datamodules.neurons import NeuronsDataModule
 from nanocosmos.datamodules.joint3d import Joint3DDataModule
@@ -42,6 +44,7 @@ __all__ = [
     "SNEMI3DDataModule",
     "MICRONSDataModule",
     "FLYEM3DDataModule",
+    "FLYWIREDataModule",
     "CREMI3DDataModule",
     "NeuronsDataModule",
     "Joint3DDataModule",

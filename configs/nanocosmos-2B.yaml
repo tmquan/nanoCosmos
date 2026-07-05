@@ -21,8 +21,8 @@
 #          padded + MitoEM2 (image-only mito EM).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
-#          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.
-#
+#          CREMI(40,4) / MICrONS(40,8) / FlyWire FAFB(40,8).  A labeled small-voxel
+#          rung (FIB) does BOTH.
 # Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
 # Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
 # RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
@@ -211,14 +211,21 @@ data:
       - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      # --- CREMI 40x4x4 padded test volumes, IMAGE-ONLY (no public labels) ---
-      - vol: cremi3d_sample_A+_volume
+      # --- CREMI 40x4x4 PADDED test volumes, IMAGE-ONLY (no public labels) ---
+      # Switched Jul 2026 from the CROPPED (151 MB, 125x1250x1250) test
+      # download to the official PADDED (1.46 GB, 200x3072x3072) download --
+      # same tissue, ~4x more context/voxels per sample, so more free SSL
+      # signal from the exact same three challenge test volumes. Verified by
+      # exact full-volume array match: the cropped volume sits at native-voxel
+      # offset (z=37, y=911, x=911) inside the padded one, identically for all
+      # three samples -- see doc/DATASETS.md#cremi-padded-vs-cropped-test-volumes.
+      - vol: cremi3d_sample_A+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      - vol: cremi3d_sample_B+_volume
+      - vol: cremi3d_sample_B+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      - vol: cremi3d_sample_C+_volume
+      - vol: cremi3d_sample_C+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
       # --- SNEMI3D AC3 test volume, IMAGE-ONLY (labels never publicly released) ---
@@ -351,7 +358,7 @@ data:
       batch_size: 3
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
-      # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
+      # SNEMI3D / CREMI / MICrONS / FlyWire FAFB.  Predict at 4 nm, pool the head
       # volume's native label grid, then AffinityFGLoss.
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
@@ -412,8 +419,49 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
       - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
-        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z1750_v1300_segmentation
         root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      # --- FlyWire FAFB v783 40x8x8 (8 nm EM, upsampled m783 seg), 10 train ---
+      - vol: flywire_mip1_1024x1024x256_x28000_y32000_z3000_volume        # train01
+        seg: flywire_mip1_1024x1024x256_x28000_y32000_z3000_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x32000_y40000_z3500_volume        # train02
+        seg: flywire_mip1_1024x1024x256_x32000_y40000_z3500_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x64000_y28000_z1500_volume        # train03
+        seg: flywire_mip1_1024x1024x256_x64000_y28000_z1500_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x72000_y36000_z2800_volume        # train04
+        seg: flywire_mip1_1024x1024x256_x72000_y36000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume        # train05 (richest)
+        seg: flywire_mip1_1024x1024x256_x88000_y20000_z3600_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x96000_y44000_z4000_volume        # train06
+        seg: flywire_mip1_1024x1024x256_x96000_y44000_z4000_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x52000_y32000_z2800_volume        # train07
+        seg: flywire_mip1_1024x1024x256_x52000_y32000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x60000_y44000_z3200_volume        # train08
+        seg: flywire_mip1_1024x1024x256_x60000_y44000_z3200_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x68000_y16000_z2800_volume        # train09
+        seg: flywire_mip1_1024x1024x256_x68000_y16000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x44000_y24000_z2400_volume        # train10
+        seg: flywire_mip1_1024x1024x256_x44000_y24000_z2400_m783_segmentation
+        root: data/FLYWIRE
         native_resolution: [40, 8, 8]
 
   val_batch_size: 2
@@ -467,6 +515,17 @@ data:
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
     seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
     root: data/MICRONS
+    task: sft
+    native_resolution: [40, 8, 8]
+  # FlyWire FAFB: 2 of 12 labeled crops (sft instance-metric validation).
+  - vol: flywire_mip1_1024x1024x256_x80000_y16000_z4500_volume        # test01
+    seg: flywire_mip1_1024x1024x256_x80000_y16000_z4500_m783_segmentation
+    root: data/FLYWIRE
+    task: sft
+    native_resolution: [40, 8, 8]
+  - vol: flywire_mip1_1024x1024x256_x104000_y24000_z5000_volume       # test02
+    seg: flywire_mip1_1024x1024x256_x104000_y24000_z5000_m783_segmentation
+    root: data/FLYWIRE
     task: sft
     native_resolution: [40, 8, 8]
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---

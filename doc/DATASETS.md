@@ -20,6 +20,7 @@ resolution, and the exact script that downloads (or converts) it.
 | MICrONS | Mouse V1 cortex, **ssTEM** (minnie65) | 8 × 8 × 40 | `minnie65: [40,8,8]` | MICrONS Consortium 2025, *Nature* (preprint bioRxiv 2021.07.28.454025) | `download_microns.py` | `data/MICRONS` | `microns` |
 | CREMI3D | *Drosophila* brain, **ssTEM** (A/B/C) | 4 × 4 × 40 | `cremi3d: [40,4,4]` | CREMI challenge 2016 (cremi.org); FAFB Zheng et al. 2018, *Cell* | `download_cremi3d.py` | `data/CREMI3D` | `cremi3d` |
 | FLYEM3D | FlyEM *Drosophila*, **FIB-SEM** (FIB-25 / Hemibrain / MaleCNS) | 8 × 8 × 8 (isotropic) | `flyem3d: [8,8,8]` | Takemura 2015 *PNAS* (FIB-25); Scheffer 2020 *eLife* (Hemibrain); Berg 2025 *bioRxiv* (MaleCNS) | `download_flyem3d.py` | `data/FLYEM3D` | `flyem3d` / `joint3d` |
+| FLYWIRE | *Drosophila* female brain (FAFB), **ssTEM** (FlyWire v783) | 8 × 8 × 40 | `flywire: [40,8,8]` | Dorkenwald et al. 2024, *Nature* (FlyWire consortium) | `download_flywire.py` | `data/FLYWIRE` | `flywire` / `joint3d` |
 | COSEM3D | OpenOrganelle / COSEM cell, **FIB-SEM** | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | Xu et al. 2021 *Nature*; Heinrich et al. 2021 *Nature* | `download_cosem3d.py` | `data/COSEM3D` | `joint3d` |
 | MitoEM2 | Mitochondria EM, **mixed FIB-SEM / ssSEM / SBF-SEM** (8 subsets) | 16 × 16 × 16 & 8 × 8 × 30 | *(joint3d SSL, per-vol)* | Liu, P. 2026, Zenodo (MitoEM 2.0, v6, [10.5281/zenodo.20417683](https://zenodo.org/records/20417683)); orig. Wei et al. 2020, *MICCAI* | `convert_mitoem2.py` | `data/MitoEM2` | `joint3d` |
 
@@ -35,6 +36,12 @@ MICrONS, CREMI3D, and FLYEM3D in a single run by listing volumes from several
 `data/<root>` directories under one datamodule, and holds out SNEMI3D
 (`AC4`) as the benchmark validation / test set (it appears under
 `val_volumes` / `test_volumes`, not `train_volumes`).
+
+**Dataset census & previews.** Per-subset crop counts, voxel sizes, and
+train/test splits are tracked in [`doc/data.csv`](./data.csv).  Each row
+has a **Preview** column pointing at a representative central-slice PNG
+(SSL = EM only; SFT = EM + segmentation).  Regenerate with
+`python doc/assets/generate_dataset_previews.py`.
 
 ---
 
@@ -152,10 +159,10 @@ uint64 seg): `512³` ≈ 1.1 GB, `1024³` ≈ 9 GB, `2048³` ≈ 72 GB,
 - **What:** CREMI (MICCAI 2016), adult *Drosophila* brain ssTEM.
   - **A, B, C** — labelled TRAINING volumes (`1250 × 1250 × 125`, dense
     neuron ids) → `train_volumes`.
-  - **A+, B+, C+** — padded TEST volumes; public EM only (challenge
-    withholds the labels) → converted **image-only**.  No GT = no seg
-    metrics, so they are never in any `test_volumes`; instead the joint
-    configs list them under `data.branches.ssl` (image-only reconstruction).
+  - **A+, B+, C+** — TEST volumes; public EM only (challenge withholds the
+    labels) → converted **image-only**.  No GT = no seg metrics, so they are
+    never in any `test_volumes`; instead the joint configs list them under
+    `data.branches.ssl` (image-only reconstruction).
 - **Resolution:** 4 × 4 × 40 nm (anisotropic; 10:1 z:xy).
 - **Source:** `https://cremi.org/static/data/sample_{A,B,C}_20160501.hdf`
   (raw + labels packed in one nested `.hdf`).
@@ -166,7 +173,7 @@ uint64 seg): `512³` ≈ 1.1 GB, `1024³` ≈ 9 GB, `2048³` ≈ 72 GB,
   https://cremi.org/.
 
 ```bash
-# downloads + converts all six (A,B,C labelled + A+,B+,C+ image-only test)
+# downloads + converts all six (A,B,C labelled + A+,B+,C+ image-only test, cropped)
 python scripts/download_cremi3d.py --out-dir data/CREMI3D
 # training only:
 python scripts/download_cremi3d.py --out-dir data/CREMI3D --samples A B C
@@ -176,6 +183,44 @@ python scripts/download_cremi3d.py --out-dir data/CREMI3D --hdf-dir /scratch/CRE
 
 Files land in `data/CREMI3D/` (`cremi3d_sample_A_volume`, … and the
 image-only `cremi3d_sample_A+_volume`, …).
+
+### CREMI padded vs cropped test volumes
+
+Each A+/B+/C+ test sample ships in **two** official downloads
+([cremi.org/data](https://cremi.org/data/)):
+
+| variant | shape (Z,Y,X) | size | used for |
+| --- | --- | --- | --- |
+| **cropped** (default) | `125 × 1250 × 1250` | ~151 MB | matches the labelled A/B/C footprint |
+| **padded** | `200 × 3072 × 3072` | ~1.46 GB | same tissue, ~4x more context per axis |
+
+CREMI's own docs describe an `offset` attribute for *labelled* padded
+volumes, but say nothing for label-less test volumes -- so the offset was
+**verified empirically** (Jul 2026): a full-volume exact array match confirms
+the cropped download is a byte-for-byte sub-array of the padded one, at the
+**same** native-voxel offset for all three samples:
+
+```
+padded[37 : 37+125, 911 : 911+1250, 911 : 911+1250] == cropped   # exact match, all of A+/B+/C+
+```
+
+i.e. `offset (z, y, x) = (37, 911, 911)`. This is recorded as
+`cropped_region_offset_zyx` / `cropped_region_shape_zyx` attributes on the
+converted padded `.h5` (`scripts/download_cremi3d.py --padded`), so a later
+inference/submission step can crop the padded-volume prediction back down to
+exactly the region CREMI expects, without re-deriving the offset.
+
+**The `ssl` branch uses the padded version** (switched Jul 2026, was
+cropped): same three challenge test volumes, ~4x more voxels of free SSL
+signal per sample, at no extra download beyond the one-time 1.46 GB/sample
+fetch. Audited (20 random probes/volume): `content_frac` 0.95-0.96,
+`autocorr` 0.96-0.98, `nz` 0.99 -- as clean as the cropped version, since it's
+literally the same tissue plus more of it.
+
+```bash
+# fetch + convert the padded test volumes (for SSL / for inference context)
+python scripts/download_cremi3d.py --out-dir data/CREMI3D --samples A+ B+ C+ --padded
+```
 
 ---
 
@@ -239,6 +284,40 @@ Files land in `data/FLYEM3D/`
 clamped to the volume bounds; the script loads the whole crop into RAM,
 so it is built for crops, not the full petavoxel volume (the full image
 is ~346 GB / seg ~2.8 TB at mip 0).
+
+---
+
+## FLYWIRE (FAFB v783)
+
+- **What:** Princeton/Seung **FlyWire** female adult fly brain (FAFB)
+  connectome — proofread whole-brain segmentation at materialized release
+  **v783** (Dorkenwald et al. 2024).  Complements the Janelia **FLYEM3D**
+  sources (FIB-25 / Hemibrain / MaleCNS) with the canonical *female* FAFB
+  connectome used in Codex.
+- **Resolution:** **8 × 8 × 40 nm** for the on-disk crops.  EM is fetched
+  at CloudVolume mip 1 (`gs://microns-seunglab/drosophila_v0/alignment/image_rechunked`);
+  the flat proofread seg (`gs://flywire_v141_m783`) is native **16 × 16 × 40**
+  at mip 0 and **nearest-neighbour upsampled 2× in XY** to align with the
+  8 nm EM grid (no CAVE token required).  Native FAFB EM is **4 × 4 × 40 nm**
+  (serial-section TEM); finer access needs the graphene production endpoint.
+- **Splits:** 12 pre-defined `1024 × 1024 × 256` crops (10 train + 2 test)
+  inside the proofread bbox, MICrONS-style disjoint origins.  File names
+  encode the **8 nm EM** origin, e.g.
+  `flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume.h5` /
+  `…_m783_segmentation.h5`.
+- **Citation:** FlyWire Consortium (2024), *Whole-brain annotation and
+  multi-connectome cell typing of Drosophila*, Nature,
+  doi:10.1038/s41586-024-07686-5.
+
+```bash
+python scripts/download_flywire.py --split                    # 10 train + 2 test @ 8 nm
+python scripts/download_flywire.py --split --resolution 16nm  # legacy 16 nm (no upsample)
+python scripts/download_flywire.py --start 44000 10000 3600 --size 512 512 256 --resolution 16nm
+```
+
+Files land in `data/FLYWIRE/`.  Representative preview panels for every census
+row are in [`doc/assets/datasets/`](./assets/datasets/) (regenerate with
+`python doc/assets/generate_dataset_previews.py`).
 
 ---
 
@@ -521,12 +600,13 @@ in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
 | **SNEMI3D** | `AC4_inputs` / `AC4_labels`; `AC3_inputs` (test, EM only) | `AC4_inputs`, `AC4_labels` | A: yes / AC3: no | `data/SNEMI3D` |
 | **Neurons** | `neurons_{X}x{Y}x{Z}_x{X0}_y{Y0}_z{Z0}` | `neurons_5000x2900x300_x3000_y7200_z950` | yes | `data/SNEMI3D` |
 | **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume`, seg `…_v1300_segmentation` | yes | `data/MICRONS` |
-| **CREMI3D** | train `cremi3d_sample_{A,B,C}` ; test (EM only) `cremi3d_sample_{A+,B+,C+}` | `cremi3d_sample_A_volume`, `cremi3d_sample_A_segmentation` | A/B/C: yes / +: no | `data/CREMI3D` |
+| **CREMI3D** | train `cremi3d_sample_{A,B,C}` ; test (EM only) `cremi3d_sample_{A+,B+,C+}` (cropped) / `cremi3d_sample_{A+,B+,C+}_padded` (padded) | `cremi3d_sample_A_volume`, `cremi3d_sample_A_segmentation`; `cremi3d_sample_A+_padded_volume` | A/B/C: yes / +: no | `data/CREMI3D` |
 | **FLYEM3D** · FIB-25 SFT core | `flyem3d_8nm_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_x2304_y2048_z6144` | yes | `data/FLYEM3D` |
 | **FLYEM3D** · FIB-25 SSL surround | `flyem3d_8nm_ssl_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_ssl_x4000_y4000_z2000_volume` | no | `data/FLYEM3D` |
 | **FLYEM3D** · FIB-25 z-stride variants | `flyem3d_z32xy8nm[_xz/_yz][_p0..p3]_x{X}_y{Y}_z{Z}` | `flyem3d_z32xy8nm_p0_x2304_y2048_z6144` | yes | `data/FLYEM3D` |
 | **FLYEM3D** · Hemibrain | `flyem3d_hemibrain_8nm[_ssl]_x{X}_y{Y}_z{Z}` | `flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume` | sft: yes / ssl: no | `data/FLYEM3D` |
 | **FLYEM3D** · MaleCNS | `flyem3d_malecns_8nm[_ssl]_x{X}_y{Y}_z{Z}` | `flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume` | sft: yes / ssl: no | `data/FLYEM3D` |
+| **FLYWIRE** · FAFB v783 | `flywire_mip1_{Sx}x{Sy}x{Sz}_x{X}_y{Y}_z{Z}` ; seg adds `_m783` | vol `flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume`, seg `…_m783_segmentation` | yes | `data/FLYWIRE` |
 | **COSEM3D** | `{jrc_id}_{rx}x{ry}x{rz}nm_x{X}_y{Y}_z{Z}` (image only; `--resample-isotropic` → `{jrc_id}_4nm_…`) | `jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume` | no | `data/COSEM3D` |
 | **MitoEM2** | `mitoem2_{subset}_{train,test}{NN}_volume` (image only; converted from nnU-Net `.nii.gz`) | `mitoem2_mossy_train01_volume` / `mitoem2_pyra_test01_volume` | no | `data/MitoEM2` |
 

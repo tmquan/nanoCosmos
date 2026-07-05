@@ -5,8 +5,9 @@ Two dataset families live here, with **different** semantics:
 
 * :class:`CircuitDataset` (eager, MONAI ``CacheDataset``-backed) and its
   leaves :class:`SNEMI3DDataset`, :class:`MICRONSDataset`,
-  :class:`NeuronsDataset`, :class:`CREMI3DDataset`, :class:`FLYEM3DDataset`
-  (the last two are thin metadata subclasses of :class:`MICRONSDataset`)
+  :class:`NeuronsDataset`, :class:`CREMI3DDataset`, :class:`FLYEM3DDataset`,
+  :class:`FLYWIREDataset` (the last three are thin metadata subclasses of
+  :class:`MICRONSDataset`)
   -- preload entire volumes into RAM at ``__init__``, then serve crops via
   the MONAI transform pipeline.
   Best for small-to-medium datasets (single-machine, many epochs).
@@ -37,6 +38,7 @@ from nanocosmos.datasets.lazy import LazyVolDataset
 from nanocosmos.datasets.snemi3d import SNEMI3DDataset
 from nanocosmos.datasets.microns import MICRONSDataset
 from nanocosmos.datasets.flyem3d import FLYEM3DDataset
+from nanocosmos.datasets.flywire import FLYWIREDataset
 from nanocosmos.datasets.cremi3d import CREMI3DDataset
 from nanocosmos.datasets.neurons import NeuronsDataset
 
@@ -46,6 +48,7 @@ __all__ = [
     "SNEMI3DDataset",
     "MICRONSDataset",
     "FLYEM3DDataset",
+    "FLYWIREDataset",
     "CREMI3DDataset",
     "NeuronsDataset",
 ]

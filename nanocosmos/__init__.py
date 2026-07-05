@@ -29,6 +29,7 @@ from nanocosmos.datasets import (
     SNEMI3DDataset,
     MICRONSDataset,
     FLYEM3DDataset,
+    FLYWIREDataset,
     CREMI3DDataset,
     NeuronsDataset,
 )
@@ -44,6 +45,7 @@ from nanocosmos.datamodules import (
     SNEMI3DDataModule,
     MICRONSDataModule,
     FLYEM3DDataModule,
+    FLYWIREDataModule,
     CREMI3DDataModule,
     NeuronsDataModule,
 )
@@ -70,6 +72,7 @@ __all__ = [
     "SNEMI3DDataset",
     "MICRONSDataset",
     "FLYEM3DDataset",
+    "FLYWIREDataset",
     "CREMI3DDataset",
     "NeuronsDataset",
     "BasePreprocessor",
@@ -81,6 +84,7 @@ __all__ = [
     "SNEMI3DDataModule",
     "MICRONSDataModule",
     "FLYEM3DDataModule",
+    "FLYWIREDataModule",
     "CREMI3DDataModule",
     "NeuronsDataModule",
     # Losses
