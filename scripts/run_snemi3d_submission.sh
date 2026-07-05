@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Full SNEMI3D challenge submission run: AC3 (non-padded test volume),
-# chunked blockwise inference via scripts/infer_submission.py.
+# two-phase blockwise inference via scripts/infer_submission.py:
+#   Phase A -- Gaussian-weighted blend of raw sem+aff logits over
+#              heavily-overlapping WINDOW_SIZE windows (full network field
+#              of view, 400x256x256 @ 4nm by default) advancing by
+#              STRIDE_FRAC * window (0.25 -> 75% overlap between windows).
+#   Phase B -- Mutex Watershed once per FINE_CORE_SIZE/FINE_CONTEXT chunk of
+#              the already-blended field (no network inference here).
+# See infer_submission.py's module docstring for the full design, the
+# cross-chunk-merge limitation, and the Phase A disk/I/O cost warning --
+# WINDOW_SIZE/STRIDE_FRAC below need ~230 GB of scratch disk for AC3's fine
+# grid at the defaults; raise STRIDE_FRAC or shrink WINDOW_SIZE if that's
+# impractical (run with --dry-run first, e.g. by copying this script's
+# python invocation and adding --dry-run, to see the exact block plan).
 #
 # Output format is SNEMI3D's own (auto-detected, since AC3 carries no
 # cropped_region_* attrs): a ZIP containing a single test-input.h5 with
@@ -13,11 +25,6 @@
 # Usage:
 #   ./scripts/run_snemi3d_submission.sh
 #   CKPT=path/to/other.ckpt ./scripts/run_snemi3d_submission.sh   # override
-#
-# AC3 is much smaller than CREMI's padded test volumes (100x1024x1024
-# native vs CREMI's 200x3072x3072), so this needs far fewer blocks -- still
-# uses the same memory-safe block/context defaults and CPU Mutex Watershed
-# as the CREMI script (see its comments for why).
 set -euo pipefail
 
 CKPT="${CKPT:-outputs/2026-07-01_15-31-16_nanocosmos-2B/checkpoints/crash_recovery.ckpt}"
@@ -27,6 +34,13 @@ OUT_DIR="${OUT_DIR:-outputs/submission/snemi3d_AC3}"
 NATIVE_RES="30 6 6"   # SNEMI3D: z y x nm
 VOL="AC3_inputs"
 
+# Phase A: full network field of view (400x256x256 @ 4nm), 1/4-stride
+# (75%) overlap between neighbouring windows.
+WINDOW_SIZE="${WINDOW_SIZE:-400 256 256}"
+STRIDE_FRAC="${STRIDE_FRAC:-0.25}"
+
+# Phase B (Mutex Watershed on the blended field -- no network inference, so
+# this can be a coarse chunking purely for MWS memory).
 FINE_CORE_SIZE="${FINE_CORE_SIZE:-600 384 384}"
 FINE_CONTEXT="${FINE_CONTEXT:-100 64 64}"
 MWS_BACKEND="${MWS_BACKEND:-cpu}"
@@ -49,6 +63,8 @@ python scripts/infer_submission.py \
   --ckpt "${CKPT}" \
   --vol "${VOL}" --root "${DATA_ROOT}" \
   --native-resolution ${NATIVE_RES} \
+  --window-size ${WINDOW_SIZE} \
+  --stride-frac ${STRIDE_FRAC} \
   --fine-core-size ${FINE_CORE_SIZE} \
   --fine-context ${FINE_CONTEXT} \
   --submission-format snemi3d \

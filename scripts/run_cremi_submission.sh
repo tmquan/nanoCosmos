@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # Full CREMI challenge submission run: A+, B+, C+ (padded test volumes),
-# chunked blockwise inference via scripts/infer_submission.py.
+# two-phase blockwise inference via scripts/infer_submission.py:
+#   Phase A -- Gaussian-weighted blend of raw sem+aff logits over
+#              heavily-overlapping WINDOW_SIZE windows (full network field
+#              of view, 400x256x256 @ 4nm by default) advancing by
+#              STRIDE_FRAC * window (0.25 -> 75% overlap between windows).
+#   Phase B -- Mutex Watershed once per FINE_CORE_SIZE/FINE_CONTEXT chunk of
+#              the already-blended field (no network inference here).
+# See infer_submission.py's module docstring for the full design and the
+# cross-chunk-merge limitation.
+#
+# DISK COST: CREMI's padded fine grid is ~2000x3072x3072 -- the Phase A
+# accumulator at the defaults below is on the order of 2+ TB of scratch disk
+# PER SAMPLE (independent of STRIDE_FRAC; only the I/O volume against it
+# scales with STRIDE_FRAC/window count). Run with --dry-run first (copy the
+# python invocation below and add --dry-run) to see the exact numbers for
+# your hardware, and raise STRIDE_FRAC / shrink WINDOW_SIZE if that's
+# impractical for your scratch space.
 #
 # Edit CKPT below to point at whichever checkpoint you want to submit with
 # (the freshest available -- see doc/CURRENT_STATE.md / the training run's
@@ -9,13 +25,6 @@
 # Usage:
 #   ./scripts/run_cremi_submission.sh
 #   CKPT=path/to/other.ckpt ./scripts/run_cremi_submission.sh   # override
-#
-# Each sample plans to ~256 blocks at the memory-safe defaults below
-# (FINE_CORE_SIZE/FINE_CONTEXT), peak accumulator ~26.8 GB/block. Run
-# --dry-run first on new hardware to sanity-check the block plan (see
-# scripts/infer_submission.py docstring) -- a dry-run only prints the
-# plan, it does not reproduce the MWS/activation memory cost, so a real OOM
-# is still possible; shrink FINE_CORE_SIZE/FINE_CONTEXT further if it recurs.
 set -euo pipefail
 
 CKPT="${CKPT:-outputs/2026-07-01_15-31-16_nanocosmos-2B/checkpoints/crash_recovery.ckpt}"
@@ -24,13 +33,15 @@ DATA_ROOT="${DATA_ROOT:-data/CREMI3D}"
 OUT_ROOT="${OUT_ROOT:-outputs/submission}"
 NATIVE_RES="40 4 4"   # CREMI: z y x nm
 
-# Memory-safe defaults (a full-size 800x512x512 core / 200x128x128 context
-# block OOM'd at ~274.6/276.5 GB -- MWS's own GPU scratch scales with the
-# block's total voxel count, on top of the sliding-window accumulator and the
-# 2B model's un-checkpointed eval-time activations). Shrinking the block AND
-# forcing Mutex Watershed onto the CPU (mws_np -- the exact reference impl,
-# just slower; CPU RAM is abundant) both reduce GPU pressure independently --
-# override either via env var if your GPU has more headroom.
+# Phase A: full network field of view (400x256x256 @ 4nm), 1/4-stride
+# (75%) overlap between neighbouring windows.
+WINDOW_SIZE="${WINDOW_SIZE:-400 256 256}"
+STRIDE_FRAC="${STRIDE_FRAC:-0.25}"
+
+# Phase B (Mutex Watershed on the blended field -- no network inference here,
+# so GPU pressure is just MWS scratch, not model activations too). Shrink
+# FINE_CORE_SIZE/FINE_CONTEXT and/or force MWS onto the CPU (mws_np -- the
+# exact reference impl, just slower; CPU RAM is abundant) if MWS itself OOMs.
 FINE_CORE_SIZE="${FINE_CORE_SIZE:-600 384 384}"
 FINE_CONTEXT="${FINE_CONTEXT:-100 64 64}"
 MWS_BACKEND="${MWS_BACKEND:-cpu}"
@@ -59,6 +70,8 @@ for s in A B C; do
     --ckpt "${CKPT}" \
     --vol "${vol}" --root "${DATA_ROOT}" \
     --native-resolution ${NATIVE_RES} \
+    --window-size ${WINDOW_SIZE} \
+    --stride-frac ${STRIDE_FRAC} \
     --fine-core-size ${FINE_CORE_SIZE} \
     --fine-context ${FINE_CONTEXT} \
     --overrides "training.mutex_watershed.backend=${MWS_BACKEND}" \
