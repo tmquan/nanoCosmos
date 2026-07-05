@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full CREMI challenge submission run: A+, B+, C+ (padded test volumes),
-# chunked blockwise inference via scripts/infer_cremi_submission.py.
+# chunked blockwise inference via scripts/infer_submission.py.
 #
 # Edit CKPT below to point at whichever checkpoint you want to submit with
 # (the freshest available -- see doc/CURRENT_STATE.md / the training run's
@@ -13,7 +13,7 @@
 # Each sample plans to ~256 blocks at the memory-safe defaults below
 # (FINE_CORE_SIZE/FINE_CONTEXT), peak accumulator ~26.8 GB/block. Run
 # --dry-run first on new hardware to sanity-check the block plan (see
-# scripts/infer_cremi_submission.py docstring) -- a dry-run only prints the
+# scripts/infer_submission.py docstring) -- a dry-run only prints the
 # plan, it does not reproduce the MWS/activation memory cost, so a real OOM
 # is still possible; shrink FINE_CORE_SIZE/FINE_CONTEXT further if it recurs.
 set -euo pipefail
@@ -54,7 +54,7 @@ for s in A B C; do
   echo "=================================================================="
   echo "=== CREMI sample ${s}+  ->  ${out_dir}"
   echo "=================================================================="
-  python scripts/infer_cremi_submission.py \
+  python scripts/infer_submission.py \
     --config-name "${CONFIG_NAME}" \
     --ckpt "${CKPT}" \
     --vol "${vol}" --root "${DATA_ROOT}" \

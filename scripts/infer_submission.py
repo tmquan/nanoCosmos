@@ -63,7 +63,7 @@ minimise how often this matters; it is not eliminated.
 Examples
 --------
     # CREMI A+ (padded, 40x4x4 nm) -- cropped back to the submission region:
-    python scripts/infer_cremi_submission.py \\
+    python scripts/infer_submission.py \\
         --config-name nanocosmos-2B --ckpt <ckpt> \\
         --vol cremi3d_sample_A+_padded_volume --root data/CREMI3D \\
         --native-resolution 40 4 4 \\
@@ -72,14 +72,14 @@ Examples
     # SNEMI3D AC3 (non-padded, 30x6x6 nm) -- identical invocation, no crop-back;
     # AC3 carries no cropped_region_* attrs so this auto-writes the SNEMI3D
     # zip format (test-input.h5 / dataset 'main') instead of CREMI's:
-    python scripts/infer_cremi_submission.py \\
+    python scripts/infer_submission.py \\
         --config-name nanocosmos-2B --ckpt <ckpt> \\
         --vol AC3_inputs --root data/SNEMI3D \\
         --native-resolution 30 6 6 \\
         --out-dir outputs/submission/snemi3d_AC3
 
     # Just plan the block grid (no inference) to estimate the run:
-    python scripts/infer_cremi_submission.py ... --dry-run
+    python scripts/infer_submission.py ... --dry-run
 """
 
 from __future__ import annotations
@@ -325,7 +325,7 @@ def infer_submission(
         full_ds.attrs["source"] = (
             f"nanocosmos blockwise inference from {ckpt_path}; MWS per block "
             f"(core {tuple(fine_core_size)}, context {tuple(fine_context)} @ {fine_nm} nm); "
-            "see infer_cremi_submission.py docstring for the cross-block-merge limitation."
+            "see infer_submission.py docstring for the cross-block-merge limitation."
         )
         print(f"Full native-resolution segmentation ({next_id - 1} total ids) -> {full_path}")
 
