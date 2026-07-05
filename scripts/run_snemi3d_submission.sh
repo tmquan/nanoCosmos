@@ -18,7 +18,7 @@
 # cropped_region_* attrs): a ZIP containing a single test-input.h5 with
 # dataset 'main' -- see https://snemi3d.grand-challenge.org/. This is a
 # DIFFERENT format from CREMI's volumes/labels/neuron_ids -- see
-# scripts/run_cremi_submission.sh for that challenge instead.
+# scripts/run_cremi3d_submission.sh for that challenge instead.
 #
 # Edit CKPT below to point at whichever checkpoint you want to submit with.
 #

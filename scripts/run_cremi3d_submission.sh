@@ -23,8 +23,8 @@
 # outputs/<run>/checkpoints/ directory).
 #
 # Usage:
-#   ./scripts/run_cremi_submission.sh
-#   CKPT=path/to/other.ckpt ./scripts/run_cremi_submission.sh   # override
+#   ./scripts/run_cremi3d_submission.sh
+#   CKPT=path/to/other.ckpt ./scripts/run_cremi3d_submission.sh   # override
 set -euo pipefail
 
 CKPT="${CKPT:-outputs/2026-07-01_15-31-16_nanocosmos-2B/checkpoints/crash_recovery.ckpt}"
@@ -49,7 +49,7 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 
 if [ ! -f "${CKPT}" ]; then
   echo "Checkpoint not found: ${CKPT}" >&2
-  echo "Pass CKPT=<path> ./scripts/run_cremi_submission.sh to point at a different one." >&2
+  echo "Pass CKPT=<path> ./scripts/run_cremi3d_submission.sh to point at a different one." >&2
   exit 1
 fi
 
