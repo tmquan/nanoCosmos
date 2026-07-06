@@ -12,15 +12,17 @@
 #
 # DISK COST: CREMI's padded fine grid is ~2000x3072x3072 -- the Phase A
 # accumulator at the defaults below is on the order of 2+ TB of scratch disk
-# PER SAMPLE (independent of STRIDE_FRAC; only the I/O volume against it
-# scales with STRIDE_FRAC/window count). The --save-fine-grid diagnostics
+# PER SAMPLE. IMPORTANT: this size is ~FIXED by the volume's real fine-grid
+# shape x channel count -- STRIDE_FRAC/WINDOW_SIZE barely move it (they only
+# change how many overlapping windows are processed, i.e. I/O volume and
+# runtime, not the accumulator's size on disk). There is currently no CLI
+# knob to shrink the accumulator itself. The --save-fine-grid diagnostics
 # (pred_raw/pred_sem/pred_label_fine, SAVE_FINE_GRID below) ADD roughly
 # another ~300 GB per sample at that resolution (three single-channel
 # volumes over the real, unpadded fine grid) -- set SAVE_FINE_GRID=false to
 # skip them and only get the native-resolution submission artifact. Run
 # with --dry-run first (copy the python invocation below and add --dry-run)
-# to see the exact numbers for your hardware, and raise STRIDE_FRAC / shrink
-# WINDOW_SIZE if the accumulator itself is impractical for your scratch space.
+# to see the exact numbers for your hardware before committing scratch space.
 #
 # Edit CKPT below to point at whichever checkpoint you want to submit with
 # (the freshest available -- see doc/CURRENT_STATE.md / the training run's
@@ -73,6 +75,12 @@ MWS_WORKERS="${MWS_WORKERS:-6}"
 # pred_sem (semantic probability), pred_label_fine (segmentation before the
 # native downsample). Set to "false" to skip them (see DISK COST above).
 SAVE_FINE_GRID="${SAVE_FINE_GRID:-true}"
+
+# If a previous run crashed (e.g. OOM) after Phase A finished, set this to
+# "true" to skip re-running Phase A and reuse the leftover <vol>_blend_acc.h5
+# in OUT_ROOT/cremi_<sample>+/ if it's still compatible -- safe to always
+# leave on, it's a no-op when there's nothing to reuse.
+REUSE_BLEND_CACHE="${REUSE_BLEND_CACHE:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [ ! -f "${CKPT}" ]; then
@@ -101,6 +109,10 @@ for s in A B C; do
   if [ "${SAVE_FINE_GRID}" = "false" ]; then
     FINE_GRID_ARG="--no-save-fine-grid"
   fi
+  REUSE_ARGS=()
+  if [ "${REUSE_BLEND_CACHE}" = "true" ]; then
+    REUSE_ARGS=(--reuse-blend-cache)
+  fi
 
   python scripts/infer_submission.py \
     --config-name "${CONFIG_NAME}" \
@@ -117,6 +129,7 @@ for s in A B C; do
     --fine-context ${FINE_CONTEXT} \
     --mws-workers ${MWS_WORKERS} \
     "${FINE_GRID_ARG}" \
+    "${REUSE_ARGS[@]}" \
     --overrides "training.mutex_watershed.backend=${MWS_BACKEND}" \
     --out-dir "${out_dir}"
   echo

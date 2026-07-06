@@ -7,13 +7,16 @@
 #              STRIDE_FRAC * window (0.25 -> 75% overlap between windows).
 #   Phase B -- Mutex Watershed once per FINE_CORE_SIZE/FINE_CONTEXT chunk of
 #              the already-blended field (no network inference here).
-# See infer_submission.py's module docstring for the full design, the
-# cross-chunk-merge limitation, and the Phase A disk/I/O cost warning --
-# WINDOW_SIZE/STRIDE_FRAC below need ~240 GB of scratch disk for AC3's fine
-# grid at the defaults; raise STRIDE_FRAC or shrink WINDOW_SIZE if that's
-# impractical. The --save-fine-grid diagnostics (pred_raw/pred_sem/
-# pred_label_fine, SAVE_FINE_GRID below) add roughly another ~28 GB for AC3;
-# set SAVE_FINE_GRID=false to skip them. Run with --dry-run first (e.g. by
+# See infer_submission.py's module docstring for the full design and the
+# cross-chunk-merge limitation. DISK COST: the Phase A accumulator needs
+# ~240 GB of scratch disk for AC3's fine grid at the defaults. IMPORTANT:
+# this size is ~FIXED by the volume's real fine-grid shape x channel count
+# -- STRIDE_FRAC/WINDOW_SIZE barely move it (they only change how many
+# overlapping windows are processed, i.e. I/O volume and runtime, not the
+# accumulator's size on disk); there is currently no CLI knob to shrink it.
+# The --save-fine-grid diagnostics (pred_raw/pred_sem/pred_label_fine,
+# SAVE_FINE_GRID below) add roughly another ~28 GB for AC3; set
+# SAVE_FINE_GRID=false to skip them. Run with --dry-run first (e.g. by
 # copying this script's python invocation and adding --dry-run) to see the
 # exact block plan and disk numbers for your hardware.
 #
@@ -70,6 +73,12 @@ MWS_WORKERS="${MWS_WORKERS:-6}"
 # pred_sem (semantic probability), pred_label_fine (segmentation before the
 # native downsample). Set to "false" to skip them (see DISK COST above).
 SAVE_FINE_GRID="${SAVE_FINE_GRID:-true}"
+
+# If a previous run crashed (e.g. OOM) after Phase A finished, set this to
+# "true" to skip re-running Phase A and reuse the leftover
+# AC3_inputs_blend_acc.h5 in OUT_DIR if it's still compatible -- safe to
+# always leave on, it's a no-op when there's nothing to reuse.
+REUSE_BLEND_CACHE="${REUSE_BLEND_CACHE:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [ ! -f "${CKPT}" ]; then
@@ -92,6 +101,10 @@ FINE_GRID_ARG="--save-fine-grid"
 if [ "${SAVE_FINE_GRID}" = "false" ]; then
   FINE_GRID_ARG="--no-save-fine-grid"
 fi
+REUSE_ARGS=()
+if [ "${REUSE_BLEND_CACHE}" = "true" ]; then
+  REUSE_ARGS=(--reuse-blend-cache)
+fi
 
 python scripts/infer_submission.py \
   --config-name "${CONFIG_NAME}" \
@@ -108,6 +121,7 @@ python scripts/infer_submission.py \
   --fine-context ${FINE_CONTEXT} \
   --mws-workers ${MWS_WORKERS} \
   "${FINE_GRID_ARG}" \
+  "${REUSE_ARGS[@]}" \
   --submission-format snemi3d \
   --overrides "training.mutex_watershed.backend=${MWS_BACKEND}" \
   --out-dir "${OUT_DIR}"

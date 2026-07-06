@@ -149,14 +149,21 @@ The Phase A accumulator holds ``(N_AFF + 2)`` float32 channels (every
 unified-head channel: affinity + semantic + raw) over the **whole padded
 fine grid**, e.g. for SNEMI3D AC3 (fine grid ~800x1536x1536) with the
 default 30-offset model that's ~240 GB on disk (plus ~7.5 GB for the weight
-map); a heavily-overlapping stride (small ``--stride-frac``) multiplies both
-the number of windows and the read-modify-write I/O against that
-accumulator accordingly. The ``--save-fine-grid`` outputs are comparatively
+map); for CREMI's much larger padded volumes this is on the order of
+2+ TB PER SAMPLE. IMPORTANT: this size is essentially FIXED by the volume's
+real fine-grid shape x channel count -- ``--window-size`` / ``--stride-frac``
+barely move it (they only change the padding-rounding remainder, a tiny
+fraction); they instead control how many overlapping windows are processed
+and thus the read-modify-write I/O *volume* against that fixed-size
+accumulator, not its size on disk. There is currently no way to shrink the
+accumulator itself short of a code change (e.g. blending in float16, or
+only blending aff+sem when ``--no-save-fine-grid`` is passed -- NOT
+currently implemented; Phase A always blends all channels regardless of
+``--save-fine-grid``). The ``--save-fine-grid`` outputs are comparatively
 modest -- three single-channel volumes over the REAL (unpadded) fine grid,
-e.g. ~28 GB total for AC3. The printed block-plan (also shown by
-``--dry-run``) reports the exact numbers before you commit to a run --
-increase ``--stride-frac`` (less overlap) or shrink ``--window-size`` if
-it's impractical for your storage.
+e.g. ~28 GB total for AC3 but ~300 GB for CREMI. The printed block-plan
+(also shown by ``--dry-run``) reports the exact numbers before you commit
+to a run -- check available scratch space against it first.
 
 Examples
 --------
@@ -693,6 +700,7 @@ def infer_submission(
     gpu_ids: Optional[Sequence[int]] = None,
     workers_per_gpu: int = 1,
     save_fine_grid: bool = True,
+    reuse_blend_cache: bool = False,
 ) -> Optional[Path]:
     """Run two-phase blockwise inference over the full volume and write a
     challenge submission file (see module docstring for Phase A/B details).
@@ -740,6 +748,15 @@ def infer_submission(
             actual submission artifact). Diagnostic / super-resolution
             outputs, matching ``infer_volume.py``'s ``--save-fine-grid``;
             set ``False`` to skip them (saves the extra disk + write time).
+        reuse_blend_cache: If a ``<vol>_blend_acc.h5`` already exists at the
+            expected path in ``out_dir`` (e.g. left over from a crashed run
+            that got through Phase A) AND its ``acc``/``weight`` dataset
+            shapes match this run's plan exactly, SKIP Phase A entirely and
+            go straight to Phase B on the existing file -- avoids redoing
+            the most expensive part of a recovery. Falls back to recomputing
+            from scratch (with a warning) if the cache is missing/
+            incompatible. Safe to always pass; it's a no-op when there's
+            nothing to reuse.
         submission_format: ``"auto"`` (default) picks the format from whether
             the volume carries ``cropped_region_*`` attrs (CREMI padded
             downloads only -- see ``scripts/download_cremi3d.py --padded``):
@@ -797,7 +814,8 @@ def infer_submission(
     print(f"Phase B (Mutex Watershed): core {mws_core}, context {mws_ctx} -> {len(mws_blocks)} chunks on the blended field "
           f"({mws_workers} worker{'s' if mws_workers != 1 else ''})")
     print(f"Blend accumulator (Phase A): ~{acc_gb:.0f} GB logits + ~{weight_gb:.1f} GB weight on disk "
-          f"(shrink via --window-size / raise --stride-frac if impractical)")
+          f"(size is ~fixed by the volume's fine-grid shape x channel count -- --window-size/--stride-frac "
+          f"barely move it, only the window/I/O count; see module docstring)")
     if save_fine_grid:
         print(f"Fine-grid diagnostics (Phase B, --save-fine-grid): ~{fine_diag_gb:.1f} GB "
               f"(pred_raw + pred_sem + pred_label_fine @ {fine_shape})")
@@ -839,12 +857,34 @@ def infer_submission(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     blend_path = out_dir / f"{vol_path.stem}_blend_acc.h5"
-    print(f"Phase A: accumulating Gaussian-blended sem+aff logits -> {blend_path}")
-    n_fields = _accumulate_blend(
-        replicas, vol_path, native_resolution, fine_nm, vmin, vmax,
-        window, blend_blocks, padded_fine_shape, blend_path,
-        batch_size=blend_batch_size, io_workers=blend_io_workers,
-    )
+
+    n_fields = None
+    if reuse_blend_cache and blend_path.exists():
+        with torch.no_grad():
+            n_fields_expected = int(module(torch.zeros((1, 1) + window, device=device_t)).shape[1])
+        try:
+            with h5py.File(str(blend_path), "r") as f:
+                ok = (
+                    "acc" in f and "weight" in f
+                    and tuple(f["acc"].shape) == (n_fields_expected,) + tuple(padded_fine_shape)
+                    and tuple(f["weight"].shape) == tuple(padded_fine_shape)
+                )
+        except OSError:
+            ok = False
+        if ok:
+            n_fields = n_fields_expected
+            print(f"Phase A: SKIPPED -- reusing existing compatible blend cache -> {blend_path}")
+        else:
+            print(f"Phase A: --reuse-blend-cache given but {blend_path} is missing/incompatible "
+                  "(shape mismatch or unreadable) -- recomputing from scratch.")
+
+    if n_fields is None:
+        print(f"Phase A: accumulating Gaussian-blended sem+aff logits -> {blend_path}")
+        n_fields = _accumulate_blend(
+            replicas, vol_path, native_resolution, fine_nm, vmin, vmax,
+            window, blend_blocks, padded_fine_shape, blend_path,
+            batch_size=blend_batch_size, io_workers=blend_io_workers,
+        )
     print(f"Phase A done: {n_fields} field channels (aff x{n_fields - 2} + sem + raw) blended over {padded_fine_shape} fine-grid voxels.")
 
     full_path = out_dir / f"{vol_path.stem}_pred_label_native_full.h5"
@@ -1006,6 +1046,14 @@ def _parse_args() -> argparse.Namespace:
              "blended-logits HDF5 cache instead of deleting it after Phase B.",
     )
     p.add_argument(
+        "--reuse-blend-cache", action="store_true",
+        help="If a compatible <vol>_blend_acc.h5 already exists in --out-dir "
+             "(e.g. left over from a crashed run that got through Phase A), "
+             "skip Phase A and reuse it instead of recomputing from scratch. "
+             "Falls back to recomputing (with a warning) if missing/"
+             "incompatible -- safe to always pass.",
+    )
+    p.add_argument(
         "--blend-batch-size", type=int, default=4,
         help="Number of Phase A windows forwarded through the network in a "
              "single batch, to keep the GPU busy instead of running one "
@@ -1096,6 +1144,7 @@ def main() -> None:
         gpu_ids=args.gpu_ids,
         workers_per_gpu=args.workers_per_gpu,
         save_fine_grid=args.save_fine_grid,
+        reuse_blend_cache=args.reuse_blend_cache,
         device=args.device,
         sem_threshold=args.sem_threshold,
         dry_run=args.dry_run,
