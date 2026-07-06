@@ -353,7 +353,26 @@ class LazyVolDataset(Dataset):
             label_key = None
             if seg_name:
                 label_path = _find_file(vol_root, seg_name)
-                if label_path is not None and label_path.suffix.lower() in (".h5", ".hdf5"):
+                if label_path is None:
+                    # A volume with ``seg`` configured is expected to be a
+                    # LABELED (sft) volume -- if the segmentation file can't
+                    # be found on disk, silently falling back to "label-less"
+                    # would make this volume masquerade as unlabeled while
+                    # the caller's transform pipeline (chosen by task, e.g.
+                    # Joint3DDataModule's sft branch) still requires "label",
+                    # crashing deep in a DataLoader worker with a cryptic
+                    # "Key `label` ... was missing" error instead of a clear
+                    # message here. Skip the volume entirely instead, same as
+                    # a missing image file above.
+                    logger.warning(
+                        "Volume segmentation not found: %s in %s "
+                        "(configured via 'seg' for image %s) -- skipping "
+                        "this volume entirely rather than silently treating "
+                        "it as label-less.",
+                        seg_name, vol_root, vol_name,
+                    )
+                    continue
+                if label_path.suffix.lower() in (".h5", ".hdf5"):
                     label_key = _resolve_hdf5_key(label_path)
 
             handle = _VolumeHandle(

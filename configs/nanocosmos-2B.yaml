@@ -419,7 +419,7 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
       - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
-        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z1750_v1300_segmentation
+        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
       # --- FlyWire FAFB v783 40x8x8 (8 nm EM, upsampled m783 seg), 10 train ---
