@@ -161,11 +161,14 @@ class Joint3DImageLogger(ImageLogger):
         # Per-sample display depth for the sft panels: the z-slice with the most
         # semantic foreground (as a RELATIVE depth in [0, 1]).  The fixed central
         # slice can be empty / fully eroded on sparse or thin-structure crops
-        # (e.g. MICrONS neurites) even when the 3-D target is non-empty, showing
-        # up as a misleading all-black true/sem panel.  A relative depth maps
-        # correctly onto BOTH the fine-grid recon panels and the coarser
-        # native-grid seg panels, so all panels display the same physical slice.
-        # ssl carries no seg target -> None (keep the central slice).
+        # (e.g. MICrONS neurites, or a single near-solid instance) even when the
+        # 3-D target is non-empty, showing up as a misleading all-black true/sem
+        # panel.  _best_depth_frac falls back PER SAMPLE from sem_label to the
+        # pristine label whenever a given sample's sem_label is empty on every
+        # slice, rather than picking an arbitrary (usually also-empty) slice.
+        # A relative depth maps correctly onto BOTH the fine-grid recon panels
+        # and the coarser native-grid seg panels, so all panels display the
+        # same physical slice. ssl carries no seg target -> None (central slice).
         frac_z = (
             self._best_depth_frac(batch, pl_module, n) if task == "sft" else None
         )
@@ -225,29 +228,51 @@ class Joint3DImageLogger(ImageLogger):
                 tb, ctx, pl_module, head, batch, n, target_hw, frac_z=frac_z,
             )
 
-    def _best_depth_frac(self, batch, pl_module, n):
-        """Per-sample relative depth (``[0, 1]``) of the z-slice with the most
-        semantic foreground, used to slice-pick the sft panels.
-
-        Prefers the eroded ``sem_label`` (the actual sem target); falls back to
-        the instance ``label``.  Returns ``None`` (=> central slice) when no
-        usable target is present or every slice is empty.
-        """
-        seg = batch.get("sem_label")
-        if seg is None:
-            seg = batch.get("label")
-        if seg is None:
+    def _per_z_foreground(self, batch, key, pl_module, n):
+        """``[n, D]`` per-z foreground voxel counts for ``batch[key]``, or
+        ``None`` if the key is absent / not a 3-D volume tensor."""
+        t = batch.get(key)
+        if t is None:
             return None
-        s = seg.to(pl_module.device)
+        s = t.to(pl_module.device)
         if s.dim() == self.spatial_dims + 2:      # [B,1,D,H,W] -> [B,D,H,W]
             s = rearrange(s, "b 1 ... -> b ...")
         if s.dim() != self.spatial_dims + 1:      # expect [B,D,H,W]
             return None
         fg = (s[:n] > 0).float()
-        depth = fg.shape[1]
-        if depth <= 1:
+        if fg.shape[1] <= 1:
             return None
-        per_z = fg.flatten(2).sum(-1)             # [n, D]
+        return fg.flatten(2).sum(-1)              # [n, D]
+
+    def _best_depth_frac(self, batch, pl_module, n):
+        """Per-sample relative depth (``[0, 1]``) of the z-slice with the most
+        semantic foreground, used to slice-pick the sft panels.
+
+        Prefers the eroded ``sem_label`` (the actual sem target) per sample,
+        but falls back to the instance ``label`` **per sample** (not just when
+        the key is entirely absent) whenever ``sem_label`` has zero foreground
+        on every slice for that particular sample -- e.g. a thin/sheet-like
+        single instance whose boundary erosion wipes out most cross-sections.
+        Without this, ``argmax`` over an all-zero row silently picks index 0,
+        an arbitrary slice that is usually empty for `true/sem` even though
+        the (pristine) label clearly has content nearby -- the "still black
+        semantic on a single-instance crop" symptom. Returns ``None`` (=>
+        central slice) when no usable target is present or every slice is
+        empty for every sample.
+        """
+        per_z_sem = self._per_z_foreground(batch, "sem_label", pl_module, n)
+        per_z_label = self._per_z_foreground(batch, "label", pl_module, n)
+        per_z = per_z_sem if per_z_sem is not None else per_z_label
+        if per_z is None:
+            return None
+        depth = per_z.shape[1]
+
+        if per_z_sem is not None and per_z_label is not None:
+            empty = ~torch.any(per_z_sem > 0, dim=1)
+            if bool(empty.any()):
+                per_z = per_z.clone()
+                per_z[empty] = per_z_label[empty]
+
         if not torch.any(per_z > 0):
             return None                           # empty target -> central slice
         return per_z.argmax(dim=1).float() / (depth - 1)
