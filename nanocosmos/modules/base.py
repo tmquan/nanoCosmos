@@ -508,6 +508,8 @@ class BaseCircuitModule(pl.LightningModule):
             f"{prefix}/sem/metric/dice",
             f"{prefix}/ins/metric/ari",
         }
+        loss_key = f"{prefix}/loss"
+        loss_logged = False
         for i, name in enumerate(names):
             if counts[i] > 0:
                 avg = (sums[i] / counts[i]).item()
@@ -525,6 +527,38 @@ class BaseCircuitModule(pl.LightningModule):
                     sync_dist=False,
                     rank_zero_only=False,
                 )
+                if name == loss_key:
+                    loss_logged = True
+
+        # Safety net: if EVERY accumulated batch for the total loss had
+        # count 0 this epoch (e.g. every validation crop hit the CUDA-OOM
+        # guard above, or the round-robin sampler/crop-quality gates produced
+        # zero usable batches for this epoch's groups), ``loss_key`` is never
+        # logged by the loop above.  ``ModelCheckpoint``/``EarlyStopping``
+        # monitor this exact key and raise a hard, run-ending
+        # ``MisconfigurationException`` ("could not find the monitored key")
+        # if it's absent from ``callback_metrics`` -- killing the whole
+        # (D)DP job over what should be a recoverable bad epoch.  Log NaN as
+        # a fallback so the run survives; NaN compares as "never better" in
+        # ModelCheckpoint's min/max logic, so a degenerate epoch can never be
+        # silently selected as the best checkpoint.
+        if not loss_logged and loss_key in self._eval_accum:
+            if self.trainer.is_global_zero:
+                warnings.warn(
+                    f"{stage} epoch logged ZERO usable batches for '{loss_key}' "
+                    "(every batch likely hit the CUDA-OOM guard, or the "
+                    "dataloader/crop-quality gates produced no batches this "
+                    "epoch). Logging NaN as a safety net so ModelCheckpoint "
+                    "doesn't crash the run -- this epoch's checkpoint will "
+                    "never be selected as 'best'. If this recurs, lower "
+                    "data.val_batch_size / patch_size, or check for empty "
+                    "groups in the datamodule logs.",
+                    stacklevel=2,
+                )
+            self.log(
+                loss_key, float("nan"),
+                prog_bar=True, sync_dist=False, rank_zero_only=False,
+            )
 
         self._eval_accum.clear()
 
