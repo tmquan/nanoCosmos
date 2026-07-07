@@ -1,39 +1,45 @@
-"""Reduce a larger Cosmos 3 ``Cosmos3OmniTransformer`` to a smaller tier.
+"""Warm-start a Cosmos 3 ``Cosmos3OmniTransformer`` from a larger tier.
 
-Cosmos3-Edge (4B total / 2B dense generator tower) is **announced but not yet
-released** on HuggingFace.  Until the official weights ship, we approximate it
-by *reducing* the released Cosmos3-Nano (8B dense tower) generator down to the
-Edge geometry reported in the Cosmos 3 technical report (arXiv 2606.02800):
+Two related operations, both structured-pruning **warm starts** (not a
+trained model), sharing the same depth-remap + width-truncation machinery:
 
-    tier   hidden  layers  heads  kv  head_dim  intermediate
-    Nano     4096      36     32   8       128         12288
-    Edge     2048      28     16   8       128          6144   (paper)
+* :func:`reduce_omni_transformer` -- build an ENTIRE smaller tier
+  (e.g. Edge) from a larger parent (e.g. Nano): every child parameter is
+  either truncation-copied from the (depth-remapped) parent or left at
+  fresh init.
+* :func:`fill_missing_from_parent` -- given a child model that is MOSTLY
+  already correctly loaded (e.g. from its own native pretrained checkpoint),
+  fill in ONLY a specific list of missing parameters from a parent tier,
+  leaving every other already-loaded parameter untouched. Used by
+  Cosmos3-Edge to source a small subset of parameters its own released
+  checkpoint doesn't have (a diffusers/checkpoint architecture gap -- see
+  the "WHY SOME WEIGHTS ARE MISSING" note in
+  ``nanocosmos/models/cosmos_3_edge/variants.py``) from Nano's
+  corresponding (larger) tensors, rather than leaving them at fresh init.
 
-The reduction is a structured-pruning **warm start**, not a trained Edge model:
+Depth remap (both operations): keep an evenly-spaced subset of the parent's
+decoder blocks (preserves coverage from shallow to deep features) --
+child block ``j`` <- parent block ``round(j * (P-1) / (C-1))``.
 
-* **Depth** (36 -> 28 layers): keep an evenly-spaced subset of the parent's
-  decoder blocks (preserves coverage from shallow to deep features).
-* **Width** (every weight matrix): copy the top-left sub-block of the parent
-  tensor into the child (truncate each dimension).  Because attention heads are
-  contiguous ``head_dim``-sized row blocks, truncating the first
-  ``num_heads * head_dim`` rows of ``q_proj`` / ``o_proj`` keeps the first
-  ``num_heads`` heads intact; ``num_key_value_heads`` is unchanged (8 across all
-  tiers), so ``k_proj`` / ``v_proj`` only lose input columns.
-
-The parent's Wan2.2 VAE is identical across tiers and is reused unchanged by
-the caller (only the transformer is reduced here).
+Width truncation (both operations): copy the top-left sub-block of the
+parent tensor into the child (truncate each dimension). Because attention
+heads are contiguous ``head_dim``-sized row blocks, truncating the first
+``num_heads * head_dim`` rows of ``q_proj`` / ``o_proj`` keeps the first
+``num_heads`` heads intact; when ``num_key_value_heads`` is unchanged across
+tiers (8, for Nano/Edge/Super), ``k_proj`` / ``v_proj`` only lose input
+columns.
 
 This is deliberately generic (shape-driven) so it does not hard-code the omni
 transformer's exact module names: any child parameter whose name maps onto an
 existing parent parameter (after remapping the block index) and whose every
-dimension is ``<=`` the parent's is copied by truncation; everything else keeps
-the child's fresh initialisation.
+dimension is ``<=`` the parent's is copied by truncation; everything else
+(for :func:`reduce_omni_transformer`) keeps the child's fresh initialisation.
 """
 
 import logging
 import re
 import warnings
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import torch
 
@@ -89,6 +95,41 @@ def _truncate_to(src: torch.Tensor, shape: torch.Size) -> Optional[torch.Tensor]
     return src[idx].contiguous().clone()
 
 
+def _build_layer_map(parent_layers: int, child_layers: int) -> Dict[int, int]:
+    """Evenly-spaced depth map: child block j <- parent block round(j*(P-1)/(C-1))."""
+    if child_layers >= parent_layers:
+        return {j: j for j in range(child_layers)}
+    if child_layers == 1:
+        return {0: 0}
+    return {
+        j: int(round(j * (parent_layers - 1) / (child_layers - 1)))
+        for j in range(child_layers)
+    }
+
+
+def _make_remap_key_fn(
+    child: torch.nn.Module, parent: torch.nn.Module, layer_map: Dict[int, int],
+) -> Callable[[str], Optional[str]]:
+    """Build a ``child_key -> parent_key`` remapper using ``layer_map`` for
+    the block-container attribute (``transformer_blocks`` / ``blocks`` /
+    ``layers``) present on either model. Non-block params map unchanged."""
+    attr = _block_container_attr(child) or _block_container_attr(parent) or "transformer_blocks"
+    block_pat = re.compile(rf"(?:^|\.){re.escape(attr)}\.(\d+)\.")
+
+    def _remap_key(child_key: str) -> Optional[str]:
+        m = block_pat.search(child_key)
+        if m is None:
+            return child_key  # non-block param: same name
+        child_idx = int(m.group(1))
+        parent_idx = layer_map.get(child_idx)
+        if parent_idx is None:
+            return None
+        start, end = m.span(1)
+        return child_key[:start] + str(parent_idx) + child_key[end:]
+
+    return _remap_key
+
+
 def reduce_omni_transformer(
     parent: torch.nn.Module,
     child_geometry: Dict[str, int],
@@ -142,30 +183,8 @@ def reduce_omni_transformer(
     if ref_param is not None:
         child = child.to(device=ref_param.device, dtype=ref_param.dtype)
 
-    # Evenly-spaced depth map: child block j <- parent block round(j*(P-1)/(C-1)).
-    if child_layers >= parent_layers:
-        layer_map = {j: j for j in range(child_layers)}
-    elif child_layers == 1:
-        layer_map = {0: 0}
-    else:
-        layer_map = {
-            j: int(round(j * (parent_layers - 1) / (child_layers - 1)))
-            for j in range(child_layers)
-        }
-
-    attr = _block_container_attr(child) or _block_container_attr(parent) or "transformer_blocks"
-    block_pat = re.compile(rf"(?:^|\.){re.escape(attr)}\.(\d+)\.")
-
-    def _remap_key(child_key: str) -> Optional[str]:
-        m = block_pat.search(child_key)
-        if m is None:
-            return child_key  # non-block param: same name
-        child_idx = int(m.group(1))
-        parent_idx = layer_map.get(child_idx)
-        if parent_idx is None:
-            return None
-        start, end = m.span(1)
-        return child_key[:start] + str(parent_idx) + child_key[end:]
+    layer_map = _build_layer_map(parent_layers, child_layers)
+    _remap_key = _make_remap_key_fn(child, parent, layer_map)
 
     parent_sd = parent.state_dict()
     child_sd = child.state_dict()
@@ -206,4 +225,86 @@ def reduce_omni_transformer(
     return child
 
 
-__all__ = ["reduce_omni_transformer"]
+def fill_missing_from_parent(
+    child: torch.nn.Module,
+    parent: torch.nn.Module,
+    missing_keys: Sequence[str],
+) -> Dict[str, Any]:
+    """Fill ONLY ``missing_keys`` in ``child`` by truncation-copying the
+    corresponding (depth-remapped) tensor from ``parent``.
+
+    Unlike :func:`reduce_omni_transformer` (which rebuilds and warm-starts
+    the WHOLE child model from the parent), this targets a specific,
+    caller-supplied list of parameter names -- typically the
+    ``missing_keys`` a diffusers ``from_pretrained(...,
+    output_loading_info=True)`` call reports for the child's OWN native
+    checkpoint -- and leaves every other (already correctly loaded) child
+    parameter completely untouched.
+
+    Args:
+        child: The already-built, already-(mostly)-loaded model whose
+            ``missing_keys`` parameters are still at fresh init.
+        parent: A loaded (pretrained) model of the SAME architecture family
+            at a larger (or equal) geometry (e.g. Nano for Edge). Only used
+            as a tensor source; not modified.
+        missing_keys: Parameter names (``child.state_dict()`` keys) to fill.
+            Keys not found in the remapped parent, or whose shape doesn't
+            truncate cleanly (child dim > parent dim), are left untouched
+            and reported under ``"skipped"``.
+
+    Returns:
+        ``{"filled": [...], "skipped": [...], "n_filled": int, "n_skipped": int}``.
+    """
+    parent_cfg: Dict[str, Any] = dict(parent.config)
+    child_cfg: Dict[str, Any] = dict(child.config)
+    parent_layers = _resolve_num_layers(parent_cfg)
+    child_layers = _resolve_num_layers(child_cfg)
+    if parent_layers is None or child_layers is None:
+        raise ValueError(
+            "fill_missing_from_parent: could not resolve layer count from "
+            f"the omni config (tried {_LAYER_KEY_ALIASES}).",
+        )
+
+    layer_map = _build_layer_map(parent_layers, child_layers)
+    _remap_key = _make_remap_key_fn(child, parent, layer_map)
+
+    parent_sd = parent.state_dict()
+    child_params: Dict[str, torch.Tensor] = dict(child.named_parameters())
+    child_buffers: Dict[str, torch.Tensor] = dict(child.named_buffers())
+
+    filled, skipped = [], []
+    for ckey in missing_keys:
+        target = child_params.get(ckey, child_buffers.get(ckey))
+        if target is None:
+            skipped.append(ckey)  # not an actual child param/buffer name
+            continue
+        pkey = _remap_key(ckey)
+        if pkey is None or pkey not in parent_sd:
+            skipped.append(ckey)
+            continue
+        sliced = _truncate_to(parent_sd[pkey], target.shape)
+        if sliced is None:
+            skipped.append(ckey)
+            continue
+        with torch.no_grad():
+            target.data.copy_(sliced.to(dtype=target.dtype, device=target.device))
+        filled.append(ckey)
+
+    logger.info(
+        "fill_missing_from_parent: filled %d/%d missing param(s) from parent "
+        "(%d->%d layers, depth-remapped); %d could not be filled (skipped).",
+        len(filled), len(missing_keys), parent_layers, child_layers, len(skipped),
+    )
+    if skipped:
+        logger.warning(
+            "fill_missing_from_parent: left %d param(s) at fresh init "
+            "(no matching/compatible parent tensor): %s",
+            len(skipped), skipped[:10],
+        )
+    return {
+        "filled": filled, "skipped": skipped,
+        "n_filled": len(filled), "n_skipped": len(skipped),
+    }
+
+
+__all__ = ["reduce_omni_transformer", "fill_missing_from_parent"]

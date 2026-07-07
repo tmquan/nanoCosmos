@@ -32,6 +32,7 @@ reconstruct the shape.  Only BF16 is officially supported by Cosmos 3.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 from nanocosmos.models.cosmos_2_5_common.variants import _VariantConfigBase
 
@@ -57,12 +58,24 @@ class _VariantConfig(_VariantConfigBase):
     intermediate_size: int = 12288
     # Mixture-of-Transformers routing (``use_moe`` in the config).
     use_moe: bool = True
-    # Edge-only: when True the published ``hf_repo_id`` is a *parent* tier
-    # (Nano) whose loaded ``Cosmos3OmniTransformer`` is reduced (depth + width
-    # truncation, weights partially copied) to THIS variant's geometry, while
-    # the parent's Wan2.2 VAE is reused unchanged.  See
-    # :mod:`nanocosmos.models.cosmos_3_common.reduce`.
+    # Edge-only (legacy path, kept for standalone-from-scratch comparisons):
+    # when True the published ``hf_repo_id`` is a *parent* tier (Nano) whose
+    # loaded ``Cosmos3OmniTransformer`` is reduced in FULL (depth + width
+    # truncation, every weight either copied or fresh) to THIS variant's
+    # geometry, while the parent's Wan2.2 VAE is reused unchanged.  See
+    # :func:`nanocosmos.models.cosmos_3_common.reduce.reduce_omni_transformer`.
     reduce_from_parent: bool = False
+    # When ``hf_repo_id`` is this variant's OWN native checkpoint (the normal
+    # case), some released checkpoints are missing a handful of parameters
+    # the installed diffusers class always instantiates (a checkpoint /
+    # library architecture gap -- see Edge's variants.py docstring).  If set,
+    # any such ``missing_keys`` reported by the direct load are filled by
+    # truncation-copying the depth-remapped tensor from THIS parent tier's
+    # checkpoint, instead of being left at fresh init.  ``None`` disables
+    # this fill (missing keys stay at fresh init).  See
+    # :func:`nanocosmos.models.cosmos_3_common.reduce.fill_missing_from_parent`.
+    fill_missing_parent_repo_id: Optional[str] = None
+    fill_missing_parent_revision: str = "main"
 
 
 __all__ = ["_VariantConfig"]

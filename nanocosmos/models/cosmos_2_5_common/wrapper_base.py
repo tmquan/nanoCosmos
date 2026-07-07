@@ -323,11 +323,16 @@ class _BaseCosmos25Wrapper(nn.Module):
         local_path: Any,
         cache_dir: Optional[str],
         hf_token: Optional[str],
+        dit_loading_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Subclass hook called after a successful diffusers DiT+VAE load.
 
-        Cosmos-Transfer overrides this to load its ControlNet branch
-        from a sibling revision of the same HF repo.
+        ``dit_loading_info`` is the ``diffusers`` ``from_pretrained(...,
+        output_loading_info=True)`` report for ``self.dit`` (keys:
+        ``missing_keys`` / ``unexpected_keys`` / ``mismatched_keys`` /
+        ``error_msgs``) -- e.g. Cosmos3-Edge uses ``missing_keys`` to
+        detect checkpoint/architecture gaps and fill them from a parent
+        tier by truncation (see :mod:`nanocosmos.models.cosmos_3_edge`).
         """
         return
 
@@ -574,11 +579,20 @@ class _BaseCosmos25Wrapper(nn.Module):
             return False
 
         try:
-            transformer = _TransformerClass.from_pretrained(
+            transformer, dit_loading_info = _TransformerClass.from_pretrained(
                 str(local_path),
                 subfolder="transformer",
                 torch_dtype=self._dtype,
+                output_loading_info=True,
             )
+            if dit_loading_info.get("missing_keys"):
+                logger.warning(
+                    "%d param(s) missing from the %s checkpoint at %s "
+                    "(left at fresh init unless a subclass hook fills "
+                    "them -- see _post_load_diffusers): %s",
+                    len(dit_loading_info["missing_keys"]), transformer_cls_name,
+                    self.cfg.hf_repo_id, dit_loading_info["missing_keys"][:5],
+                )
             vae = _VAEClass.from_pretrained(
                 str(local_path),
                 subfolder="vae",
@@ -608,10 +622,10 @@ class _BaseCosmos25Wrapper(nn.Module):
             logger.warning("diffusers load from local snapshot failed: %s", exc)
             return False
 
-        # Subclass hook -- Cosmos-Transfer uses this to load the
-        # ControlNet residual branch from a sibling revision of the
-        # same HF repo.  Predict is a no-op here.
-        self._post_load_diffusers(local_path, cache_dir, hf_token)
+        # Subclass hook -- e.g. Cosmos3-Edge uses ``dit_loading_info`` to
+        # fill any checkpoint/architecture gaps from a parent tier.
+        # Predict is a no-op here.
+        self._post_load_diffusers(local_path, cache_dir, hf_token, dit_loading_info)
         return True
 
     def _try_load_cosmos_package(
