@@ -1,30 +1,14 @@
 # =====================================================================
-# nanocosmos-4B.yaml  --  resolution-ladder super-resolution + segmentation
+# nanocosmos-2B.yaml  --  resolution-ladder super-resolution + segmentation
 # =====================================================================
-# The 4B sibling of nanocosmos-16B.yaml: IDENTICAL joint recipe / data / loss /
-# training, swapped to the Cosmos3-Edge (4B) backbone instead of Cosmos3-Nano
-# (16B).  Cosmos3-Edge is NVIDIA's on-device tier (Jetson) and is ANNOUNCED BUT
-# NOT YET RELEASED on HuggingFace (Cosmos 3 technical report, arXiv 2606.02800),
-# so we approximate it by REDUCING the released Cosmos3-Nano:
-#
-#   * model.type = joint3d_edge -> JointEdge3DModule (Cosmos3EdgeWrapper).
-#   * variant = EDGE: hidden 2048 / 28 layers / 16 heads / 8 kv / head_dim 128 /
-#     intermediate 6144 (paper geometry; FFN width inferred at the family's MLP
-#     ratio 3.0).  ~2B dense generator tower (4B total counting both MoT towers).
-#   * pretrained = true -> download Cosmos3-Nano, then Cosmos3EdgeWrapper reduces
-#     the loaded Nano omni transformer to the Edge geometry (evenly-spaced depth
-#     36->28 + per-matrix top-left truncation, weights partially copied) and
-#     reuses Nano's Wan2.2-TI2V VAE UNCHANGED.  Set pretrained=false to skip the
-#     warm start and train the Edge geometry from scratch (standalone DiT +
-#     learned conv tokenizer, no Wan2.2 VAE).
-#
-# The VAE is the SAME Wan2.2-TI2V VAE as Nano (16x spatial / 4x temporal, z=48),
-# so the fine grid, token grid, data ladder and loss are identical to the 16B
-# config.  The ~8x smaller backbone usually fits a larger batch -- bump it if
-# memory allows.
+# The 2B sibling of nanocosmos-16B.yaml: identical joint recipe / data /
+# loss, but the backbone is the Cosmos-Predict 2.5 (2B) DiT instead of the
+# Cosmos-3 Nano (16B).  The 2B VAE compresses 8x in xy (vs Nano's 16x), so
+# membranes are sharper but the DiT token grid is ~4x larger; the model is
+# ~8x smaller in params, so it usually fits with a comparable batch.
 #
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
-# ONE Cosmos3-Edge backbone predicts on a fixed FINE grid (4 nm, 200x256x256) a
+# ONE Cosmos-Predict 2.5 (2B) backbone predicts on a fixed FINE grid (4 nm, 200x256x256) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
 # down to wherever its ground truth lives (factor read from the GT shape).
@@ -37,8 +21,8 @@
 #          padded + MitoEM2 (image-only mito EM).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
-#          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.
-#
+#          CREMI(40,4) / MICrONS(40,8) / FlyWire FAFB(40,8).  A labeled small-voxel
+#          rung (FIB) does BOTH.
 # Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
 # Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
 # RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
@@ -63,10 +47,10 @@ data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 400 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
-  # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
-  # the DiT token grid is (50, 16, 16) = 12,800 tokens.  Lighter than the 16B on
-  # the ~2B Edge backbone -- pair with gradient checkpointing; you can usually
-  # raise the batch.  Drop the patch (e.g. 400x256x256) if it OOMs.
+  # super-resolution axis).  Cosmos-Predict 2.5 Wan VAE compresses 4x in z, 8x in
+  # xy, so the DiT token grid is (50, 32, 32) = 51,256 tokens (~4x the 16B's 16x-xy
+  # grid).  The 2B backbone is ~8x smaller in params; drop the patch
+  # (e.g. 160x256x256) if it OOMs.
   patch_size: [400, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -74,16 +58,27 @@ data:
   num_workers: 8
   pin_memory: true
   persistent_workers: true
-  prefetch_factor: 8
+  prefetch_factor: 4
   find_boundaries: 1.0
   boundary_target: semantic
   # sft crop gate: require BOTH the labeled-foreground fraction AND the non-zero
   # EM fraction >= this value, so background-heavy / unlabeled crops and
   # zero-padded EM are rejected (best-seen crop kept after max retries).
-  sft_min_foreground: 0.8
+  sft_min_foreground: 0.7
+  # Instance-diversity gate: sft_min_foreground only checks the label's NON-ZERO
+  # fraction, so a crop entirely filled by ONE giant instance (e.g. a single
+  # MICrONS dendrite trunk spanning the whole patch) passes trivially yet gives
+  # AffinityFGLoss no inter-instance "push" signal -- only "pull". Audited Jul
+  # 2026: 10/12 MICrONS crops had at least one all-single-instance patch in 20
+  # random probes despite healthy median instance counts (31-48).  Require >=2
+  # distinct instances per crop (median counts are 20-125, so retries are cheap)
+  # and cap the largest instance at 90% of foreground as a secondary net.
+  # 0 = disabled.
+  sft_min_instances: 2
+  sft_max_inst_frac: 0.9
   # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
   # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
-  ssl_min_foreground: 0.8
+  ssl_min_foreground: 0.7
   # Contrast gate: reject flat, structureless ssl crops (e.g. resin / embedding
   # medium around a COSEM cell) whose normalised intensity std is below this
   # value.  The non-zero gate above cannot catch these (resin is a non-zero
@@ -91,12 +86,14 @@ data:
   # scale.  Tune up if low-content crops still appear, down if the foreground
   # retry budget is exhausted (best-seen fallback warns in the log).  0 = off.
   ssl_min_std: 0.05
-  # Structure gate (lag-1 spatial autocorrelation on the per-volume [0,1]
-  # scale): reject NOISE-dominated ssl crops that the variance gate cannot
-  # catch (random grain has high std but ~0 autocorrelation). This is what
-  # rejects the confirmed pure-noise MitoEM2 volumes (jurkat_train02 /
-  # macro_train02, autocorr ~0) still listed below, matching nanocosmos-2B.
-  # Real ultrastructure sits at ~0.6-0.8; 0.5 separates cleanly. 0 = off.
+  # Structure gate: reject NOISE-dominated ssl crops (detector / resin grain,
+  # e.g. COSEM regions of embedding medium around the cell).  The variance gate
+  # above CANNOT catch these -- random grain has high local std, so it passes
+  # ssl_min_std with content_frac 1.0.  This is the lag-1 spatial
+  # autocorrelation on the per-volume [0,1] scale: real ultrastructure is
+  # spatially coherent (~0.6-0.8), white noise ~0.  Calibrated on jrc_hela-3
+  # crops: noise crops sit at ~0.25, structured crops at ~0.7, so 0.5 cleanly
+  # separates.  Tune down if the foreground-retry budget is exhausted.  0 = off.
   ssl_min_autocorr: 0.5
   # Round-robin grouping/scheduling unit: each batch is drawn from one group.
   #   "resolution" -- one group per (task, native_resolution); within a group
@@ -144,16 +141,26 @@ data:
       # OpenOrganelle volumes here to scale SSL toward petascale.
       volumes:
       # --- COSEM ~4 nm small voxel (exact z per volume), all tiles ---
-      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
+      # jrc_hela-3 x0_y0_z0 / x0_y0_z8192 REMOVED: audited as mostly embedding
+      # RESIN (median lag-1 autocorr ~0.26-0.27 -- ~white noise) around the
+      # HeLa cell edge; passed the old ssl_min_std gate trivially (noise has
+      # high local variance) but fails ssl_min_autocorr.  Replaced with 2
+      # verified-structured tiles found via scripts/collect_meaningful_crops.py
+      # (probe-and-rank against the SAME content_frac + autocorr gates); see
+      # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
+      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z2048_volume   # autocorr 0.72
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z8192_volume
+      - vol: jrc_hela-3_4x4x3.24nm_x6144_y0_z2048_volume   # autocorr 0.63
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
       - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z0_volume
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
       - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
+        root: data/COSEM3D
+        native_resolution: [3.24, 4, 4]
+      - vol: jrc_hela-3_4x4x3.24nm_x2048_y0_z4096_volume   # autocorr 0.75
         root: data/COSEM3D
         native_resolution: [3.24, 4, 4]
       - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
@@ -191,7 +198,11 @@ data:
       - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume
+      # x20000_y20000_z20000 REMOVED: audited autocorr ~0.45 (borderline
+      # low vs the ~0.85-0.95 the rest of this bucket shows). Replaced with a
+      # verified-structured tile (autocorr 0.94) found via
+      # scripts/collect_meaningful_crops.py.
+      - vol: flyem3d_malecns_8nm_ssl_x18000_y18000_z30000_volume   # autocorr 0.94
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
       - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
@@ -200,14 +211,21 @@ data:
       - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      # --- CREMI 40x4x4 padded test volumes, IMAGE-ONLY (no public labels) ---
-      - vol: cremi3d_sample_A+_volume
+      # --- CREMI 40x4x4 PADDED test volumes, IMAGE-ONLY (no public labels) ---
+      # Switched Jul 2026 from the CROPPED (151 MB, 125x1250x1250) test
+      # download to the official PADDED (1.46 GB, 200x3072x3072) download --
+      # same tissue, ~4x more context/voxels per sample, so more free SSL
+      # signal from the exact same three challenge test volumes. Verified by
+      # exact full-volume array match: the cropped volume sits at native-voxel
+      # offset (z=37, y=911, x=911) inside the padded one, identically for all
+      # three samples -- see doc/DATASETS.md#cremi-padded-vs-cropped-test-volumes.
+      - vol: cremi3d_sample_A+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      - vol: cremi3d_sample_B+_volume
+      - vol: cremi3d_sample_B+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      - vol: cremi3d_sample_C+_volume
+      - vol: cremi3d_sample_C+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
       # --- SNEMI3D AC3 test volume, IMAGE-ONLY (labels never publicly released) ---
@@ -215,6 +233,12 @@ data:
         root: data/SNEMI3D
         native_resolution: [30, 6, 6]
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
+      # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683);
+      # see doc/DATASETS.md#mitoem2-refresh-from-zenodo-v6-jul-2026.
+      # NOTE: Dataset001_ME2-Beta's NIfTI headers ship voxel spacing (1,1,1)
+      # (an upstream metadata bug -- Jurkat/Macro/Podo/Sperm/Mossy/Pyra headers
+      # are correct); native_resolution below is the metadata.csv-documented
+      # 16 nm, NOT what convert_mitoem2.py would auto-derive from the header.
       # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
       - vol: mitoem2_beta_train01_volume
         root: data/MitoEM2
@@ -228,12 +252,26 @@ data:
       - vol: mitoem2_beta_train04_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_jurkat_train02_volume
+      # jurkat_train01 / macro_train01 RESTORED: an older doc note said these
+      # were "removed as empty", but audited fresh against the current
+      # release they are genuine, good EM (autocorr 0.79 / 0.59) -- whatever
+      # was wrong with them upstream previously appears to have been fixed.
+      - vol: mitoem2_jurkat_train01_volume   # autocorr 0.79
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_macro_train02_volume
+      - vol: mitoem2_macro_train01_volume   # autocorr 0.59
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+      # mitoem2_jurkat_train02 / mitoem2_macro_train02 REMOVED: audited as pure
+      # uniform random noise (min=0, max=255, all 256 values present, std~73.9 =
+      # theoretical max). CONFIRMED PERSISTENT in the fresh Zenodo v6 release
+      # too (re-downloaded + checksum-verified against the official
+      # checksums.txt -- these two files are the ONLY ones in the whole
+      # release that FAIL verification) -- a genuine upstream MitoEM2
+      # packaging bug, not a conversion artifact. Passed the old
+      # ssl_min_std/foreground gates trivially (noise has high variance) but
+      # fails ssl_min_autocorr (~0.0 vs ~0.6-0.9 for real EM); see
+      # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
       - vol: mitoem2_podo_train01_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
@@ -307,18 +345,20 @@ data:
       - vol: mitoem2_pyra_train17_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
-      - vol: mitoem2_stem_train01_volume
-        root: data/MitoEM2
-        native_resolution: [30, 8, 8]
-      - vol: mitoem2_stem_train02_volume
-        root: data/MitoEM2
-        native_resolution: [30, 8, 8]
+      # mitoem2_stem_train01 / mitoem2_stem_train02 REMOVED: audited as
+      # consistently low-structure (25-probe autocorr: train01 max=0.49
+      # median=0.40, ZERO probes reach the 0.5 gate threshold; train02
+      # max=0.49 median=0.44, also 0/25) -- unlike the heterogeneous jrc_hela-3
+      # tiles, there is no good sub-region within these files for the per-crop
+      # ssl_min_autocorr gate to land on.  No CloudVolume source for MitoEM2
+      # (local nnU-Net conversion only), so "ignore in config" is the only fix;
+      # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
     sft:
       task: sft
-      batch_size: 2
+      batch_size: 3
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
-      # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
+      # SNEMI3D / CREMI / MICrONS / FlyWire FAFB.  Predict at 4 nm, pool the head
       # volume's native label grid, then AffinityFGLoss.
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
@@ -379,8 +419,49 @@ data:
         root: data/MICRONS
         native_resolution: [40, 8, 8]
       - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
-        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z1750_v1300_segmentation
         root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      # --- FlyWire FAFB v783 40x8x8 (8 nm EM, upsampled m783 seg), 10 train ---
+      - vol: flywire_mip1_1024x1024x256_x28000_y32000_z3000_volume        # train01
+        seg: flywire_mip1_1024x1024x256_x28000_y32000_z3000_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x32000_y40000_z3500_volume        # train02
+        seg: flywire_mip1_1024x1024x256_x32000_y40000_z3500_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x64000_y28000_z1500_volume        # train03
+        seg: flywire_mip1_1024x1024x256_x64000_y28000_z1500_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x72000_y36000_z2800_volume        # train04
+        seg: flywire_mip1_1024x1024x256_x72000_y36000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume        # train05 (richest)
+        seg: flywire_mip1_1024x1024x256_x88000_y20000_z3600_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x96000_y44000_z4000_volume        # train06
+        seg: flywire_mip1_1024x1024x256_x96000_y44000_z4000_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x52000_y32000_z2800_volume        # train07
+        seg: flywire_mip1_1024x1024x256_x52000_y32000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x60000_y44000_z3200_volume        # train08
+        seg: flywire_mip1_1024x1024x256_x60000_y44000_z3200_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x68000_y16000_z2800_volume        # train09
+        seg: flywire_mip1_1024x1024x256_x68000_y16000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+      - vol: flywire_mip1_1024x1024x256_x44000_y24000_z2400_volume        # train10
+        seg: flywire_mip1_1024x1024x256_x44000_y24000_z2400_m783_segmentation
+        root: data/FLYWIRE
         native_resolution: [40, 8, 8]
 
   val_batch_size: 2
@@ -394,15 +475,21 @@ data:
     native_resolution: [30, 6, 6]
   # --- 20% holdout of the divisible-by-5 datasets (image-only COSEM/FLYEM ->
   #     ssl recon validation) ---
-  - vol: jrc_hela-3_4x4x3.24nm_x8192_y0_z0_volume
+  # x8192_y0_z0 REMOVED: audited autocorr ~0.27 (embedding resin, ~white
+  # noise) -- reconstructing noise made this a meaningless val target.
+  # Replaced with a verified-structured tile (autocorr 0.75).
+  - vol: jrc_hela-3_4x4x3.24nm_x6144_y0_z0_volume   # autocorr 0.75
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.24, 4, 4]
-  - vol: jrc_macrophage-2_4x4x3.36nm_x7952_y0_z0_volume
+  # x7952_y0_z0 REMOVED: audited autocorr ~0.33, 44.7% of voxels outside the
+  # cached norm range (severe under-calibration on top of resin/noise).
+  # Replaced with a verified-structured tile (autocorr 0.85).
+  - vol: jrc_macrophage-2_4x4x3.36nm_x2048_y0_z4096_volume   # autocorr 0.85
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.36, 4, 4]
-  - vol: jrc_jurkat-1_4x4x3.44nm_x7952_y0_z0_volume
+  - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z2048_volume   # autocorr 0.84
     root: data/COSEM3D
     task: ssl
     native_resolution: [3.44, 4, 4]
@@ -430,8 +517,36 @@ data:
     root: data/MICRONS
     task: sft
     native_resolution: [40, 8, 8]
+  # FlyWire FAFB: 2 of 12 labeled crops (sft instance-metric validation).
+  - vol: flywire_mip1_1024x1024x256_x80000_y16000_z4500_volume        # test01
+    seg: flywire_mip1_1024x1024x256_x80000_y16000_z4500_m783_segmentation
+    root: data/FLYWIRE
+    task: sft
+    native_resolution: [40, 8, 8]
+  - vol: flywire_mip1_1024x1024x256_x104000_y24000_z5000_volume       # test02
+    seg: flywire_mip1_1024x1024x256_x104000_y24000_z5000_m783_segmentation
+    root: data/FLYWIRE
+    task: sft
+    native_resolution: [40, 8, 8]
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
+  # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683).
+  - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
   - vol: mitoem2_beta_test02_volume
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_beta_test03_volume   # NEW
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_jurkat_test01_volume   # NEW -- autocorr 0.79
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+  - vol: mitoem2_macro_test01_volume   # NEW -- autocorr 0.72
     root: data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
@@ -455,75 +570,34 @@ data:
     root: data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
-  - vol: mitoem2_stem_test01_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [30, 8, 8]
+  # mitoem2_stem_test01 REMOVED: audited autocorr median 0.45 (only 24% of
+  # probes reach the 0.5 gate threshold); consistent with both stem TRAIN
+  # volumes above being removed for the same reason -- no cloud source to
+  # replace it with, and no train counterpart left to pair it with anyway.
 
 model:
-  type: joint3d_edge     # -> JointEdge3DModule (Cosmos3-Edge 4B backbone + Joint3DReconSegLoss)
-  variant: EDGE
+  type: joint3d_2b       # -> JointPredict3DModule (Cosmos-Predict 2.5 2B backbone + Joint3DReconSegLoss)
+  variant: 2B
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64
-  dropout: 0.0
-  # true: download Cosmos3-Nano and REDUCE it to the Edge geometry (warm start,
-  # Wan2.2 VAE reused).  false: random-init the Edge DiT from scratch (standalone
-  # tokenizer, no Wan2.2 VAE) -- only do this if you intend to train the 4B
-  # backbone end-to-end from zero.
+  dropout: 0.5                 # matches the 16B recipe (was 0.5, an overfit-debug value)
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
-  # The reduced backbone is a perturbed (truncated) warm start, not a clean
-  # pretrained checkpoint, so it benefits from training sooner than Nano's
-  # 5-epoch freeze.  Keep a short head-warmup freeze, then thaw; lower to 0 to
-  # train the DiT from epoch 0.
-  freeze_dit_backbone: false
+  freeze_dit_backbone: 5
   freeze_vae_decoder: true
-  # Gradient checkpointing is now per-component: a bool (all) or a list of
-  # targets among {dit, decode, head}.  On B300 (large memory budget) we keep
-  # ONLY the mandatory per-frame VAE-`decode` checkpointing (what keeps us off
-  # OOM at the full patch) and run the DiT + head WITHOUT recompute for speed.
-  # Set to `true` to checkpoint everything (max memory saving, slower).
-  gradient_checkpointing: [dit]
-  # FP8 (Blackwell+) on the DiT's Linear layers via torchao float8 module-swap
-  # -- faster matmuls + lower DiT memory (so the DiT can run un-checkpointed
-  # above).  Decoupled from Lightning precision; conv VAE stays BF16.  Rowwise
-  # (per-row) dynamic scaling is the most accuracy-robust training recipe.
-  # FP8 disabled: on B300 (sm_10.3) / CUDA 13 / torch 2.12 the torchao
-  # rowwise _scaled_mm path SIGSEGV'd at first use, and FP8 gave no measurable
-  # speedup anyway (the DiT matmuls are NOT the bottleneck -- the conv VAE
-  # decode is, and FP8 can't accelerate conv3d).  Re-enable only after the
-  # decode bottleneck is addressed and the kernel/compat issue is resolved.
-  fp8: true
-  fp8_recipe: rowwise
-  # Residual Wan VAE decode temporal chunk size (latent frames per decoder pass
-  # after the mandatory single-frame first chunk).  The old per-frame decode
-  # (chunk=1) ran the conv3d with temporal dim 1 -> poor GPU utilisation + one
-  # kernel-launch storm per frame (the real step bottleneck, not the DiT).
-  # Decoding in chunks runs the conv3d over a real temporal axis (verified
-  # bit-identical to per-frame) -> far fewer launches and much better
-  # utilisation.  Larger = faster but more activation memory per checkpointed
-  # chunk; raise toward your spare VRAM, lower if it OOMs.
-  decode_chunk: 16
+  # MUST be true: at the epoch-5 DiT thaw the unfrozen 2B backbone adds full
+  # activations + grads + AdamW state; without checkpointing this OOMs (and it
+  # is incompatible with torch.compile, so compile below is off).
+  gradient_checkpointing: true
   vae_input_pm1: true
-  # Treat the EM depth (z) axis as NON-causal.  The Wan2.2 VAE is a causal
-  # video tokenizer (past-only temporal padding), but EM z-sections have no
-  # time direction; symmetrise the encoder latent over z by averaging the
-  # forward encode with a z-flipped encode (frozen-VAE safe, +1 VAE encode).
-  # FRESH-RUN setting: it shifts the latent distribution, so a checkpoint
-  # trained with it OFF will not resume cleanly with it ON.
-  vae_symmetrize_z: true
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
 optimizer:
-  lr: 0.0002                # Cosmos 3 generator SFT base LR (2e-4)
-  # Cosmos 3 generator SFT uses NO weight decay (the framework recipe default
-  # is 0.0); aligned here from the historical 1e-4.
-  weight_decay: 0.0
-  betas: [0.9, 0.99]        # Cosmos 3 generator recipe (beta2=0.99)
-  # bf16 AdamW epsilon: the Cosmos 3 framework recipe prefers 1e-6 over the
-  # PyTorch 1e-8 default to avoid underflow in the squared-gradient denominator.
-  eps: 1.0e-06
+  lr: 0.0002
+  weight_decay: 0.0001
+  betas: [0.9, 0.99]
   scheduler:
     type: cosine_warmup
     T_max: 101
@@ -620,12 +694,16 @@ training:
   # cannot auto-inject a DistributedSampler; the sampler + random per-item
   # patch sampling handle per-rank data spread instead.
   use_distributed_sampler: false
-  precision: bf16-true
+  precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
-  limit_train_batches: 1000
-  limit_val_batches: 200
+  # Cap the (otherwise ~52k = 6.5 x num_samples) round-robin schedule to a sane
+  # epoch length.  The shuffled schedule makes each epoch a task-weighted random
+  # subset that rotates -- raise/lower to trade epoch length for checkpoint/val
+  # frequency.
+  limit_train_batches: 500
+  limit_val_batches: 100
   check_val_every_n_epoch: 20
   num_sanity_val_steps: 2
   log_every_n_steps: 100
@@ -633,8 +711,10 @@ training:
   enable_model_summary: true
   deterministic: false
   benchmark: true
-  compile: false
-  compile_fullgraph: false
+  # Off: incompatible with gradient_checkpointing (dynamo can't trace the
+  # torch.utils.checkpoint HOP), and reduce-overhead cudagraphs fragment memory.
+  compile: false 
+  compile_fullgraph: false 
   fast_dev_run: false
   profiler: null
   resume_from_checkpoint: null
