@@ -53,13 +53,13 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 200 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # 400 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos3-Edge shares Nano's Wan2.2 VAE (4x in z, 16x
   # in xy), so the DiT token grid is (50, 16, 16) = 12,800 tokens -- IDENTICAL to
   # the 16B recipe's grid (Edge trims transformer depth/width, not the VAE/token
   # grid).  The Edge backbone has ~4x fewer params than Nano; drop the patch
   # (e.g. 160x256x256) if it OOMs.
-  patch_size: [200, 256, 256]
+  patch_size: [400, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
@@ -140,7 +140,7 @@ data:
   branches:
     ssl:
       task: ssl
-      batch_size: 1
+      batch_size: 3
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
       # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
@@ -363,7 +363,7 @@ data:
       # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
     sft:
       task: sft
-      batch_size: 1
+      batch_size: 3
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
       # SNEMI3D / CREMI / MICrONS / FlyWire FAFB.  Predict at 4 nm, pool the head
@@ -472,7 +472,7 @@ data:
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
 
-  val_batch_size: 1
+  val_batch_size: 2
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
   # SNEMI3D AC4 (labeled holdout).
@@ -710,8 +710,8 @@ training:
   # epoch length.  The shuffled schedule makes each epoch a task-weighted random
   # subset that rotates -- raise/lower to trade epoch length for checkpoint/val
   # frequency.
-  limit_train_batches: 1000
-  limit_val_batches: 200
+  limit_train_batches: 500
+  limit_val_batches: 100
   check_val_every_n_epoch: 20
   num_sanity_val_steps: 2
   log_every_n_steps: 100
