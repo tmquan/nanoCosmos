@@ -95,6 +95,60 @@ def _truncate_to(src: torch.Tensor, shape: torch.Size) -> Optional[torch.Tensor]
     return src[idx].contiguous().clone()
 
 
+def _first_real_device(model: torch.nn.Module) -> torch.device:
+    """First non-meta parameter's device, else CPU.
+
+    Used to materialise newly-filled parameters onto whatever device the
+    rest of an already-(mostly)-loaded model actually lives on, since a
+    meta parameter's own ``.device`` is ``meta`` and useless for this.
+    """
+    for p in model.parameters():
+        if not p.is_meta:
+            return p.device
+    return torch.device("cpu")
+
+
+def _replace_param_or_buffer(
+    model: torch.nn.Module, key: str, new_tensor: torch.Tensor,
+) -> bool:
+    """Replace the Parameter/buffer at ``key`` (dotted ``state_dict`` path)
+    with ``new_tensor``, IN PLACE on its owning submodule.
+
+    Unlike ``existing_tensor.data.copy_(new_tensor)``, this works even when
+    the existing tensor is on the ``meta`` device (no real storage to copy
+    into) -- e.g. ``diffusers``' ``low_cpu_mem_usage`` loading leaves any
+    parameter absent from the checkpoint as a literal meta placeholder
+    (despite logging "newly initialized"), and a plain ``.data.copy_()``
+    onto it is silently a no-op, leaving the model impossible to
+    ``.to(device)`` / ``.cpu()`` later ("Cannot copy out of meta tensor").
+
+    Returns False (no-op) if ``key`` doesn't resolve to an existing
+    parameter or buffer.
+    """
+    parts = key.split(".")
+    owner: Any = model
+    for p in parts[:-1]:
+        owner = getattr(owner, p, None)
+        if owner is None:
+            return False
+    leaf = parts[-1]
+    if leaf in owner._parameters:
+        old = owner._parameters[leaf]
+        if old is None:
+            return False
+        owner._parameters[leaf] = torch.nn.Parameter(
+            new_tensor.to(dtype=old.dtype), requires_grad=old.requires_grad,
+        )
+        return True
+    if leaf in owner._buffers:
+        old = owner._buffers[leaf]
+        if old is None:
+            return False
+        owner._buffers[leaf] = new_tensor.to(dtype=old.dtype)
+        return True
+    return False
+
+
 def _build_layer_map(parent_layers: int, child_layers: int) -> Dict[int, int]:
     """Evenly-spaced depth map: child block j <- parent block round(j*(P-1)/(C-1))."""
     if child_layers >= parent_layers:
@@ -271,6 +325,7 @@ def fill_missing_from_parent(
     parent_sd = parent.state_dict()
     child_params: Dict[str, torch.Tensor] = dict(child.named_parameters())
     child_buffers: Dict[str, torch.Tensor] = dict(child.named_buffers())
+    child_device = _first_real_device(child)
 
     filled, skipped = [], []
     for ckey in missing_keys:
@@ -286,8 +341,13 @@ def fill_missing_from_parent(
         if sliced is None:
             skipped.append(ckey)
             continue
-        with torch.no_grad():
-            target.data.copy_(sliced.to(dtype=target.dtype, device=target.device))
+        # NOTE: NOT `target.data.copy_(...)` -- `target` may be a literal
+        # meta-device placeholder (see `_replace_param_or_buffer`), so we
+        # must REPLACE the Parameter/buffer object, not write into it.
+        new_tensor = sliced.to(device=child_device)
+        if not _replace_param_or_buffer(child, ckey, new_tensor):
+            skipped.append(ckey)
+            continue
         filled.append(ckey)
 
     logger.info(
