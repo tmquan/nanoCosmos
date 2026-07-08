@@ -129,7 +129,7 @@ data:
     noise_std: 0.01
     contrast_prob: 0.5          # section-dependent gamma jitter
     contrast_gamma: [0.8, 1.25]
-    up_mode: trilinear
+    up_mode: nearest            # physically-faithful blocky z step (see RandResolutionDegraded docstring)
 
   # ---- the resolution ladder, as two task branches; the multi-task sampler
   # yields task-homogeneous batches and interleaves them round-robin
@@ -156,30 +156,38 @@ data:
       # verified-structured tiles found via scripts/collect_meaningful_crops.py
       # (probe-and-rank against the SAME content_frac + autocorr gates); see
       # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
-      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z2048_volume   # autocorr 0.72
+      # Baked to true 4 nm cubic via scripts/resample_cosem_isotropic.py (z-only
+      # trilinear, e.g. 3.24 -> 4 nm) -- see doc/RESOLUTION_LADDER.md #2.1 and the
+      # "for all <4nm, treat as ~4nm?" discussion: the datamodule already clamps
+      # the RECON TARGET resolution to max(native, 4nm) at train time, but that
+      # does NOT change the native crop READ size, so relabeling native_resolution
+      # here without actually resampling the files would silently shrink the read
+      # FOV and skip the image resample -- these are genuinely-resampled files, so
+      # native_resolution: [4,4,4] is now truthful, not a pseudo/declared value.
+      - vol: jrc_hela-3_4nm_x4096_y0_z2048_volume   # autocorr 0.72
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x6144_y0_z2048_volume   # autocorr 0.63
+        native_resolution: [4, 4, 4]
+      - vol: jrc_hela-3_4nm_x6144_y0_z2048_volume   # autocorr 0.63
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z0_volume
+        native_resolution: [4, 4, 4]
+      - vol: jrc_hela-3_4nm_x4096_y0_z0_volume
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
+        native_resolution: [4, 4, 4]
+      - vol: jrc_hela-3_4nm_x4096_y0_z4096_volume
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x2048_y0_z4096_volume   # autocorr 0.75
+        native_resolution: [4, 4, 4]
+      - vol: jrc_hela-3_4nm_x2048_y0_z4096_volume   # autocorr 0.75
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
+        native_resolution: [4, 4, 4]
+      - vol: jrc_macrophage-2_4nm_x4096_y0_z4096_volume
         root: data/COSEM3D
-        native_resolution: [3.36, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z0_volume
+        native_resolution: [4, 4, 4]
+      - vol: jrc_jurkat-1_4nm_x4096_y0_z0_volume
         root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z4096_volume
+        native_resolution: [4, 4, 4]
+      - vol: jrc_jurkat-1_4nm_x4096_y0_z4096_volume
         root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
+        native_resolution: [4, 4, 4]
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
       # 4 train crops per source (1 more held out per source in val_volumes);
       # all verified non-empty (empty corner tiles dropped).
@@ -486,21 +494,23 @@ data:
   # x8192_y0_z0 REMOVED: audited autocorr ~0.27 (embedding resin, ~white
   # noise) -- reconstructing noise made this a meaningless val target.
   # Replaced with a verified-structured tile (autocorr 0.75).
-  - vol: jrc_hela-3_4x4x3.24nm_x6144_y0_z0_volume   # autocorr 0.75
+  # Baked to true 4 nm cubic via scripts/resample_cosem_isotropic.py (see the
+  # matching note in the ssl branch above).
+  - vol: jrc_hela-3_4nm_x6144_y0_z0_volume   # autocorr 0.75
     root: data/COSEM3D
     task: ssl
-    native_resolution: [3.24, 4, 4]
+    native_resolution: [4, 4, 4]
   # x7952_y0_z0 REMOVED: audited autocorr ~0.33, 44.7% of voxels outside the
   # cached norm range (severe under-calibration on top of resin/noise).
   # Replaced with a verified-structured tile (autocorr 0.85).
-  - vol: jrc_macrophage-2_4x4x3.36nm_x2048_y0_z4096_volume   # autocorr 0.85
+  - vol: jrc_macrophage-2_4nm_x2048_y0_z4096_volume   # autocorr 0.85
     root: data/COSEM3D
     task: ssl
-    native_resolution: [3.36, 4, 4]
-  - vol: jrc_jurkat-1_4x4x3.44nm_x0_y0_z2048_volume   # autocorr 0.84
+    native_resolution: [4, 4, 4]
+  - vol: jrc_jurkat-1_4nm_x0_y0_z2048_volume   # autocorr 0.84
     root: data/COSEM3D
     task: ssl
-    native_resolution: [3.44, 4, 4]
+    native_resolution: [4, 4, 4]
   # FLYEM3D: 1 ssl holdout per source (fib25-surround / hemibrain / malecns), non-empty.
   - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
     root: data/FLYEM3D

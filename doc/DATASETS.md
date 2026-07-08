@@ -493,6 +493,34 @@ documentation note only -- the content itself is fine, just imprecisely
 normalised by a few percent, which is within the tolerance the cheap 5-probe
 cache was designed to accept.
 
+### COSEM3D baked to true 4 nm cubic (Jul 2026)
+
+All 11 in-use COSEM3D crops (8 `ssl`-branch train + 3 val holdouts across
+`jrc_hela-3` / `jrc_macrophage-2` / `jrc_jurkat-1`) were re-saved at an exact
+4 nm cubic voxel via `scripts/resample_cosem_isotropic.py` (z-only trilinear,
+e.g. `jrc_hela-3` 3.24 nm -> 4 nm, an 0.81x downsample), replacing the
+`..._4x4x{3.24,3.36,3.44}nm_..._volume.h5` filenames with
+`..._4nm_..._volume.h5`, `native_resolution: [4, 4, 4]` now truthful in
+`configs/nanocosmos-2B.yaml` / `-4B.yaml`.
+
+This is a real, on-disk resample, not just a config relabel. Per
+`doc/RESOLUTION_LADDER.md` #2.1, the joint datamodule already *clamps* the
+reconstruction-target resolution to `max(native, 4nm)` at train time (the
+model's output grid is fixed at 4nm and can't produce anything sharper
+anyway), but that clamp does NOT change the native crop **read size** used
+to determine how many voxels to pull from disk for a given physical FOV. If
+`native_resolution` were simply relabeled `[4,4,4]` in the config without
+actually resampling the underlying `.h5` files, the loader would silently
+read a smaller physical field of view (each axis shrunk by the true/declared
+ratio) AND skip the image resample entirely (shapes already match) --
+stretching that volume's physical scale relative to every correctly-labeled
+dataset with no error or warning anywhere. Baking the resample once, up
+front, on disk avoids this class of bug entirely.
+
+The original (`..._4x4x{3.24,3.36,3.44}nm_..._volume.h5`) files are left
+untouched on disk -- do not delete them if a training run may still be
+reading them by their original path.
+
 ### Labeled (sft) volume audit -- image + instance-label meaningfulness (Jul 2026)
 
 Every prior audit pass covered only the label-free `ssl` branch (the crop is

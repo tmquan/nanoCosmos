@@ -36,9 +36,20 @@ clean ``z``-decimation (the make-or-break sim-to-real concern):
    sections (acquisition dropouts; cf. :class:`RandMissingSliced`).
 4. **section-dependent noise + contrast** -- per-section Gaussian noise
    and gamma jitter (staining / detector variation).
-5. **``z`` up-sampling back to ``D``** -- trilinear, so the model sees the
-   large-voxel content on the small-voxel canvas and its job is to restore
-   the lost ``z`` detail.
+5. **``z`` up-sampling back to ``D``** -- nearest by default (physically
+   faithful: a coarse section is a single integrated measurement with no
+   information about anything smoother than the jump to the next section,
+   so nearest reproduces the genuine sharp step-transitions of a real
+   thick-section stack placed on a finer canvas; trilinear is available for
+   a softer look but invents a linear blend between sections that has no
+   physical basis and can mask the very artifact the model must invert).
+   The model sees the large-voxel content on the small-voxel canvas and its
+   job is to restore the lost ``z`` detail. NOTE: this must stay consistent
+   with :class:`nanocosmos.transforms.fine_grid.ToFineGridd`'s ``image_mode``
+   (also nearest by default), which performs the analogous native-coarse ->
+   fine-grid upsample for REAL coarse volumes on the ``sft`` branch and at
+   inference -- a mismatch here would train SSL on a different degradation
+   shape than the model actually sees downstream.
 
 Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
@@ -86,7 +97,9 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         z_sections_key: Optional key to record the coarse section count
             ``d`` (handy when re-using this to synthesise large-voxel pairs).
         up_mode: Interpolation for the final ``z`` up-sample back to ``D``
-            (``"trilinear"`` default; ``"nearest"`` for a blockier look).
+            (``"nearest"`` default -- physically faithful blocky/step
+            look, see the module docstring; ``"trilinear"`` for a softer,
+            blended look).
     """
 
     def __init__(
@@ -105,7 +118,7 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         contrast_prob: float = 0.5,
         contrast_gamma: Tuple[float, float] = (0.8, 1.25),
         z_sections_key: Optional[str] = None,
-        up_mode: str = "trilinear",
+        up_mode: str = "nearest",
         allow_missing_keys: bool = False,
     ) -> None:
         super().__init__(keys, allow_missing_keys=allow_missing_keys)
