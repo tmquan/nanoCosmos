@@ -9,10 +9,12 @@ column (relative to the repo root).
 
 Run from the nanoCosmos repo root:
     python doc/assets/generate_dataset_previews.py
+    python doc/assets/generate_dataset_previews.py --datasets COSEM3D CREMI3D  # scope to a subset
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import hashlib
 import re
@@ -98,12 +100,15 @@ def _save_sft(em: np.ndarray, labels: np.ndarray, title: str, out: Path) -> None
 # (Dataset, Subset, Task, Split) -> (root, vol_stem, seg_stem|None)
 # Stems omit the _volume / _segmentation / _labels suffix.
 REPRESENTATIVE: Dict[Tuple[str, str, str, str], Tuple[str, str, Optional[str]]] = {
-    ("COSEM3D", "jrc_hela-3", "SSL", "Train"): ("data/COSEM3D", "jrc_hela-3_4x4x3.24nm_x4096_y0_z2048", None),
-    ("COSEM3D", "jrc_hela-3", "SSL", "Test"): ("data/COSEM3D", "jrc_hela-3_4x4x3.24nm_x6144_y0_z0", None),
-    ("COSEM3D", "jrc_macrophage-2", "SSL", "Train"): ("data/COSEM3D", "jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096", None),
-    ("COSEM3D", "jrc_macrophage-2", "SSL", "Test"): ("data/COSEM3D", "jrc_macrophage-2_4x4x3.36nm_x2048_y0_z4096", None),
-    ("COSEM3D", "jrc_jurkat-1", "SSL", "Train"): ("data/COSEM3D", "jrc_jurkat-1_4x4x3.44nm_x4096_y0_z4096", None),
-    ("COSEM3D", "jrc_jurkat-1", "SSL", "Test"): ("data/COSEM3D", "jrc_jurkat-1_4x4x3.44nm_x0_y0_z2048", None),
+    # Baked to true 4 nm cubic (scripts/resample_cosem_isotropic.py) -- see
+    # doc/DATASETS.md#cosem3d-baked-to-true-4-nm-cubic-jul-2026. Stems updated
+    # to match the files nanocosmos-2B.yaml / -4B.yaml now actually reference.
+    ("COSEM3D", "jrc_hela-3", "SSL", "Train"): ("data/COSEM3D", "jrc_hela-3_4nm_x4096_y0_z2048", None),
+    ("COSEM3D", "jrc_hela-3", "SSL", "Test"): ("data/COSEM3D", "jrc_hela-3_4nm_x6144_y0_z0", None),
+    ("COSEM3D", "jrc_macrophage-2", "SSL", "Train"): ("data/COSEM3D", "jrc_macrophage-2_4nm_x4096_y0_z4096", None),
+    ("COSEM3D", "jrc_macrophage-2", "SSL", "Test"): ("data/COSEM3D", "jrc_macrophage-2_4nm_x2048_y0_z4096", None),
+    ("COSEM3D", "jrc_jurkat-1", "SSL", "Train"): ("data/COSEM3D", "jrc_jurkat-1_4nm_x4096_y0_z4096", None),
+    ("COSEM3D", "jrc_jurkat-1", "SSL", "Test"): ("data/COSEM3D", "jrc_jurkat-1_4nm_x0_y0_z2048", None),
     ("CREMI3D", "A / B / C", "SFT", "Train"): ("data/CREMI3D", "cremi3d_sample_A", "cremi3d_sample_A"),
     ("CREMI3D", "A+ / B+ / C+ (padded)", "SSL", "Train"): ("data/CREMI3D", "cremi3d_sample_A+_padded", None),
     ("FLYEM3D", "FIB-25 (labeled core)", "SFT", "Train"): ("data/FLYEM3D", "flyem3d_8nm_x2304_y2048_z6144", "flyem3d_8nm_x2304_y2048_z6144"),
@@ -220,23 +225,40 @@ def _preview_for_row(row: dict) -> str:
     return str(out.relative_to(_REPO))
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument(
+        "--datasets", nargs="+", default=None, metavar="NAME",
+        help="Only regenerate previews for these data.csv 'Dataset' values "
+             "(e.g. --datasets COSEM3D CREMI3D). Default: every row.",
+    )
+    return p.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    wanted = set(args.datasets) if args.datasets else None
+
     with _CSV.open(newline="") as f:
         rows: List[dict] = list(csv.DictReader(f))
     fieldnames = list(rows[0].keys())
     if "Preview" not in fieldnames:
         fieldnames.append("Preview")
 
+    n_regenerated = 0
     for row in rows:
+        if wanted is not None and row["Dataset"] not in wanted:
+            continue
         rel = _preview_for_row(row)
         row["Preview"] = rel
+        n_regenerated += 1
         print(f"  {rel}")
 
     with _CSV.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-    print(f"\nWrote {len(rows)} previews -> {_OUT}/")
+    print(f"\nRegenerated {n_regenerated}/{len(rows)} previews -> {_OUT}/")
     print(f"Updated {_CSV}")
 
 

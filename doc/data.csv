@@ -1,10 +1,10 @@
 Dataset,Modality,Region,Subset,Num crops,Subvolume size (k actual crop sizes x x y x z),Size crop,Voxel size (x x y x z nm),Voxel count,Task,Split,Preview
-COSEM3D,FIB-SEM,HeLa cell,jrc_hela-3,4,04 x  2048 x 1000 x 1659,2048 x 1000 x 1659,4 x 4 x 4,13590528000,SSL,Train,doc/assets/datasets/cosem3d_jrc_hela-3_ssl_train_2048_x_1000_x_2048.png
-COSEM3D,FIB-SEM,HeLa cell,jrc_hela-3,1,01 x  2048 x 1000 x 1659,2048 x 1000 x 1659,4 x 4 x 4,3397632000,SSL,Test,doc/assets/datasets/cosem3d_jrc_hela-3_ssl_test_2048_x_1000_x_2048.png
-COSEM3D,FIB-SEM,Macrophage cell,jrc_macrophage-2,1,01 x  2048 x 2000 x 1720,2048 x 2000 x 1720,4 x 4 x 4,7045120000,SSL,Train,doc/assets/datasets/cosem3d_jrc_macrophage-2_ssl_train_2048_x_2000_x_2048.png
-COSEM3D,FIB-SEM,Macrophage cell,jrc_macrophage-2,1,01 x  2048 x 2000 x 1720,2048 x 2000 x 1720,4 x 4 x 4,7045120000,SSL,Test,doc/assets/datasets/cosem3d_jrc_macrophage-2_ssl_test_2048_x_2000_x_2048.png
-COSEM3D,FIB-SEM,Jurkat cell,jrc_jurkat-1,2,02 x  2048 x 2048 x 1761,2048 x 2048 x 1761,4 x 4 x 4,14773977088,SSL,Train,doc/assets/datasets/cosem3d_jrc_jurkat-1_ssl_train_2048_x_2048_x_2048.png
-COSEM3D,FIB-SEM,Jurkat cell,jrc_jurkat-1,1,01 x  2048 x 2048 x 1761,2048 x 2048 x 1761,4 x 4 x 4,7386988544,SSL,Test,doc/assets/datasets/cosem3d_jrc_jurkat-1_ssl_test_2048_x_2048_x_2048.png
+COSEM3D,FIB-SEM,HeLa cell,jrc_hela-3,4,04 x  2048 x 1000 x 1659,2048 x 1000 x 1659,4 x 4 x 4,13590528000,SSL,Train,doc/assets/datasets/cosem3d_jrc_hela-3_ssl_train_2048_x_1000_x_1659.png
+COSEM3D,FIB-SEM,HeLa cell,jrc_hela-3,1,01 x  2048 x 1000 x 1659,2048 x 1000 x 1659,4 x 4 x 4,3397632000,SSL,Test,doc/assets/datasets/cosem3d_jrc_hela-3_ssl_test_2048_x_1000_x_1659.png
+COSEM3D,FIB-SEM,Macrophage cell,jrc_macrophage-2,1,01 x  2048 x 2000 x 1720,2048 x 2000 x 1720,4 x 4 x 4,7045120000,SSL,Train,doc/assets/datasets/cosem3d_jrc_macrophage-2_ssl_train_2048_x_2000_x_1720.png
+COSEM3D,FIB-SEM,Macrophage cell,jrc_macrophage-2,1,01 x  2048 x 2000 x 1720,2048 x 2000 x 1720,4 x 4 x 4,7045120000,SSL,Test,doc/assets/datasets/cosem3d_jrc_macrophage-2_ssl_test_2048_x_2000_x_1720.png
+COSEM3D,FIB-SEM,Jurkat cell,jrc_jurkat-1,2,02 x  2048 x 2048 x 1761,2048 x 2048 x 1761,4 x 4 x 4,14773977088,SSL,Train,doc/assets/datasets/cosem3d_jrc_jurkat-1_ssl_train_2048_x_2048_x_1761.png
+COSEM3D,FIB-SEM,Jurkat cell,jrc_jurkat-1,1,01 x  2048 x 2048 x 1761,2048 x 2048 x 1761,4 x 4 x 4,7386988544,SSL,Test,doc/assets/datasets/cosem3d_jrc_jurkat-1_ssl_test_2048_x_2048_x_1761.png
 CREMI3D,ssTEM,Drosophila brain,A / B / C,3,03 x  1250 x 1250 x 125,1250 x 1250 x 125,4 x 4 x 40,585937500,SFT,Train,doc/assets/datasets/cremi3d_a_b_c_sft_train_1250_x_1250_x_125.png
 CREMI3D,ssTEM,Drosophila brain,A+ / B+ / C+ (padded),3,03 x  3072 x 3072 x 200,3072 x 3072 x 200,4 x 4 x 40,1887436800,SSL,Train,doc/assets/datasets/cremi3d_a_b_c_padded_ssl_train_3072_x_3072_x_200.png
 FLYEM3D,FIB-SEM,Drosophila medulla,FIB-25 (labeled core),1,01 x  1536 x 1536 x 1536,1536 x 1536 x 1536,8 x 8 x 8,3623878656,SFT,Train,doc/assets/datasets/flyem3d_fib-25_labeled_core_sft_train_1536_x_1536_x_1536.png
