@@ -121,6 +121,7 @@ class BaseCosmosModule(BaseCircuitModule):
             dtype=model_config.get("dtype", "bf16"),
             pretrained=model_config.get("pretrained", True),
             freeze_dit_backbone=model_config.get("freeze_dit_backbone", False),
+            freeze_understanding_ffn=model_config.get("freeze_understanding_ffn", True),
             freeze_vae_decoder=model_config.get("freeze_vae_decoder", False),
             freeze_vae_encoder=model_config.get("freeze_vae_encoder", True),
             gradient_checkpointing=model_config.get("gradient_checkpointing", False),

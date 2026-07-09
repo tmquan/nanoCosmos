@@ -603,17 +603,24 @@ model:
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
-  # Cosmos 3 MoT warm-up + PERMANENT partial hold-out.  Two phases:
+  # Cosmos 3 MoT warm-up.  ``freeze_dit_backbone`` freezes/thaws the WHOLE
+  # DiT on a schedule (independent of freeze_understanding_ffn below):
   #   epochs 0..4 : the WHOLE DiT is frozen (cheap warm-up, as usual).
-  #   epoch 5+    : thawed EXCEPT the understanding FFN (mlp.*, ~36% of the
-  #                 DiT) -- it only ever sees null text/image/audio
-  #                 conditioning here, so it is re-frozen at thaw and stays
-  #                 frozen for good.  The generation FFN (mlp_moe_gen.*), the
-  #                 shared attention (self_attn.*) and embeds/norms/patchify
-  #                 become trainable from epoch 5 onward.
-  # Schedule: false = whole DiT (incl. mlp.*) trains from epoch 0; true = whole
-  # DiT frozen for the entire run; N = the two-phase warm-up above.
+  #   epoch 5+    : thaws the whole DiT (subject to the permanent
+  #                 understanding-FFN hold-out below).
+  #   false -> whole DiT trains from epoch 0 (no warm-up freeze at all).
+  #   true  -> whole DiT frozen for the entire run (no thaw).
   freeze_dit_backbone: 5
+  # INDEPENDENT of the schedule above: keeps the understanding FFN (mlp.*,
+  # ~36% of the DiT) permanently frozen no matter what freeze_dit_backbone
+  # does -- including freeze_dit_backbone: false, which would otherwise train
+  # it from epoch 0.  This branch only ever sees null text/image/audio
+  # conditioning here, so it never gets a useful signal; the generation FFN
+  # (mlp_moe_gen.*), shared attention (self_attn.*), and embeds/norms/
+  # patchify still follow freeze_dit_backbone normally.  Set to false (and
+  # let freeze_dit_backbone govern it like everything else) once you decide
+  # to feed real text / metadata conditioning and want mlp.* to fine-tune too.
+  freeze_understanding_ffn: true
   freeze_vae_decoder: true
   # MUST be true: at the epoch-5 thaw the newly-trainable attn/gen-FFN/other
   # add activations + grads + AdamW state; without checkpointing this OOMs

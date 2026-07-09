@@ -177,36 +177,40 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         self._install_time_embedder_dtype_guard()
 
     # ------------------------------------------------------------------
-    # Freeze / unfreeze  (warm-up on the WHOLE DiT, permanent hold-out on
-    # the understanding FFN)
+    # Freeze / unfreeze  (warm-up on the WHOLE DiT, INDEPENDENT permanent
+    # hold-out on the understanding FFN)
     # ------------------------------------------------------------------
     # Cosmos 3 is a Mixture-of-Transformers: per layer the FFN branches by
     # modality -- ``mlp.*`` (understanding, ~36% of DiT params) vs
     # ``mlp_moe_gen.*`` (generation, ~36%) -- while the attention operator
     # (``self_attn.*``, ~16%) is fully SHARED between both streams.
-    # nanoCosmos always feeds null text/image/audio conditioning, so the
-    # understanding FFN only ever processes a constant null input and never
-    # gets a useful training signal -- it should stay frozen for good.
+    # nanoCosmos always feeds null text/image/audio conditioning, so by
+    # default the understanding FFN only ever processes a constant null
+    # input and never gets a useful training signal -- it should stay frozen
+    # for good.  This is controlled by ``freeze_understanding_ffn`` (default
+    # ``True``), which is DELIBERATELY INDEPENDENT of ``freeze_dit_backbone``:
+    # flip it to ``False`` if you decide to feed real text/metadata
+    # conditioning and want the understanding branch to actually train.
     #
-    # ``freeze_dit_backbone: N`` therefore runs in two distinct phases:
-    #   epochs 0..N-1 : the WHOLE DiT is frozen (identical to the base-class
-    #                   warm-up -- cheap: no grad anywhere in the backbone).
-    #   epoch N onward: :meth:`unfreeze_dit_backbone` thaws the DiT EXCEPT the
-    #                   understanding FFN, which is immediately re-frozen and
-    #                   stays that way permanently.  Only ``mlp_moe_gen.*``
-    #                   (gen FFN), ``self_attn.*`` (shared attention) and the
-    #                   embeddings/norms/patchify (``other``) become trainable.
-    #   ``freeze_dit_backbone: true``  -> whole DiT frozen for the entire run.
-    #   ``freeze_dit_backbone: false`` -> whole DiT (incl. mlp.*) trains from
-    #                   epoch 0 -- no permanent hold-out.
+    #                        | freeze_understanding_ffn=True (default) | =False
+    # -----------------------|------------------------------------------|--------
+    # freeze_dit_backbone:   | mlp.* permanently frozen from step 0     | everything
+    #   false                | (enforced by _post_init_freezes below);  | trains from
+    #                        | attn/gen-FFN/other train from step 0     | step 0
+    # freeze_dit_backbone: N | epochs 0..N-1: WHOLE DiT frozen (warm-up).| epochs 0..N-1:
+    #                        | epoch N+: thawed EXCEPT mlp.*, which is  | WHOLE DiT frozen;
+    #                        | re-frozen and stays frozen permanently   | epoch N+: WHOLE
+    #                        |                                          | DiT thaws (incl mlp.*)
+    # freeze_dit_backbone:   | whole DiT (incl. mlp.*) frozen for the entire run either way
+    #   true                 | (no thaw -> the flag never gets a chance to matter)
     #
     # ``_any_trainable`` / ``_hook_should_detach`` need NO override: the base
     # class's ``not self._freeze_dit_backbone`` / ``self._freeze_dit_backbone``
-    # already do the right thing for both phases -- before thaw the backbone
-    # is truly 100% frozen (no grad needed at all); after thaw *something* in
-    # the DiT is trainable, so autograd must stay enabled even though
-    # ``mlp.*`` individually keeps ``requires_grad=False`` (a plain frozen
-    # leaf inside an otherwise-live graph -- standard, no special-casing).
+    # already do the right thing in every row above -- whenever the WHOLE
+    # backbone is frozen, no grad is needed at all; whenever *anything* in the
+    # DiT is trainable, autograd must stay enabled even though ``mlp.*`` may
+    # individually keep ``requires_grad=False`` (a plain frozen leaf inside an
+    # otherwise-live graph -- standard, no special-casing needed).
 
     # Understanding-FFN marker.  Matched by the ``.mlp.`` name segment, which
     # (by construction) excludes the generation branch ``.mlp_moe_gen.`` and the
@@ -220,6 +224,38 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
             if self._UNDERSTANDING_FFN_MARKER in n
         ]
 
+    def _enforce_understanding_ffn_freeze(self) -> bool:
+        """Freeze the understanding FFN (``mlp.*``) right now; return whether any matched."""
+        params = self._understanding_ffn_params()
+        for p in params:
+            p.requires_grad_(False)
+        if not params:
+            logger.warning(
+                "Cosmos3: no understanding-FFN params matched '%s' -- "
+                "freeze_understanding_ffn has no effect (unexpected DiT "
+                "parameter names?).", self._UNDERSTANDING_FFN_MARKER,
+            )
+        return bool(params)
+
+    def _post_init_freezes(self) -> None:
+        """Enforce the permanent understanding-FFN hold-out at construction.
+
+        Runs after the base ``__init__``'s ``if initial_frozen:
+        freeze_dit_backbone() else: self.dit.train()`` branch, so it covers
+        BOTH cases -- including ``freeze_dit_backbone: false``, which would
+        otherwise leave ``mlp.*`` trainable from step 0.  A no-op once the
+        thaw schedule later calls :meth:`unfreeze_dit_backbone` (which
+        re-applies the same hold-out) or if ``freeze_understanding_ffn`` is
+        ``False``.
+        """
+        if self._freeze_understanding_ffn:
+            n = len(self._understanding_ffn_params())
+            self._enforce_understanding_ffn_freeze()
+            logger.info(
+                "Cosmos3 understanding FFN (mlp.*, %d params) held permanently "
+                "frozen (freeze_understanding_ffn=True).", n,
+            )
+
     def freeze_dit_backbone(self) -> None:
         """Freeze the WHOLE DiT (warm-up phase; identical to the base class)."""
         self.dit.requires_grad_(False)
@@ -230,24 +266,19 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         )
 
     def unfreeze_dit_backbone(self) -> None:
-        """Thaw the DiT EXCEPT the understanding FFN, which stays frozen for good."""
+        """Thaw the DiT.  If ``freeze_understanding_ffn``, re-freeze ``mlp.*`` for good."""
         self.dit.requires_grad_(True)
         self.dit.train()
-        mlp_params = self._understanding_ffn_params()
-        for p in mlp_params:
-            p.requires_grad_(False)
-        if not mlp_params:
-            logger.warning(
-                "Cosmos3 unfreeze_dit_backbone: no understanding-FFN params "
-                "matched '%s' -- everything thawed (unexpected DiT parameter "
-                "names?).", self._UNDERSTANDING_FFN_MARKER,
-            )
+        n_mlp = 0
+        if self._freeze_understanding_ffn:
+            n_mlp = len(self._understanding_ffn_params())
+            self._enforce_understanding_ffn_freeze()
         self._freeze_dit_backbone = False
         logger.info(
-            "Cosmos3 DiT backbone thawed EXCEPT the understanding FFN (mlp.*, "
-            "%d params kept permanently frozen); DiT trainable params now %s "
-            "(gen FFN + shared attention + other now live).",
-            len(mlp_params), f"{self.get_num_parameters(True):,}",
+            "Cosmos3 DiT backbone thawed%s; DiT trainable params now %s.",
+            f" EXCEPT the understanding FFN (mlp.*, {n_mlp} params kept "
+            "permanently frozen)" if self._freeze_understanding_ffn else "",
+            f"{self.get_num_parameters(True):,}",
         )
 
     # ------------------------------------------------------------------

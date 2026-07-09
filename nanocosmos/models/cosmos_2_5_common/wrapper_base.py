@@ -114,6 +114,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         dtype: str = "bf16",
         pretrained: bool = True,
         freeze_dit_backbone: Union[bool, int] = False,
+        freeze_understanding_ffn: bool = True,
         freeze_vae_decoder: bool = False,
         freeze_vae_encoder: bool = True,
         gradient_checkpointing: Union[bool, List[str]] = False,
@@ -197,6 +198,15 @@ class _BaseCosmos25Wrapper(nn.Module):
         )
         self._freeze_dit_backbone = initial_frozen
         self._dit_thaw_epoch: Optional[int] = thaw_epoch
+        # Independent of the ``freeze_dit_backbone`` schedule above: whether
+        # the understanding-FFN branch (Cosmos 3's Mixture-of-Transformers
+        # ``mlp.*``, as opposed to the generation FFN ``mlp_moe_gen.*``) stays
+        # permanently frozen regardless of the whole-DiT freeze/thaw state.
+        # Consumed only by :class:`~nanocosmos.models.cosmos_3_common.wrapper.
+        # Cosmos3OmniWrapper` (via ``_post_init_freezes`` /
+        # ``unfreeze_dit_backbone``); a no-op for the non-MoT Cosmos-Predict
+        # / Cosmos-Transfer wrappers, which have no such branch to select.
+        self._freeze_understanding_ffn = bool(freeze_understanding_ffn)
         self._freeze_vae_encoder = freeze_vae_encoder
         # ``gradient_checkpointing`` accepts a bool (all targets) or a list of
         # targets among {"dit", "decode", "head"} so recompute can be traded
@@ -339,8 +349,15 @@ class _BaseCosmos25Wrapper(nn.Module):
     def _post_init_freezes(self) -> None:
         """Subclass hook for additional freeze steps after the base init.
 
-        Cosmos-Transfer uses this to freeze its ControlNet branch when
-        configured to do so.
+        Runs unconditionally after the ``if initial_frozen: freeze_dit_backbone()
+        else: self.dit.train()`` branch above, so it sees the final initial
+        trainable state and can layer additional, narrower freezes on top --
+        e.g. Cosmos-Transfer uses this to freeze its ControlNet branch when
+        configured to do so, and :class:`~nanocosmos.models.cosmos_3_common.
+        wrapper.Cosmos3OmniWrapper` uses it to enforce the permanent
+        understanding-FFN freeze (``freeze_understanding_ffn``) even when
+        ``freeze_dit_backbone: false`` would otherwise leave the whole DiT
+        (including that branch) trainable from the start.
         """
         return
 
