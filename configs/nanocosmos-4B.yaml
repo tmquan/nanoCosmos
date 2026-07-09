@@ -603,11 +603,21 @@ model:
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
+  # Cosmos 3 MoT warm-up + PERMANENT partial hold-out.  Two phases:
+  #   epochs 0..4 : the WHOLE DiT is frozen (cheap warm-up, as usual).
+  #   epoch 5+    : thawed EXCEPT the understanding FFN (mlp.*, ~36% of the
+  #                 DiT) -- it only ever sees null text/image/audio
+  #                 conditioning here, so it is re-frozen at thaw and stays
+  #                 frozen for good.  The generation FFN (mlp_moe_gen.*), the
+  #                 shared attention (self_attn.*) and embeds/norms/patchify
+  #                 become trainable from epoch 5 onward.
+  # Schedule: false = whole DiT (incl. mlp.*) trains from epoch 0; true = whole
+  # DiT frozen for the entire run; N = the two-phase warm-up above.
   freeze_dit_backbone: 5
   freeze_vae_decoder: true
-  # MUST be true: at the epoch-5 DiT thaw the unfrozen 4B backbone adds full
-  # activations + grads + AdamW state; without checkpointing this OOMs (and it
-  # is incompatible with torch.compile, so compile below is off).
+  # MUST be true: at the epoch-5 thaw the newly-trainable attn/gen-FFN/other
+  # add activations + grads + AdamW state; without checkpointing this OOMs
+  # (and it is incompatible with torch.compile, so compile below is off).
   gradient_checkpointing: true
   vae_input_pm1: true
   vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
@@ -712,7 +722,7 @@ training:
   # cannot auto-inject a DistributedSampler; the sampler + random per-item
   # patch sampling handle per-rank data spread instead.
   use_distributed_sampler: false
-  precision: bf16-true
+  precision: bf16-mixed
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0

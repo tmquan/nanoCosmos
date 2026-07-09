@@ -177,6 +177,80 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         self._install_time_embedder_dtype_guard()
 
     # ------------------------------------------------------------------
+    # Freeze / unfreeze  (warm-up on the WHOLE DiT, permanent hold-out on
+    # the understanding FFN)
+    # ------------------------------------------------------------------
+    # Cosmos 3 is a Mixture-of-Transformers: per layer the FFN branches by
+    # modality -- ``mlp.*`` (understanding, ~36% of DiT params) vs
+    # ``mlp_moe_gen.*`` (generation, ~36%) -- while the attention operator
+    # (``self_attn.*``, ~16%) is fully SHARED between both streams.
+    # nanoCosmos always feeds null text/image/audio conditioning, so the
+    # understanding FFN only ever processes a constant null input and never
+    # gets a useful training signal -- it should stay frozen for good.
+    #
+    # ``freeze_dit_backbone: N`` therefore runs in two distinct phases:
+    #   epochs 0..N-1 : the WHOLE DiT is frozen (identical to the base-class
+    #                   warm-up -- cheap: no grad anywhere in the backbone).
+    #   epoch N onward: :meth:`unfreeze_dit_backbone` thaws the DiT EXCEPT the
+    #                   understanding FFN, which is immediately re-frozen and
+    #                   stays that way permanently.  Only ``mlp_moe_gen.*``
+    #                   (gen FFN), ``self_attn.*`` (shared attention) and the
+    #                   embeddings/norms/patchify (``other``) become trainable.
+    #   ``freeze_dit_backbone: true``  -> whole DiT frozen for the entire run.
+    #   ``freeze_dit_backbone: false`` -> whole DiT (incl. mlp.*) trains from
+    #                   epoch 0 -- no permanent hold-out.
+    #
+    # ``_any_trainable`` / ``_hook_should_detach`` need NO override: the base
+    # class's ``not self._freeze_dit_backbone`` / ``self._freeze_dit_backbone``
+    # already do the right thing for both phases -- before thaw the backbone
+    # is truly 100% frozen (no grad needed at all); after thaw *something* in
+    # the DiT is trainable, so autograd must stay enabled even though
+    # ``mlp.*`` individually keeps ``requires_grad=False`` (a plain frozen
+    # leaf inside an otherwise-live graph -- standard, no special-casing).
+
+    # Understanding-FFN marker.  Matched by the ``.mlp.`` name segment, which
+    # (by construction) excludes the generation branch ``.mlp_moe_gen.`` and the
+    # shared attention ``.self_attn.``.
+    _UNDERSTANDING_FFN_MARKER = ".mlp."
+
+    def _understanding_ffn_params(self) -> List[nn.Parameter]:
+        """Per-layer understanding-FFN (``mlp.*``) parameters of ``self.dit``."""
+        return [
+            p for n, p in self.dit.named_parameters()
+            if self._UNDERSTANDING_FFN_MARKER in n
+        ]
+
+    def freeze_dit_backbone(self) -> None:
+        """Freeze the WHOLE DiT (warm-up phase; identical to the base class)."""
+        self.dit.requires_grad_(False)
+        self._freeze_dit_backbone = True
+        logger.info(
+            "Cosmos3 DiT backbone frozen (whole backbone, %s trainable params).",
+            f"{self.get_num_parameters(True):,}",
+        )
+
+    def unfreeze_dit_backbone(self) -> None:
+        """Thaw the DiT EXCEPT the understanding FFN, which stays frozen for good."""
+        self.dit.requires_grad_(True)
+        self.dit.train()
+        mlp_params = self._understanding_ffn_params()
+        for p in mlp_params:
+            p.requires_grad_(False)
+        if not mlp_params:
+            logger.warning(
+                "Cosmos3 unfreeze_dit_backbone: no understanding-FFN params "
+                "matched '%s' -- everything thawed (unexpected DiT parameter "
+                "names?).", self._UNDERSTANDING_FFN_MARKER,
+            )
+        self._freeze_dit_backbone = False
+        logger.info(
+            "Cosmos3 DiT backbone thawed EXCEPT the understanding FFN (mlp.*, "
+            "%d params kept permanently frozen); DiT trainable params now %s "
+            "(gen FFN + shared attention + other now live).",
+            len(mlp_params), f"{self.get_num_parameters(True):,}",
+        )
+
+    # ------------------------------------------------------------------
     # Backbone selection
     # ------------------------------------------------------------------
 
