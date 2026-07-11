@@ -369,6 +369,28 @@ class BaseCircuitModule(pl.LightningModule):
             head = self.model(images)
             losses = self.criterion(head, targets)
 
+            # Finite-loss guard.  Unlike ``training_step`` (cadenced, since a
+            # skipped backward there just no-ops that step), a NaN/Inf batch
+            # here would silently poison the whole-epoch accumulator in
+            # ``_accum`` (``acc[0] += nan`` makes every subsequent average
+            # NaN too) and get reported as e.g. ``val/automatic/loss`` = NaN
+            # for the ENTIRE epoch even if every other batch was healthy.
+            # Validation runs far less often than training steps, so a
+            # per-batch check here is cheap; drop this batch's contribution
+            # (loss + metrics) and keep going, same as the OOM guard below.
+            if not torch.isfinite(losses["loss"]).all():
+                nan_keys = [
+                    k for k, v in losses.items()
+                    if isinstance(v, torch.Tensor) and not torch.isfinite(v).all()
+                ]
+                warnings.warn(
+                    f"Non-finite {stage} loss (keys={nan_keys}) on "
+                    f"task={batch.get('task')!r} volume={batch.get('volume')!r} "
+                    "-- skipping this batch's contribution to the epoch average.",
+                    stacklevel=2,
+                )
+                return
+
             prefix = self._scalar_prefix(stage)
             bs = float(images.shape[0])
             for name, val in losses.items():
