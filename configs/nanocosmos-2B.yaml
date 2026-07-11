@@ -21,8 +21,8 @@
 #          padded + MitoEM2 (image-only mito EM).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
-#          CREMI(40,4) / MICrONS(40,8) / FlyWire FAFB(40,8).  A labeled small-voxel
-#          rung (FIB) does BOTH.
+#          CREMI(40,4) / MICrONS(40,8) / FlyWire FAFB(40,8) / H01(33,4).  A labeled
+#          small-voxel rung (FIB) does BOTH.
 # Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
 # Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
 # RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
@@ -366,8 +366,8 @@ data:
       batch_size: 3
       sample_weight: 2.0
       # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
-      # SNEMI3D / CREMI / MICrONS / FlyWire FAFB.  Predict at 4 nm, pool the head
-      # volume's native label grid, then AffinityFGLoss.
+      # SNEMI3D / CREMI / MICrONS / FlyWire FAFB / H01.  Predict at 4 nm, pool the
+      # head volume's native label grid, then AffinityFGLoss.
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
         seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
@@ -471,6 +471,49 @@ data:
         seg: flywire_mip1_1024x1024x256_x44000_y24000_z2400_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
+      # --- H01 cell 33x4x4 (4 nm EM mip0 + c3 seg), 10 train / 2 val ---
+      # Human temporal cortex (Shapson-Coe et al.); xy already on the fine
+      # 4 nm grid, z = 33 nm sections.  mip1 128^3 preview omitted (smoke test).
+      - vol: h01cell_mip0_1024x1024x256_x320000_y320000_z2000_volume       # train01
+        seg: h01cell_mip0_1024x1024x256_x320000_y320000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x360000_y440000_z2000_volume       # train02
+        seg: h01cell_mip0_1024x1024x256_x360000_y440000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x400000_y320000_z2000_volume       # train03
+        seg: h01cell_mip0_1024x1024x256_x400000_y320000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x480000_y200000_z2000_volume       # train04
+        seg: h01cell_mip0_1024x1024x256_x480000_y200000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x480000_y320000_z2000_volume       # train05
+        seg: h01cell_mip0_1024x1024x256_x480000_y320000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x480000_y440000_z2000_volume       # train06
+        seg: h01cell_mip0_1024x1024x256_x480000_y440000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x520000_y160000_z2000_volume       # train07
+        seg: h01cell_mip0_1024x1024x256_x520000_y160000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x560000_y200000_z2000_volume       # train08
+        seg: h01cell_mip0_1024x1024x256_x560000_y200000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x560000_y320000_z2000_volume       # train09
+        seg: h01cell_mip0_1024x1024x256_x560000_y320000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x256_x600000_y160000_z2000_volume       # train10
+        seg: h01cell_mip0_1024x1024x256_x600000_y160000_z2000_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
 
   val_batch_size: 2
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
@@ -538,6 +581,17 @@ data:
     root: data/FLYWIRE
     task: sft
     native_resolution: [40, 8, 8]
+  # H01 cell: 2 of 12 labeled mip0 crops (sft instance-metric validation).
+  - vol: h01cell_mip0_1024x1024x256_x680000_y160000_z2000_volume      # test01
+    seg: h01cell_mip0_1024x1024x256_x680000_y160000_z2000_c3_segmentation
+    root: data/H01Cell
+    task: sft
+    native_resolution: [33, 4, 4]
+  - vol: h01cell_mip0_1024x1024x256_x760000_y160000_z2000_volume      # test02
+    seg: h01cell_mip0_1024x1024x256_x760000_y160000_z2000_c3_segmentation
+    root: data/H01Cell
+    task: sft
+    native_resolution: [33, 4, 4]
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
   # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683).
   - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)
