@@ -83,7 +83,8 @@ upper-bound proposals; `data.csv` is current.
 | 6 | **MaleCNS** | (8,8,8) | 2·2 | SSL (+SFT) | 94088×78317×134576 | 5× 1024³ (4 SSL + 1 test) |
 | 7 | **SNEMI3D / Neurons** | (30,6,6) | 7.5·1.5 | SFT | 5000×2900×300 (Kasthuri); AC4 1024×1024×100 | full (train vol + AC4 val) |
 | 8 | **CREMI** | (40,4,4) | 10·1 | SFT | 3× 1250×1250×125 (A/B/C) | full 3× 1250×1250×125 |
-| 9 | **MICrONS** | (40,8,8) | 10·2 | SFT | petascale (full minnie65) | 1–10× 4096×4096×800 crops |
+| 9 | **H01Cell** | (33,4,4) | 8.25·1 | SFT | petascale (full H01) | 12× 1024×1024×5000 crops (10 train + 2 val) |
+| 10 | **MICrONS** | (40,8,8) | 10·2 | SSL (image-only) | petascale (full minnie65) | 1–10× 4096×4096×800 crops |
 
 Notes:
 - Sizes are `x×y×z` (Neuroglancer `info` order); the voxel column stays `(z,y,x)`.
@@ -207,11 +208,13 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
    - **FIB-25 image, including the unsegmented surround** — `download_flyem3d.py`
      (image-only crops outside the proofread core), for 8 nm neuropil SSL.
    - optionally **Hemibrain / MaleCNS** image crops (8 nm), for scale.
-3. **Acquire SFT data.** FIB-25 core + SNEMI3D + CREMI + MICrONS
-   (+ Hemibrain / MaleCNS labels if desired).
-4. **Config.** `configs/nanocosmos-16B.yaml`: `ssl` = COSEM + unsegmented
-   FIB-25 (+ Hemibrain / MaleCNS); `sft` = every labeled rung, each carrying its
-   native `(z, y, x)` so the pool factor is derived per volume.
+3. **Acquire SFT data.** FIB-25 core + SNEMI3D + CREMI + H01 (+ FlyWire in
+   2B/4B). MICrONS EM is acquired for **SSL** (seg dropped in joint configs
+   because of membrane/background label conflict with SNEMI / Neurons / H01).
+4. **Config.** `configs/nanocosmos-{16B,4B,2B}.yaml`: `ssl` = COSEM +
+   unsegmented FIB-25 (+ Hemibrain / MaleCNS) + MICrONS EM; `sft` = compatible
+   labeled rungs (incl. H01), each carrying its native `(z, y, x)` so the pool
+   factor is derived per volume.
 5. **Curriculum.** Phase 1 SSL (label-free, 4 nm grid) → Phase 2 add SFT on the
    labeled rungs (predict 4 nm, pool to native), keep SSL live (joint).
 6. **Integration layer.** Multi-task datamodule (resample each volume onto the

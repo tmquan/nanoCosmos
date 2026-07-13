@@ -3,9 +3,10 @@
 Every dataset nanocosmos trains on is **3-D electron-microscopy (EM)**, stored
 on disk in one shared convention and pulled in by the datamodule. Most carry
 dense **instance** (neuron-id) labels for the segmentation (`sft`) branch; the
-self-supervised (`ssl`) sources — COSEM3D, MitoEM2, and the unlabeled FlyEM
-surround — are **image-only**. This doc covers what each dataset is, its native
-resolution, and the exact script that downloads (or converts) it.
+self-supervised (`ssl`) sources — COSEM3D, MitoEM2, unlabeled FlyEM surround,
+and MICrONS (EM only in the joint recipe; see below) — are **image-only**. This
+doc covers what each dataset is, its native resolution, and the exact script
+that downloads (or converts) it.
 
 > Resolutions are quoted as the source reports them (usually `x × y × z`
 > nm). The config's `resolution_map` uses **`(z, y, x)`** order — both are
@@ -17,17 +18,20 @@ resolution, and the exact script that downloads (or converts) it.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | SNEMI3D | Mouse S1 cortex, **ssSEM** (AC3/AC4) | 6 × 6 × 30 | `AC: [30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `snemi3d` |
 | Neurons | Mouse S1 cortex, **ssSEM** (Kasthuri cylinder) | 6 × 6 × 30 | `neurons: [30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `neurons` |
-| MICrONS | Mouse V1 cortex, **ssTEM** (minnie65) | 8 × 8 × 40 | `minnie65: [40,8,8]` | MICrONS Consortium 2025, *Nature* (preprint bioRxiv 2021.07.28.454025) | `download_microns.py` | `data/MICRONS` | `microns` |
+| MICrONS | Mouse V1 cortex, **ssTEM** (minnie65) | 8 × 8 × 40 | `minnie65: [40,8,8]` | MICrONS Consortium 2025, *Nature* (preprint bioRxiv 2021.07.28.454025) | `download_microns.py` | `data/MICRONS` | `microns` / `joint3d` (SSL) |
 | CREMI3D | *Drosophila* brain, **ssTEM** (A/B/C) | 4 × 4 × 40 | `cremi3d: [40,4,4]` | CREMI challenge 2016 (cremi.org); FAFB Zheng et al. 2018, *Cell* | `download_cremi3d.py` | `data/CREMI3D` | `cremi3d` |
 | FLYEM3D | FlyEM *Drosophila*, **FIB-SEM** (FIB-25 / Hemibrain / MaleCNS) | 8 × 8 × 8 (isotropic) | `flyem3d: [8,8,8]` | Takemura 2015 *PNAS* (FIB-25); Scheffer 2020 *eLife* (Hemibrain); Berg 2025 *bioRxiv* (MaleCNS) | `download_flyem3d.py` | `data/FLYEM3D` | `flyem3d` / `joint3d` |
 | FLYWIRE | *Drosophila* female brain (FAFB), **ssTEM** (FlyWire v783) | 8 × 8 × 40 | `flywire: [40,8,8]` | Dorkenwald et al. 2024, *Nature* (FlyWire consortium) | `download_flywire.py` | `data/FLYWIRE` | `flywire` / `joint3d` |
+| H01Cell | Human temporal cortex, **ssTEM** (H01 release, c3 seg) | 4 × 4 × 33 | `h01cell: [33,4,4]` | Shapson-Coe et al. 2024, *Science* | `download_h01cell.py` | `data/H01Cell` | `joint3d` (SFT) |
 | COSEM3D | OpenOrganelle / COSEM cell, **FIB-SEM** | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | Xu et al. 2021 *Nature*; Heinrich et al. 2021 *Nature* | `download_cosem3d.py` | `data/COSEM3D` | `joint3d` |
 | MitoEM2 | Mitochondria EM, **mixed FIB-SEM / ssSEM / SBF-SEM** (8 subsets) | 16 × 16 × 16 & 8 × 8 × 30 | *(joint3d SSL, per-vol)* | Liu, P. 2026, Zenodo (MitoEM 2.0, v6, [10.5281/zenodo.20417683](https://zenodo.org/records/20417683)); orig. Wei et al. 2020, *MICCAI* | `convert_mitoem2.py` | `data/MitoEM2` | `joint3d` |
 
-`COSEM3D` (4 nm), `MitoEM2` (8–16 nm), and the Hemibrain / MaleCNS members of
-`FLYEM3D` (8 nm) are the image-only `ssl` rungs of the **joint super-resolution
-recipe** (`configs/nanocosmos-{16B,4B,2B}.yaml`,
-`data.dataset: joint3d`); see [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
+`COSEM3D` (4 nm), `MitoEM2` (8–16 nm), Hemibrain / MaleCNS (`FLYEM3D`, 8 nm),
+and **MICrONS** (image-only in the joint recipe) are the `ssl` rungs of the
+**joint super-resolution recipe** (`configs/nanocosmos-{16B,4B,2B}.yaml`,
+`data.dataset: joint3d`). **H01Cell** is an `sft` rung (compatible membrane /
+background convention with SNEMI / Neurons). See
+[`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
 
 All scripts live in `scripts/` and write the on-disk convention described
 in [On-disk convention](#on-disk-convention). The multi-dataset
@@ -131,7 +135,11 @@ Files land in `data/SNEMI3D/` (config volume
   **4 × 4 × 40 nm** is the *annotation/coordinate frame*, not the image
   voxel size.
 - **Segmentation versions:** `v117`, `v343`, `v943`, `v1300` (default,
-  latest, Jan 2025).
+  latest, Jan 2025). Seg files are still downloadable, but the **joint**
+  configs (`nanocosmos-{16B,4B,2B}.yaml`) use MICrONS as **image-only SSL**:
+  the auto-seg labels some black / thick membranes as instances, while
+  SNEMI / Neurons / H01 treat those as background — mixing them under
+  `AffinityFGLoss` poisons the SFT branch.
 - **Splits:** 12 pre-defined `4096 × 4096 × 800` crops (10 train + 2
   test) at disjoint XY positions / cortical depths; file names encode the
   origin, e.g.
@@ -151,6 +159,29 @@ python scripts/download_microns.py --seg-version all             # all 4 seg ver
 Files land in `data/MICRONS/`. Crop size guide (mip0, uint8 EM +
 uint64 seg): `512³` ≈ 1.1 GB, `1024³` ≈ 9 GB, `2048³` ≈ 72 GB,
 `4096×4096×800` ≈ tens of GB per crop.
+
+---
+
+## H01Cell (Shapson-Coe et al.)
+
+- **What:** Human temporal cortex connectomics volume (**H01** release):
+  4 nm EM (mip0) + `c3` instance segmentation (8 nm xy, upsampled 2× to the
+  EM grid). Used as an **SFT** rung in the joint recipe (membrane /
+  background convention matches SNEMI / Neurons).
+- **Resolution:** **4 × 4 × 33 nm** (`native_resolution: [33, 4, 4]`).
+- **Splits:** 12 crops `1024 × 1024 × 5000` (10 train + 2 val), `z0=0`
+  (avoids corrupt EM shards near the volume end). Stale smaller crops
+  (`1024×1024×256` @ `z2000`, mip1 previews) were removed Jul 2026.
+- **Source:** `gs://h01-release/data/20210601/4nm_raw` + `…/c3` via
+  `cloud-volume`.
+- **Citation:** Shapson-Coe et al. 2024, *Science*.
+
+```bash
+python scripts/download_h01cell.py --split   # 12 crops @ 1024x1024x5000, z0=0
+```
+
+Files land in `data/H01Cell/`
+(`h01cell_mip0_1024x1024x5000_x{X}_y{Y}_z0_{volume,c3_segmentation}.h5`).
 
 ---
 
@@ -627,7 +658,8 @@ in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
 | --- | --- | --- | --- | --- |
 | **SNEMI3D** | `AC4_inputs` / `AC4_labels`; `AC3_inputs` (test, EM only) | `AC4_inputs`, `AC4_labels` | A: yes / AC3: no | `data/SNEMI3D` |
 | **Neurons** | `neurons_{X}x{Y}x{Z}_x{X0}_y{Y0}_z{Z0}` | `neurons_5000x2900x300_x3000_y7200_z950` | yes | `data/SNEMI3D` |
-| **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume`, seg `…_v1300_segmentation` | yes | `data/MICRONS` |
+| **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` (joint recipe: **image-only SSL**, omit `seg:`) | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume` | optional | `data/MICRONS` |
+| **H01Cell** | `h01cell_mip0_{Sx}x{Sy}x{Sz}_x{X}_y{Y}_z{Z}` ; seg adds `_c3` | vol `h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume`, seg `…_c3_segmentation` | yes | `data/H01Cell` |
 | **CREMI3D** | train `cremi3d_sample_{A,B,C}` ; test (EM only) `cremi3d_sample_{A+,B+,C+}` (cropped) / `cremi3d_sample_{A+,B+,C+}_padded` (padded) | `cremi3d_sample_A_volume`, `cremi3d_sample_A_segmentation`; `cremi3d_sample_A+_padded_volume` | A/B/C: yes / +: no | `data/CREMI3D` |
 | **FLYEM3D** · FIB-25 SFT core | `flyem3d_8nm_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_x2304_y2048_z6144` | yes | `data/FLYEM3D` |
 | **FLYEM3D** · FIB-25 SSL surround | `flyem3d_8nm_ssl_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_ssl_x4000_y4000_z2000_volume` | no | `data/FLYEM3D` |

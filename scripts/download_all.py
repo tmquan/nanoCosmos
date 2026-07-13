@@ -12,7 +12,8 @@ Groups (``--datasets``):
              surround), hemibrain / malecns (SSL)   -> data/FLYEM3D
     cremi    CREMI3D ssTEM (SFT)                      -> data/CREMI3D
     snemi    SNEMI3D / Neurons (SFT)                  -> data/SNEMI3D
-    microns  MICrONS (SFT)                            -> data/MICRONS
+    microns  MICrONS (SSL in joint recipe; seg optional) -> data/MICRONS
+    h01      H01Cell (SFT)                            -> data/H01Cell
 
 Examples
 --------
@@ -96,6 +97,11 @@ def _jobs(datasets: List[str], skip_existing: bool) -> List[Tuple[str, List[str]
         jobs.append(("microns",
                      [_PY, str(_HERE / "download_microns.py"), "--output", "data/MICRONS",
                       "--size", "4096", "4096", "800", "--seg-version", "1300"]))
+
+    if "h01" in datasets:
+        jobs.append(("h01cell",
+                     [_PY, str(_HERE / "download_h01cell.py"), "--output", "data/H01Cell",
+                      "--extend", "--skip-existing"]))
     return jobs
 
 
@@ -203,7 +209,7 @@ def _verify(roots: List[str]) -> bool:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    all_groups = ["cosem", "flyem", "cremi", "snemi", "microns"]
+    all_groups = ["cosem", "flyem", "cremi", "snemi", "microns", "h01"]
     p.add_argument("--datasets", nargs="+", default=["all"],
                    choices=all_groups + ["all"], help="Which groups to download.")
     p.add_argument("--verify-only", action="store_true", help="Skip download; just verify disk.")

@@ -128,15 +128,25 @@ REPRESENTATIVE: Dict[Tuple[str, str, str, str], Tuple[str, str, Optional[str]]] 
         "flywire_mip1_1024x1024x256_x80000_y16000_z4500",
         "flywire_mip1_1024x1024x256_x80000_y16000_z4500_m783",
     ),
-    ("MICrONS", "minnie65", "SFT", "Train"): (
+    ("H01Cell", "H01 mip0 c3", "SFT", "Train"): (
+        "data/H01Cell",
+        "h01cell_mip0_1024x1024x5000_x320000_y320000_z0",
+        "h01cell_mip0_1024x1024x5000_x320000_y320000_z0_c3",
+    ),
+    ("H01Cell", "H01 mip0 c3", "SFT", "Test"): (
+        "data/H01Cell",
+        "h01cell_mip0_1024x1024x5000_x680000_y160000_z0",
+        "h01cell_mip0_1024x1024x5000_x680000_y160000_z0_c3",
+    ),
+    ("MICrONS", "minnie65", "SSL", "Train"): (
         "data/MICRONS",
         "minnie65_mip0_4096x4096x800_x50000_y60000_z16000",
-        "minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300",
+        None,
     ),
-    ("MICrONS", "minnie65", "SFT", "Test"): (
+    ("MICrONS", "minnie65", "SSL", "Test"): (
         "data/MICRONS",
         "minnie65_mip0_4096x4096x800_x70000_y90000_z17000",
-        "minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300",
+        None,
     ),
     ("MitoEM2", "beta", "SSL", "Train"): ("data/MitoEM2", "mitoem2_beta_train01", None),
     ("MitoEM2", "beta", "SSL", "Test"): ("data/MitoEM2", "mitoem2_beta_test01", None),

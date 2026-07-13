@@ -12,10 +12,14 @@
 #   ssl   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
 #          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
 #          (small voxel) + unlabeled FlyEM (FIB-25/Hemibrain/MaleCNS) + CREMI
-#          padded + MitoEM2 (image-only mito EM).  Label-free.
+#          padded + MitoEM2 (image-only mito EM) + MICrONS (image-only; labels
+#          dropped -- see sft note).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
-#          CREMI(40,4) / MICrONS(40,8).  A labeled small-voxel rung (FIB) does BOTH.
+#          CREMI(40,4) / H01(33,4).  MICrONS is NOT used for SFT: its auto-seg
+#          treats some black/thick membranes as instances that SNEMI / Neurons /
+#          H01 treat as background, so the label conventions contradict.  A
+#          labeled small-voxel rung (FIB) does BOTH.
 #
 # Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
 # Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
@@ -291,13 +295,48 @@ data:
       - vol: mitoem2_stem_train02_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+      # --- MICrONS 40x8x8, IMAGE-ONLY (seg dropped) ---
+      # Moved off the SFT branch: MICrONS auto-seg labels some black / thick
+      # membranes as instances, while SNEMI / Neurons / H01 treat those as
+      # background -- the conventions contradict and poison joint AffinityFGLoss.
+      # Keep the EM as free SSL recon signal on the same 10 train crops.
+      - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+      - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
     sft:
-      task: sft
       batch_size: 1
       sample_weight: 2.0
-      # Every labeled rung.  FIB-25 (fine, also a SSL source above) +
-      # SNEMI3D / CREMI / MICrONS.  Predict at 4 nm, pool the head down to each
-      # volume's native label grid, then AffinityFGLoss.
+      # Labeled rungs with compatible membrane/background convention:
+      # FIB-25 + SNEMI3D / Neurons + CREMI + H01.  MICrONS moved to SSL
+      # (image-only) -- see note above.  Predict at 4 nm, pool the head to
+      # the native label grid, then AffinityFGLoss.
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
         seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
@@ -319,47 +358,50 @@ data:
         seg: cremi3d_sample_C_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      # --- MICrONS 40x8x8, all labeled crops ---
-      - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
-        seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
-        seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
-        seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
-        seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
-        seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
-        seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
-        seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
-        seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
-        seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
-        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
+      # --- H01 cell 33x4x4 (4 nm EM mip0 + c3 seg), 10 train / 2 val ---
+      # Human temporal cortex (Shapson-Coe et al.); xy on the fine 4 nm grid,
+      # z = 33 nm.  Extended Jul 2026 to 1024x1024x5000 (z0=0).  Membrane /
+      # background convention matches SNEMI/Neurons.
+      - vol: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume         # train01
+        seg: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_volume         # train02
+        seg: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_volume         # train03
+        seg: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_volume         # train04
+        seg: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_volume         # train05
+        seg: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_volume         # train06
+        seg: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_volume         # train07
+        seg: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_volume         # train08
+        seg: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_volume         # train09
+        seg: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
+      - vol: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_volume         # train10
+        seg: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_c3_segmentation
+        root: data/H01Cell
+        native_resolution: [33, 4, 4]
 
   val_batch_size: 1
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
@@ -397,17 +439,27 @@ data:
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
-  # MICrONS: 2 of 12 labeled crops (sft instance-metric validation).
+  # MICrONS: 2 of 12 crops, IMAGE-ONLY ssl recon val (seg dropped -- same
+  # membrane/background contradiction as the train move to SSL above).
   - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
-    seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
     root: data/MICRONS
-    task: sft
+    task: ssl
     native_resolution: [40, 8, 8]
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
-    seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
     root: data/MICRONS
-    task: sft
+    task: ssl
     native_resolution: [40, 8, 8]
+  # H01 cell: 2 of 12 labeled mip0 crops (sft instance-metric validation).
+  - vol: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_volume        # test01
+    seg: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_c3_segmentation
+    root: data/H01Cell
+    task: sft
+    native_resolution: [33, 4, 4]
+  - vol: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_volume        # test02
+    seg: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_c3_segmentation
+    root: data/H01Cell
+    task: sft
+    native_resolution: [33, 4, 4]
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
   - vol: mitoem2_beta_test02_volume
     root: data/MitoEM2
