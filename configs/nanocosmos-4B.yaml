@@ -16,7 +16,7 @@
 # comparable or larger batch than the 16B recipe.
 #
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
-# ONE Cosmos3-Edge (4B) backbone predicts on a fixed FINE grid (4 nm, 200x256x256) a
+# ONE Cosmos3-Edge (4B) backbone predicts on a fixed FINE grid (4 nm, 400x256x256) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
 # down to wherever its ground truth lives (factor read from the GT shape).
@@ -64,12 +64,15 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 400 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
+  # 400 x 256 x 256 @ 4 nm = 1.6 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
   # super-resolution axis).  Cosmos3-Edge shares Nano's Wan2.2 VAE (4x in z, 16x
-  # in xy), so the DiT token grid is (50, 16, 16) = 12,800 tokens -- IDENTICAL to
-  # the 16B recipe's grid (Edge trims transformer depth/width, not the VAE/token
-  # grid).  The Edge backbone has ~4x fewer params than Nano; drop the patch
-  # (e.g. 160x256x256) if it OOMs.
+  # in xy) plus the latent_patch_size 2->1 repatch, so the DiT token grid is the
+  # full latent grid (400/4, 256/16, 256/16) = (100, 16, 16) = 25,600 tokens --
+  # 2x the 16B recipe's z-depth (200 -> 50) because this patch is z=400 vs 200.
+  # Edge trims transformer depth/width (not the VAE/token grid) and has ~4x fewer
+  # params than Nano, which is why it can afford the deeper patch; but self-
+  # attention is quadratic in token count, so drop the patch (e.g. 200x256x256,
+  # matching 16B, or 160x256x256) if it OOMs.
   patch_size: [400, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -824,7 +827,7 @@ model:
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
   feature_size: 64
-  dropout: 0.5                 # matches the 16B recipe (was 0.5, an overfit-debug value)
+  dropout: 0.0                 # no dropout anywhere in the Cosmos3 model (matches 16B)
   pretrained: true
   dtype: bf16
   freeze_vae_encoder: true
