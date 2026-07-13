@@ -3,7 +3,7 @@
 
 ``scripts/infer_volume.py`` runs one bounded region through the network in a
 single shot -- fine for a quick demo, but a real CREMI A+/B+/C+ (padded,
-200 x 3072 x 3072 native) or even SNEMI3D AC3 (100 x 1024 x 1024 native)
+200 x 3072 x 3072 native) or even SNEMI3D test (100 x 1024 x 1024 native)
 volume, resampled onto the network's fine grid, is **far** too large to hold
 as one tensor.
 
@@ -98,8 +98,8 @@ format for the target challenge (``--submission-format``, default ``auto``):
     resolution output down to exactly the region CREMI expects and write
     ``volumes/labels/neuron_ids`` (+ a ``resolution`` attribute) into a
     plain ``.hdf``.
-  * **SNEMI3D** (e.g. AC3, which is not a padded download and has no such
-    attributes) -- no cropping (AC3 already *is* the exact test region); the
+  * **SNEMI3D** (e.g. test, which is not a padded download and has no such
+    attributes) -- no cropping (test already *is* the exact test region); the
     official format is a **zip file** containing exactly one
     ``test-input.h5`` with dataset ``main``, per
     https://snemi3d.grand-challenge.org/.
@@ -147,7 +147,7 @@ DISK / I/O COST -- read before running on a big volume
 ---------------------------------------------------------
 The Phase A accumulator holds ``(N_AFF + 2)`` float32 channels (every
 unified-head channel: affinity + semantic + raw) over the **whole padded
-fine grid**, e.g. for SNEMI3D AC3 (fine grid ~800x1536x1536) with the
+fine grid**, e.g. for SNEMI3D test (fine grid ~800x1536x1536) with the
 default 30-offset model that's ~240 GB on disk (plus ~7.5 GB for the weight
 map); for CREMI's much larger padded volumes this is on the order of
 2+ TB PER SAMPLE. IMPORTANT: this size is essentially FIXED by the volume's
@@ -161,7 +161,7 @@ only blending aff+sem when ``--no-save-fine-grid`` is passed -- NOT
 currently implemented; Phase A always blends all channels regardless of
 ``--save-fine-grid``). The ``--save-fine-grid`` outputs are comparatively
 modest -- three single-channel volumes over the REAL (unpadded) fine grid,
-e.g. ~28 GB total for AC3 but ~300 GB for CREMI. The printed block-plan
+e.g. ~28 GB total for test but ~300 GB for CREMI. The printed block-plan
 (also shown by ``--dry-run``) reports the exact numbers before you commit
 to a run -- check available scratch space against it first.
 
@@ -174,17 +174,17 @@ Examples
         --native-resolution 40 4 4 \\
         --out-dir outputs/submission/cremi_A+
 
-    # SNEMI3D AC3 (non-padded, 30x6x6 nm), full-field-of-view windows
+    # SNEMI3D test (non-padded, 30x6x6 nm), full-field-of-view windows
     # (400x256x256 @ 4nm, matching the network's native patch) with 1/4-
     # stride (75%) overlap between windows -- identical invocation otherwise;
-    # AC3 carries no cropped_region_* attrs so this auto-writes the SNEMI3D
+    # test carries no cropped_region_* attrs so this auto-writes the SNEMI3D
     # zip format (test-input.h5 / dataset 'main') instead of CREMI's:
     python scripts/infer_submission.py \\
         --config-name nanocosmos-2B --ckpt <ckpt> \\
-        --vol AC3_inputs --root data/SNEMI3D \\
+        --vol test_inputs --root data/SNEMI3D \\
         --native-resolution 30 6 6 \\
         --window-size 400 256 256 --stride-frac 0.25 \\
-        --out-dir outputs/submission/snemi3d_AC3
+        --out-dir outputs/submission/snemi3d_test
 
     # Just plan the block grid (no inference) to estimate the run:
     python scripts/infer_submission.py ... --dry-run
@@ -959,7 +959,7 @@ def infer_submission(
     if fmt == "snemi3d":
         # SNEMI3D / Grand Challenge format: a ZIP containing exactly one file
         # named ``test-input.h5`` with a dataset ``main`` -- NOT the CREMI
-        # ``volumes/labels/neuron_ids`` layout. AC3 is the test volume as-is
+        # ``volumes/labels/neuron_ids`` layout. test is the test volume as-is
         # (not a padded download), so no crop-back is applied here.
         if crop is not None:
             print("  (note: this volume DOES carry cropped_region_* attrs but "

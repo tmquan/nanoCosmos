@@ -74,7 +74,11 @@ data:
   # ``union`` mode these are the source resolutions resampled onto the
   # envelope above (isotropic entries are skipped).
   resolution_map:
-    AC:
+    train:
+    - 30
+    - 6
+    - 6
+    test:
     - 30
     - 6
     - 6
@@ -206,8 +210,8 @@ data:
     seg: flyem3d_z32xy8nm_yz_p3_x2304_y2048_z6144_segmentation
     root: data/FLYEM3D
   val_volumes:
-  - vol: AC4_inputs
-    seg: AC4_labels
+  - vol: train_inputs
+    seg: train_labels
     root: data/SNEMI3D
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
     seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
@@ -216,8 +220,8 @@ data:
     seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
     root: data/MICRONS
   test_volumes:
-  - vol: AC4_inputs
-    seg: AC4_labels
+  - vol: train_inputs
+    seg: train_labels
     root: data/SNEMI3D
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
     seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation

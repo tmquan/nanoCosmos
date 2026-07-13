@@ -353,10 +353,11 @@ class Joint3DDataModule(pl.LightningDataModule):
         for suf in ("_volume", "_segmentation"):
             if n.endswith(suf):
                 n = n[: -len(suf)]
-        # SNEMI3D: AC4_inputs / AC4_labels / AC3_inputs -> AC4 / AC3
-        m = re.match(r"^(AC\d+)_", n)
-        if m:
-            return m.group(1)
+        # SNEMI3D challenge volumes: train_*/test_* stems
+        if n.startswith("train_"):
+            return "train"
+        if n.startswith("test_"):
+            return "test"
         # Neurons / neurite cylinder
         if n.startswith("neurons") or n.startswith("neurite"):
             return "neurons"

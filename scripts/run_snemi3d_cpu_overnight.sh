@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SNEMI3D AC3 -- high-quality overnight run (option A):
+# SNEMI3D test -- high-quality overnight run (option A):
 #   * Regenerate Phase A blend accumulator (network forward) and KEEP it
 #     (--keep-blend-cache) so affinity-based agglomeration can run afterwards.
 #   * Phase B = EXACT CPU Mutex Watershed (mws_np), LARGE chunks -> no
@@ -10,7 +10,7 @@ set -euo pipefail
 cd /localhome/local-tranminhq/nanocosmos
 
 CKPT="outputs/2026-07-04_05-23-24_nanocosmos-2B/checkpoints/crash_recovery.ckpt"  # latest (mtime 2026-07-06 12:07)
-OUT_DIR="outputs/submission/snemi3d_AC3"
+OUT_DIR="outputs/submission/snemi3d_test"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 mkdir -p logs
@@ -20,7 +20,7 @@ echo "Logging to ${LOG}"
 python scripts/infer_submission.py \
   --config-name nanocosmos-2B \
   --ckpt "${CKPT}" \
-  --vol AC3_inputs --root data/SNEMI3D \
+  --vol test_inputs --root data/SNEMI3D \
   --native-resolution 30 6 6 \
   --window-size 400 256 256 \
   --stride-frac 0.25 \
@@ -33,4 +33,4 @@ python scripts/infer_submission.py \
   --overrides training.mutex_watershed.backend=cpu \
   --out-dir "${OUT_DIR}" 2>&1 | tee "${LOG}"
 
-echo "DONE. Kept blend accumulator for agglomeration: ${OUT_DIR}/AC3_inputs_blend_acc.h5"
+echo "DONE. Kept blend accumulator for agglomeration: ${OUT_DIR}/test_inputs_blend_acc.h5"

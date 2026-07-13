@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full SNEMI3D challenge submission run: AC3 (non-padded test volume),
+# Full SNEMI3D challenge submission run: test (non-padded test volume),
 # two-phase blockwise inference via scripts/infer_submission.py:
 #   Phase A -- Gaussian-weighted blend of raw sem+aff logits over
 #              heavily-overlapping WINDOW_SIZE windows (full network field
@@ -9,18 +9,18 @@
 #              the already-blended field (no network inference here).
 # See infer_submission.py's module docstring for the full design and the
 # cross-chunk-merge limitation. DISK COST: the Phase A accumulator needs
-# ~240 GB of scratch disk for AC3's fine grid at the defaults. IMPORTANT:
+# ~240 GB of scratch disk for test's fine grid at the defaults. IMPORTANT:
 # this size is ~FIXED by the volume's real fine-grid shape x channel count
 # -- STRIDE_FRAC/WINDOW_SIZE barely move it (they only change how many
 # overlapping windows are processed, i.e. I/O volume and runtime, not the
 # accumulator's size on disk); there is currently no CLI knob to shrink it.
 # The --save-fine-grid diagnostics (pred_raw/pred_sem/pred_label_fine,
-# SAVE_FINE_GRID below) add roughly another ~28 GB for AC3; set
+# SAVE_FINE_GRID below) add roughly another ~28 GB for test; set
 # SAVE_FINE_GRID=false to skip them. Run with --dry-run first (e.g. by
 # copying this script's python invocation and adding --dry-run) to see the
 # exact block plan and disk numbers for your hardware.
 #
-# Output format is SNEMI3D's own (auto-detected, since AC3 carries no
+# Output format is SNEMI3D's own (auto-detected, since test carries no
 # cropped_region_* attrs): a ZIP containing a single test-input.h5 with
 # dataset 'main' -- see https://snemi3d.grand-challenge.org/. This is a
 # DIFFERENT format from CREMI's volumes/labels/neuron_ids -- see
@@ -36,9 +36,9 @@ set -euo pipefail
 CKPT="${CKPT:-outputs/2026-07-01_15-31-16_nanocosmos-2B/checkpoints/crash_recovery.ckpt}"
 CONFIG_NAME="${CONFIG_NAME:-nanocosmos-2B}"
 DATA_ROOT="${DATA_ROOT:-data/SNEMI3D}"
-OUT_DIR="${OUT_DIR:-outputs/submission/snemi3d_AC3}"
+OUT_DIR="${OUT_DIR:-outputs/submission/snemi3d_test}"
 NATIVE_RES="30 6 6"   # SNEMI3D: z y x nm
-VOL="AC3_inputs"
+VOL="test_inputs"
 
 # Phase A: full network field of view (400x256x256 @ 4nm), 1/4-stride
 # (75%) overlap between neighbouring windows, forwarded through the network
@@ -76,7 +76,7 @@ SAVE_FINE_GRID="${SAVE_FINE_GRID:-true}"
 
 # If a previous run crashed (e.g. OOM) after Phase A finished, set this to
 # "true" to skip re-running Phase A and reuse the leftover
-# AC3_inputs_blend_acc.h5 in OUT_DIR if it's still compatible -- safe to
+# test_inputs_blend_acc.h5 in OUT_DIR if it's still compatible -- safe to
 # always leave on, it's a no-op when there's nothing to reuse.
 REUSE_BLEND_CACHE="${REUSE_BLEND_CACHE:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

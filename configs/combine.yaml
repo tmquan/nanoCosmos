@@ -4,8 +4,8 @@
 # Inheritance chain:  default <- snemi3d <- combine
 #
 # Inherits everything from snemi3d.yaml and overrides the volume lists
-# to drop SNEMI3D AC4 from train (train uses the full neurons cylinder
-# + the 10 MICrONS train splits) while keeping AC4 in val/test for
+# to drop SNEMI3D train_* from the train set (uses the full neurons cylinder
+# + the 10 MICrONS train splits) while keeping train_* in val/test for
 # comparison against the original SNEMI3D benchmark.  Resolution
 # harmonisation (resolution_zoom_prob/range/map) is inherited from
 # snemi3d.yaml.
@@ -20,8 +20,8 @@
 #
 # Volumes (download_snemi3d.py --source all, download_microns.py --split):
 #   train: neurons cylinder       + MICrONS train01-10
-#   val:   SNEMI3D AC4            + MICrONS test01 + test02
-#   test:  SNEMI3D AC4            + MICrONS test01 + test02
+#   val:   SNEMI3D train          + MICrONS test01 + test02
+#   test:  SNEMI3D train          + MICrONS test01 + test02
 #
 # Usage:
 #   python scripts/train.py --config-name combine
@@ -112,8 +112,8 @@ data:
       root: data/MICRONS
 
   val_volumes:
-    - vol: AC4_inputs
-      seg: AC4_labels
+    - vol: train_inputs
+      seg: train_labels
       root: data/SNEMI3D
 
     - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
@@ -125,8 +125,8 @@ data:
       root: data/MICRONS
 
   test_volumes:
-    - vol: AC4_inputs
-      seg: AC4_labels
+    - vol: train_inputs
+      seg: train_labels
       root: data/SNEMI3D
 
     - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume

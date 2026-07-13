@@ -431,7 +431,7 @@ All are standalone (`__main__`-guarded), write into the `data/<DATASET>` roots, 
 - `download_flyem3d.py` — FlyEM 8 nm FIB-SEM (`fib25`/`hemibrain`/`malecns`) via CloudVolume; `--role` = `sft` (image+seg) or `ssl` (image-only).
 - `download_cremi3d.py` — downloads CREMI `.hdf` (A/B/C labeled train; A+/B+/C+ image-only test) and splits the nested `volumes/raw` + `volumes/labels/neuron_ids` into separate `_volume.h5` / `_segmentation.h5`.
 - `download_microns.py` — MICrONS minnie65 EM + static segmentation (default version v1300) via bossdb/GCS.
-- `download_snemi3d.py` — Kasthuri 2015 data at 6×6×30 nm: AC3/AC4 from snemi.zip and the annotated `neurons` cylinder from GCS.
+- `download_snemi3d.py` — Kasthuri 2015 data at 6×6×30 nm: train/test from snemi.zip and the annotated `neurons` cylinder from GCS.
 - `download_zenodo_582636.py` — a rice-grain X-ray micro-CT record used as a non-connectomics instance-segmentation smoke test (parallel, MD5-verified, resumable); also a template for other Zenodo records.
 - `convert_mitoem2.py` — converts MitoEM2 nnU-Net `.nii.gz` images (transposing `(X,Y,Z)`→`(Z,Y,X)`, reading `native_resolution` from voxel spacing) to image-only `mitoem2_<subset>_<crop>_volume.h5` for the SSL branch; validates and overwrites truncated outputs.
 - `collect_meaningful_crops.py` — probes a CloudVolume grid with cheap small patches and only fetches full crops passing the same content/autocorr/non-zero gates as `LazyVolDataset` (avoids blind re-downloading of resin/off-tissue regions).
@@ -501,7 +501,7 @@ Two families. **Inheritance chain**: `default` ← `snemi3d` ← `combine` (via 
 |---|---|---|---|
 | `default.yaml` | `cosmos3nano3d` → `Cosmos3Nano3DModule` | `snemi3d` | Root defaults; `head_channels: 16`, `feature_size: 64`, `precision: bf16-mixed`, `strategy: ddp`, AdamW `lr 1e-3` + cosine, `max_epochs 100`, MWS `strides [1,4,4]` `size_filter 50`. |
 | `snemi3d.yaml` | `cosmos3nano3d` | `snemi3d` | `defaults: [default]`; Nano 16B end-to-end on SNEMI3D+neurons+MICrONS, `bf16-true`, cosine-warmup. |
-| `combine.yaml` | inherits `snemi3d` | inherits | `defaults: [snemi3d]`; **data-only override** (drops AC4 from train, keeps in val/test). Has no `model.type`/`dataset` of its own — it resolves to the inherited `cosmos3nano3d`/`snemi3d`. |
+| `combine.yaml` | inherits `snemi3d` | inherits | `defaults: [snemi3d]`; **data-only override** (drops SNEMI3D train from train, keeps in val/test). Has no `model.type`/`dataset` of its own — it resolves to the inherited `cosmos3nano3d`/`snemi3d`. |
 | `cosmospredict3d.yaml` | `cosmospredict3d` → `CosmosPredict3DModule` | `snemi3d` | Flattened; 2B Cosmos-Predict baseline, `variant 2B`, `head_channels 32`, `freeze_dit_backbone: 5` (freeze N epochs), `precision bf16-mixed`, `compile: true`, MWS `strides [1,1,1]` + `gate_with_sem`. |
 | `cosmos3nano3d.yaml` | `cosmos3nano3d` | `snemi3d` | Flattened; same combined data recipe as above but Nano 16B, `bf16-true`, `compile: false`, `weight_decay 0.0`. |
 | `nanocosmos-2B.yaml` | `joint3d_2b` → `JointPredict3DModule` | `joint3d` | Joint recon+seg on a 4 nm fine grid; SSL+SFT branches, round-robin sampler, `Joint3DReconSegLoss`. |

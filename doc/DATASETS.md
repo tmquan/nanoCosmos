@@ -16,7 +16,7 @@ that downloads (or converts) it.
 
 | Dataset | Tissue / EM modality | Native res (x,y,z nm) | `resolution_map` (z,y,x) | Publication | Download / convert | Data root | Config key (`data.dataset`) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SNEMI3D | Mouse S1 cortex, **ssSEM** (AC3/AC4) | 6 × 6 × 30 | `AC: [30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `snemi3d` |
+| SNEMI3D | Mouse S1 cortex, **ssSEM** (train/test) | 6 × 6 × 30 | `train`/`test`: `[30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `snemi3d` |
 | Neurons | Mouse S1 cortex, **ssSEM** (Kasthuri cylinder) | 6 × 6 × 30 | `neurons: [30,6,6]` | Kasthuri et al. 2015, *Cell* 162:648 | `download_snemi3d.py` | `data/SNEMI3D` | `neurons` |
 | MICrONS | Mouse V1 cortex, **ssTEM** (minnie65) | 8 × 8 × 40 | `minnie65: [40,8,8]` | MICrONS Consortium 2025, *Nature* (preprint bioRxiv 2021.07.28.454025) | `download_microns.py` | `data/MICRONS` | `microns` / `joint3d` (SSL) |
 | CREMI3D | *Drosophila* brain, **ssTEM** (A/B/C) | 4 × 4 × 40 | `cremi3d: [40,4,4]` | CREMI challenge 2016 (cremi.org); FAFB Zheng et al. 2018, *Cell* | `download_cremi3d.py` | `data/CREMI3D` | `cremi3d` |
@@ -38,7 +38,7 @@ in [On-disk convention](#on-disk-convention). The multi-dataset
 "foundation" recipe (`configs/cosmos3nano3d.yaml`) trains on Neurons,
 MICrONS, CREMI3D, and FLYEM3D in a single run by listing volumes from several
 `data/<root>` directories under one datamodule, and holds out SNEMI3D
-(`AC4`) as the benchmark validation / test set (it appears under
+(`train_*`) as the benchmark validation / test set (it appears under
 `val_volumes` / `test_volumes`, not `train_volumes`).
 
 **Dataset census & previews.** Per-subset crop counts, voxel sizes, and
@@ -76,26 +76,27 @@ are thin metadata subclasses of `MICRONSDataset`/`MICRONSDataModule`.
 
 ---
 
-## SNEMI3D (AC3 / AC4)
+## SNEMI3D (train / test)
 
 - **What:** The SNEMI3D challenge crops from Kasthuri et al. 2015 mouse
-  somatosensory cortex (**ssSEM**, ATUM tape-collecting + SEM). `AC4` = train (1024 × 1024 × 100, EM +
-  labels); `AC3` = test (1024 × 1024 × 100, **EM only** — labels were
-  never publicly released).  In the joint configs `AC4` is the labeled `sft`
-  holdout (`val_volumes`) and the label-less `AC3_inputs` is an image-only
+  somatosensory cortex (**ssSEM**, ATUM tape-collecting + SEM). On disk:
+  `train_*` (historically AC4; 1024 × 1024 × 100, EM + labels) and
+  `test_*` (historically AC3; 1024 × 1024 × 100, **EM only** — labels were
+  never publicly released).  In the joint configs `train_*` is the labeled `sft`
+  holdout (`val_volumes`) and the label-less `test_inputs` is an image-only
   `ssl` train source.
 - **Resolution:** 6 × 6 × 30 nm (anisotropic).
-- **Source:** `snemi.zip` (rhoana / Zenodo). AC3/AC4 sit at Y ≈ 5440 in
+- **Source:** `snemi.zip` (rhoana / Zenodo). train/test sit at Y ≈ 5440 in
   the `kasthuri11` volume, outside the GCS ground-truth cylinder.
 - **Citation:** Kasthuri, N. et al. (2015), *Saturated Reconstruction of
   a Volume of Neocortex*, Cell 162(3):648-661.
 
 ```bash
-python scripts/download_snemi3d.py --source snemi      # AC3 EM + AC4 EM/labels
+python scripts/download_snemi3d.py --source snemi      # test EM + train EM/labels
 python scripts/download_snemi3d.py --link /scratch/SNEMI3D   # or symlink existing
 ```
 
-Files land in `data/SNEMI3D/` (e.g. `AC4_inputs`, `AC4_labels`). The output
+Files land in `data/SNEMI3D/` (e.g. `train_inputs`, `train_labels`). The output
 directory flag is `--output` (default `data/SNEMI3D`) — note this differs from
 the `--out-dir` used by the CREMI3D / FLYEM3D / COSEM3D downloaders;
 `download_snemi3d.py` does **not** accept `--out-dir`.
@@ -557,7 +558,7 @@ reading them by their original path.
 Every prior audit pass covered only the label-free `ssl` branch (the crop is
 its own supervision, so junk is directly visible/trainable-on). This pass
 extends the same rigor to all **18 labeled (`sft`) volumes** -- the 15 train
-+ `AC4_inputs` + 2 MICrONS val holdouts -- checking both the paired **image**
++ `train_inputs` + 2 MICrONS val holdouts -- checking both the paired **image**
 and the **instance label**.
 
 **Image side (all 18):** re-ran the same `content_frac` / `autocorr` / `nz`
@@ -572,7 +573,7 @@ instance's share of the labeled foreground (`max_inst_frac` -- a value near 1
 with `n_inst` = 1 would mean a degenerate single-blob "label" rather than a
 real instance segmentation). Results: **no volume shows a whole-file
 degenerate pattern** -- every dataset's *median* instance count per patch is
-healthy (CREMI 21-126, MICrONS 31-48, FLYEM3D 37.5, AC4 21, Neurons 3).
+healthy (CREMI 21-126, MICrONS 31-48, FLYEM3D 37.5, train 21, Neurons 3).
 
 The **minimum** across patches told a different story for two datasets, and
 only one of them turned out to already be handled:
@@ -628,7 +629,7 @@ copy of the label scored 0.87 -- confirming the method works when the ground
 truth is known).
 
 Applied to the real data, though, **every dataset scored close to or below 1**
-(CREMI 0.75-0.82, MICrONS 0.78-0.94, FLYEM3D FIB-25 0.90, Neurons/AC4
+(CREMI 0.75-0.82, MICrONS 0.78-0.94, FLYEM3D FIB-25 0.90, Neurons/train
 1.12-1.16) -- including **`flyem3d_8nm_x2304_y2048_z6144`, the professionally
 proofread FIB-25 core**, which is about as trusted a ground-truth label as
 exists in this codebase. Since even that reference case fails the test, the
@@ -656,7 +657,7 @@ in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
 
 | Dataset | `<stem>` pattern | concrete example | seg? | root |
 | --- | --- | --- | --- | --- |
-| **SNEMI3D** | `AC4_inputs` / `AC4_labels`; `AC3_inputs` (test, EM only) | `AC4_inputs`, `AC4_labels` | A: yes / AC3: no | `data/SNEMI3D` |
+| **SNEMI3D** | `train_inputs` / `train_labels`; `test_inputs` (test, EM only) | `train_inputs`, `train_labels` | train: yes / test: no | `data/SNEMI3D` |
 | **Neurons** | `neurons_{X}x{Y}x{Z}_x{X0}_y{Y0}_z{Z0}` | `neurons_5000x2900x300_x3000_y7200_z950` | yes | `data/SNEMI3D` |
 | **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` (joint recipe: **image-only SSL**, omit `seg:`) | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume` | optional | `data/MICRONS` |
 | **H01Cell** | `h01cell_mip0_{Sx}x{Sy}x{Sz}_x{X}_y{Y}_z{Z}` ; seg adds `_c3` | vol `h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume`, seg `…_c3_segmentation` | yes | `data/H01Cell` |

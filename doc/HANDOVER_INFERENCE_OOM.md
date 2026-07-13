@@ -8,7 +8,7 @@
 
 Produce final challenge-submission instance segmentations for:
 - **CREMI3D**: samples A+, B+, C+ (padded test volumes) → `*_submission.hdf` (CREMI `volumes/labels/neuron_ids` format).
-- **SNEMI3D**: AC3 (non-padded test volume) → `*_submission.zip` (containing `test-input.h5`, dataset `main`).
+- **SNEMI3D**: test (non-padded test volume) → `*_submission.zip` (containing `test-input.h5`, dataset `main`).
 
 Both go through the same two-phase pipeline in `scripts/infer_submission.py`:
 - **Phase A** — Gaussian-weighted blending of the network's raw affinity+semantic+raw-reconstruction logits over heavily-overlapping windows across the whole volume, accumulated into an on-disk HDF5 file (this is the GPU-heavy, network-forward-pass phase).
@@ -47,7 +47,7 @@ An earlier pass at this script's comments suggested "raise `--stride-frac` / shr
 > The Phase A accumulator's size is **fixed** by `(real fine-grid shape) × (N_AFF+2 channels) × 4 bytes` — essentially the volume's native size/resolution and the model's channel count. `--window-size`/`--stride-frac` only change how many *overlapping windows* are processed (i.e. runtime and I/O volume against that fixed-size file), not the file's size on disk.
 
 Concretely, at current defaults:
-- **SNEMI3D AC3**: ~240 GB accumulator + ~7.5 GB weight map + (if `--save-fine-grid`, default on) ~28 GB diagnostics ≈ **~275 GB peak**, one sample.
+- **SNEMI3D test**: ~240 GB accumulator + ~7.5 GB weight map + (if `--save-fine-grid`, default on) ~28 GB diagnostics ≈ **~275 GB peak**, one sample.
 - **CREMI3D** (each of A+/B+/C+): ~2+ TB accumulator + (if `--save-fine-grid`) ~300 GB diagnostics ≈ **~2.3+ TB peak PER SAMPLE**. The wrapper script processes A/B/C sequentially and deletes the accumulator after each sample succeeds, so peak usage should be ~1 sample's worth *if nothing crashed* — but see below.
 
 **There is currently no CLI knob to shrink the accumulator itself.** The only real levers today:
@@ -117,7 +117,7 @@ Verified this feature works correctly via a smoke test (synthetic volume, real 2
 
 Start conservative, verify with `--dry-run`, then scale back up once you've confirmed the actual OOM cause and headroom on this specific node. Do **not** just re-run the exact command that OOM'd — you don't yet know which resource was exhausted.
 
-**SNEMI3D AC3:**
+**SNEMI3D test:**
 ```bash
 cd /localhome/local-tranminhq/nanoCosmos
 CKPT=<path to your actual checkpoint>              # see §7 — verify this path exists on THIS server
@@ -150,7 +150,7 @@ Once conservative settings are confirmed working, scale `--blend-batch-size`/`--
   find outputs -iname "*.ckpt" -newer outputs -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -20
   ```
   and pass it explicitly via `CKPT=<real path>`.
-- **Data availability.** Confirm `data/SNEMI3D/AC3_inputs.h5` and `data/CREMI3D/cremi3d_sample_{A,B,C}+_padded_volume.h5` exist and are the *padded* CREMI downloads (not the cropped ones) — see `scripts/download_cremi3d.py --padded` and `doc/DATASETS.md` if they need re-downloading.
+- **Data availability.** Confirm `data/SNEMI3D/test_inputs.h5` and `data/CREMI3D/cremi3d_sample_{A,B,C}+_padded_volume.h5` exist and are the *padded* CREMI downloads (not the cropped ones) — see `scripts/download_cremi3d.py --padded` and `doc/DATASETS.md` if they need re-downloading.
 - **`numba` availability.** The Phase B CPU Mutex Watershed backend (`mws_np`) is numba-JIT'd with `nogil=True` for real multi-core parallelism across `--mws-workers` — confirm `python -c "import numba"` succeeds on this server; if numba is missing, Phase B silently falls back to slow, non-parallel plain Python (functionally correct, just much slower — was actually observed missing in the dev sandbox used to build this feature, so don't assume it's present without checking).
 - **GPU count/ids.** `nvidia-smi -L` to see what's actually available before setting `GPU_IDS`.
 
@@ -158,7 +158,7 @@ Once conservative settings are confirmed working, scale `--blend-batch-size`/`--
 
 ## 8. Success criteria
 
-- **SNEMI3D**: `outputs/submission/snemi3d_AC3/AC3_inputs_submission.zip` exists and contains exactly one `test-input.h5` (dataset `main`, uint32, same shape as `AC3_inputs.h5`'s native shape).
+- **SNEMI3D**: `outputs/submission/snemi3d_test/test_inputs_submission.zip` exists and contains exactly one `test-input.h5` (dataset `main`, uint32, same shape as `test_inputs.h5`'s native shape).
 - **CREMI3D**: `outputs/submission/cremi_{A,B,C}+/*_submission.hdf` exist, each with dataset `volumes/labels/neuron_ids` (uint64) at the *official* (unpadded) CREMI test region shape, plus a `resolution` attribute.
 - Both scripts print a final `Submission file written: ... (N unique ids incl. background)` line with a plausible id count (thousands, not 1 or millions) — a suspiciously low count (~1-2) suggests the semantic/affinity gating collapsed everything to background, worth sanity-checking against the checkpoint quality before trusting the submission.
 - Sanity-check with the `--save-fine-grid` diagnostics (`pred_sem_fine.h5`, `pred_raw_fine.h5`) if disk allows — visually or statistically confirm the semantic probability map isn't degenerate (all-0 or all-1) before spending the CREMI compute budget on all three samples.

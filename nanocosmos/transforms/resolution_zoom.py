@@ -145,7 +145,7 @@ class RandResolutionZoomd(MapTransform, Randomizable):
             a ``"volume"`` key, the longest matching prefix is used
             instead of *native_resolution*.  Example::
 
-                {"minnie65": (40, 8, 8), "AC4": (30, 6, 6)}
+                {"minnie65": (40, 8, 8), "train": (30, 6, 6), "test": (30, 6, 6)}
 
         volume_key: Sample dict key that holds the volume name
             (default ``"volume"``).

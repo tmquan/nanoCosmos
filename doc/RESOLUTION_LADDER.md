@@ -60,7 +60,7 @@ crops suffices. `Nx A×B×C` = N crops of that size. **USED_SIZE values below ar
 a starting proposal — tune per compute/coverage.** The implemented volume
 lists live in `configs/nanocosmos-{16B,4B,2B}.yaml`; the authoritative per-subset
 census (counts, sizes, voxel totals, task/split) is **[`doc/data.csv`](./data.csv)**.
-SSL also includes **MitoEM2**, image-only **CREMI+**, and the label-less **AC3**.
+SSL also includes **MitoEM2**, image-only **CREMI+**, and the label-less SNEMI3D **test**.
 Several originally-listed COSEM/FIB-25/MitoEM tiles were **pruned** after the SSL
 content gate flagged them as mostly-empty — so the USED_SIZE counts below are
 upper-bound proposals; `data.csv` is current.
@@ -81,7 +81,7 @@ upper-bound proposals; `data.csv` is current.
 | 4 | **FIB-25** | (8,8,8) | 2·2 | SSL + SFT | 6446×6643×8090 | SFT 1× 1536³ (core); SSL 4× 1024³ (surround) |
 | 5 | **Hemibrain** | (8,8,8) | 2·2 | SSL (+SFT) | 34427×39725×41394 | 5× 1024³ (4 SSL + 1 test) |
 | 6 | **MaleCNS** | (8,8,8) | 2·2 | SSL (+SFT) | 94088×78317×134576 | 5× 1024³ (4 SSL + 1 test) |
-| 7 | **SNEMI3D / Neurons** | (30,6,6) | 7.5·1.5 | SFT | 5000×2900×300 (Kasthuri); AC4 1024×1024×100 | full (train vol + AC4 val) |
+| 7 | **SNEMI3D / Neurons** | (30,6,6) | 7.5·1.5 | SFT | 5000×2900×300 (Kasthuri); train 1024×1024×100 | full (train vol + train val) |
 | 8 | **CREMI** | (40,4,4) | 10·1 | SFT | 3× 1250×1250×125 (A/B/C) | full 3× 1250×1250×125 |
 | 9 | **H01Cell** | (33,4,4) | 8.25·1 | SFT | petascale (full H01) | 12× 1024×1024×5000 crops (10 train + 2 val) |
 | 10 | **MICrONS** | (40,8,8) | 10·2 | SSL (image-only) | petascale (full minnie65) | 1–10× 4096×4096×800 crops |

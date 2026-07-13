@@ -5,21 +5,22 @@ Unified download script for all Kasthuri et al. 2015 data at 6×6×30 nm.
 All data originates from the same mouse somatosensory cortex volume
 published in Kasthuri et al., Cell 2015.  This script can download:
 
-  ac3+ac4   SNEMI3D challenge data from snemi.zip (rhoana/Zenodo)
+  snemi     SNEMI3D challenge data from snemi.zip (rhoana/Zenodo)
   neurons   Full annotated cylinder from GCS (5000×2900×300)
 
-SNEMI3D challenge data (AC3 / AC4)
------------------------------------
+SNEMI3D challenge data (on-disk: train_* / test_*)
+-----------------------------------------------
 Downloaded as snemi.zip from rhoana.rc.fas.harvard.edu (or Zenodo).
-  AC4 = train  (1024×1024×100, EM + 401-ID labels)
-  AC3 = test   (1024×1024×100, EM only — labels never released)
+Historically called AC4 / AC3 in the challenge; we store them as:
+  train_*  (1024×1024×100, EM + 401-ID labels)
+  test_*   (1024×1024×100, EM only — labels never released)
 
 These ROIs sit at Y≈5440 in the kasthuri11 volume, *outside* the
 ground_truth annotation cylinder, so GCS ground_truth is empty there.
-The AC3/AC4 segmentations were separate OCP annotation tokens.
+The challenge segmentations were separate OCP annotation tokens.
 
 Verified coordinates (OCP scale 1 = GCS mip0, 6×6×30 nm):
-  AC4: x=[4400,5424], y=[5440,6464], z=[1099,1199]  (Z reversed vs snemi.zip)
+  train: x=[4400,5424], y=[5440,6464], z=[1099,1199]  (Z reversed vs snemi.zip)
   Spearman correlation between GCS EM and snemi.zip: 0.96+
 
 Neurons (GCS)
@@ -33,7 +34,7 @@ Neurons (GCS)
 
 Usage
 -----
-    # Download SNEMI3D challenge data (AC3 EM + AC4 EM/labels)
+    # Download SNEMI3D challenge data (test EM + train EM/labels)
     python scripts/download_snemi3d.py --source snemi
 
     # Download neurons full annotated cylinder from GCS
@@ -71,9 +72,9 @@ SNEMI_ZIP_URL = "http://rhoana.rc.fas.harvard.edu/dataset/snemi.zip"
 
 # Mapping from snemi.zip TIF files -> output H5 files
 SNEMI_FILE_MAP = {
-    "image/train-input.tif": "AC4_inputs.h5",
-    "seg/train-labels.tif": "AC4_labels.h5",
-    "image/test-input.tif": "AC3_inputs.h5",
+    "image/train-input.tif": "train_inputs.h5",
+    "seg/train-labels.tif": "train_labels.h5",
+    "image/test-input.tif": "test_inputs.h5",
 }
 
 # ---------------------------------------------------------------------------
@@ -92,9 +93,9 @@ VALID_SOURCES = ["snemi", "neurons", "all"]
 
 # Files expected for --link mode
 LINK_FILES = [
-    "AC3_inputs.h5",
-    "AC4_inputs.h5", "AC4_labels.h5",
-    "AC4_thin_inputs.h5", "AC4_thin_labels.h5",
+    "test_inputs.h5",
+    "train_inputs.h5", "train_labels.h5",
+    "train_thin_inputs.h5", "train_thin_labels.h5",
 ]
 
 
@@ -170,16 +171,16 @@ def make_neurons_name(
 # Download functions
 # ---------------------------------------------------------------------------
 def download_snemi(out_dir: Path) -> None:
-    """Download SNEMI3D challenge data (AC3 EM + AC4 EM/labels) from snemi.zip."""
+    """Download SNEMI3D challenge data (test EM + train EM/labels) from snemi.zip."""
     existing = [out_dir / h5 for h5 in SNEMI_FILE_MAP.values() if (out_dir / h5).exists()]
     if len(existing) == len(SNEMI_FILE_MAP):
-        print("\n--- SNEMI3D (AC3 + AC4) ---")
+        print("\n--- SNEMI3D (train + test) ---")
         print("  All files already exist:")
         for h5 in SNEMI_FILE_MAP.values():
             print(f"    {h5}")
         return
 
-    print("\n--- SNEMI3D (AC3 + AC4) ---")
+    print("\n--- SNEMI3D (train + test) ---")
     print(f"  Source: {SNEMI_ZIP_URL}")
 
     zip_path = out_dir / "snemi.zip"
@@ -212,9 +213,9 @@ def download_snemi(out_dir: Path) -> None:
             print(f"    {h5_name}: shape={arr.shape} dtype={arr.dtype} "
                   f"unique={n_ids}")
 
-    # Create thin variants (AC4 is already 100 slices so thin = same)
-    for src_name, thin_name in [("AC4_inputs.h5", "AC4_thin_inputs.h5"),
-                                 ("AC4_labels.h5", "AC4_thin_labels.h5")]:
+    # Create thin variants (train is already 100 slices so thin = same)
+    for src_name, thin_name in [("train_inputs.h5", "train_thin_inputs.h5"),
+                                 ("train_labels.h5", "train_thin_labels.h5")]:
         src = out_dir / src_name
         dst = out_dir / thin_name
         if dst.exists() or not src.exists():
@@ -316,9 +317,9 @@ def run_probe() -> None:
     for name, sp in NEURONS_SPLITS.items():
         print(f"  {name}: start={sp['start']}  size={sp['size']}")
     print()
-    print("AC3/AC4 (SNEMI3D challenge, from snemi.zip):")
-    print("  AC4 (train): 1024×1024×100  EM + 401-ID labels")
-    print("  AC3 (test):  1024×1024×100  EM only (labels never released)")
+    print("train/test (SNEMI3D challenge, from snemi.zip):")
+    print("  train: 1024×1024×100  EM + 401-ID labels")
+    print("  test:  1024×1024×100  EM only (labels never released)")
     print("  GCS coords:  x=[4400,5424] y=[5440,6464] z=[1099,1199]")
     print("  NOTE: outside ground_truth cylinder — labels only in snemi.zip")
     print("=" * 60)

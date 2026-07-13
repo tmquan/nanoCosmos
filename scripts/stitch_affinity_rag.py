@@ -44,7 +44,7 @@ exclusion) constraints internally, not simple attractive merge evidence.
 
 Usage:
     python scripts/stitch_affinity_rag.py \\
-        --out-dir outputs/submission/snemi3d_AC3 --vol AC3_inputs \\
+        --out-dir outputs/submission/snemi3d_test --vol test_inputs \\
         --submission-format snemi3d
 """
 from __future__ import annotations
@@ -231,7 +231,7 @@ def apply_merge_and_package(
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--vol", required=True, help="volume stem, e.g. AC3_inputs")
+    p.add_argument("--vol", required=True, help="volume stem, e.g. test_inputs")
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--min-support", type=int, default=4, help="min boundary voxels between a pair before merging")
     p.add_argument("--z-slab", type=int, default=128)

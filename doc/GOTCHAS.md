@@ -176,7 +176,7 @@ abort at `setup` with a `ValueError`.
 -- in lazy 3-D mode (`slice_mode: false`):
 
 * `snemi3d.py` (`train_vols = self.train_volumes or self._DEFAULT_VOLUMES`)
-  **silently falls back** to its built-in `_DEFAULT_VOLUMES` (AC4) —
+  **silently falls back** to its built-in `_DEFAULT_VOLUMES` (train_inputs) —
   never `None`.
 * `microns.py` / `neurons.py` **raise `ValueError`** telling you to set
   a non-empty `train_volumes` or switch to `slice_mode: true`.
@@ -278,16 +278,16 @@ it because graph breaks are no longer tolerated.
 
 ---
 
-## 16. `combine.yaml` drops AC4 from train
+## 16. `combine.yaml` drops SNEMI3D train from train
 
-**Symptom.** You expect "combine" to literally mean SNEMI3D-AC3 +
-SNEMI3D-AC4 + neurons + MICrONS, but training only sees the neurons
-cylinder + the 10 MICrONS crops — no SNEMI3D AC3 *or* AC4 in the train
-set at all.  AC4 is reserved for val/test.
+**Symptom.** You expect "combine" to literally mean SNEMI3D test +
+SNEMI3D train + neurons + MICrONS, but training only sees the neurons
+cylinder + the 10 MICrONS crops — no SNEMI3D test *or* train in the train
+set at all.  SNEMI3D train is reserved for val/test.
 
 **Where.** `configs/combine.yaml::data.train_volumes`.
 
-**Why.** AC4 is held out as the canonical SNEMI3D val volume; combine
+**Why.** SNEMI3D train is held out as the canonical SNEMI3D val volume; combine
 was designed to leave it out of training.
 
 **Remediation.** **Intentional.**  Documented in

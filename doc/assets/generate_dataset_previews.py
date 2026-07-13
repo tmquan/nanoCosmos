@@ -167,8 +167,8 @@ REPRESENTATIVE: Dict[Tuple[str, str, str, str], Tuple[str, str, Optional[str]]] 
         "neurons_5000x2900x300_x3000_y7200_z950",
         "neurons_5000x2900x300_x3000_y7200_z950",
     ),
-    ("SNEMI3D", "AC4", "SFT", "Train"): ("data/SNEMI3D", "AC4_inputs", "AC4_labels"),
-    ("SNEMI3D", "AC3", "SSL", "Train"): ("data/SNEMI3D", "AC3_inputs", None),
+    ("SNEMI3D", "train", "SFT", "Train"): ("data/SNEMI3D", "train_inputs", "train_labels"),
+    ("SNEMI3D", "test", "SSL", "Train"): ("data/SNEMI3D", "test_inputs", None),
 }
 
 

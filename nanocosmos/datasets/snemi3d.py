@@ -19,7 +19,7 @@ class SNEMI3DDataset(CircuitDataset):
     """
     SNEMI3D Dataset for neuron segmentation in electron microscopy images.
 
-    Volume format: ``[{"vol": "AC4_inputs", "seg": "AC4_labels"}]``
+    Volume format: ``[{"vol": "train_inputs", "seg": "train_labels"}]``
 
     Optional per-volume keys:
         - ``root``: override ``root_dir`` for this volume.
@@ -29,7 +29,7 @@ class SNEMI3DDataset(CircuitDataset):
 
     Args:
         root_dir: Path to directory containing SNEMI3D data files.
-        volumes: List of {vol, seg} dicts. Defaults to AC4 train volume.
+        volumes: List of {vol, seg} dicts. Defaults to SNEMI3D train volume.
         transform: Optional MONAI transforms to apply.
         cache_rate: Fraction of data to cache in memory (default: 1.0).
         slice_mode: If True, return individual 2D slices; if False, return
@@ -80,7 +80,7 @@ class SNEMI3DDataset(CircuitDataset):
         return self._labels.copy()
 
     def _default_volumes(self) -> List[Dict[str, str]]:
-        return [{"vol": "AC4_inputs", "seg": "AC4_labels"}]
+        return [{"vol": "train_inputs", "seg": "train_labels"}]
 
     @property
     def data_files(self) -> Dict[str, Union[str, np.ndarray]]:

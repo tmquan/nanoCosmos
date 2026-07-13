@@ -2,7 +2,7 @@
 """Run trained-model inference on a raw (label-free) EM volume crop.
 
 Generic, **dataset-agnostic** inference path: given a trained checkpoint and
-any native-resolution EM ``.h5`` volume (CREMI test A+/B+/C+, SNEMI3D AC3, an
+any native-resolution EM ``.h5`` volume (CREMI test A+/B+/C+, SNEMI3D test, an
 unlabeled COSEM/FLYEM/MitoEM crop, ...), this script:
 
 1. Reads a native-resolution region from disk (``--origin`` / ``--size``).
@@ -36,7 +36,7 @@ unlabeled COSEM/FLYEM/MitoEM crop, ...), this script:
 
 Because every dataset-specific bit (volume path, native resolution, region)
 is a plain CLI argument, this is the SAME code path for CREMI test volumes,
-SNEMI3D AC3, or anything else -- no per-dataset branching.
+SNEMI3D test, or anything else -- no per-dataset branching.
 
 Examples
 --------
@@ -49,14 +49,14 @@ Examples
         --origin 0 400 400 --size 100 256 256 \\
         --out-dir outputs/infer/cremi_A+
 
-    # SNEMI3D AC3 (30 x 6 x 6 nm) -- identical invocation, different dataset:
+    # SNEMI3D test (30 x 6 x 6 nm) -- identical invocation, different dataset:
     python scripts/infer_volume.py \\
         --config-name nanocosmos-2B \\
         --ckpt <ckpt> \\
-        --vol AC3_inputs --root data/SNEMI3D \\
+        --vol test_inputs --root data/SNEMI3D \\
         --native-resolution 30 6 6 \\
         --origin 0 384 384 --size 80 256 256 \\
-        --out-dir outputs/infer/snemi3d_AC3
+        --out-dir outputs/infer/snemi3d_test
 
 Note on region size: the network's fine grid is ``pixel_size`` (e.g. 4 nm)
 regardless of the source's native resolution, so a native region is resampled
@@ -213,7 +213,7 @@ def infer_volume(
 
     Dataset-agnostic: ``vol_path`` / ``native_resolution`` / ``origin`` /
     ``size`` are the only per-dataset inputs -- the exact same function runs
-    CREMI, SNEMI3D AC3, or any other single-channel EM ``.h5`` volume.
+    CREMI, SNEMI3D test, or any other single-channel EM ``.h5`` volume.
 
     Args:
         save_fine_grid: When ``True`` (default), additionally save the raw

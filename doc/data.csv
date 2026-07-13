@@ -44,5 +44,5 @@ MitoEM2,ssSEM/SBF-SEM,Mossy fiber,mossy,1,01 x  1632 x 1640 x 371,1632 x 1640 x 
 MitoEM2,ssSEM/SBF-SEM,Pyramidal neuron,pyra,17,17 x  512 x 512 x 500,512 x 512 x 500,8 x 8 x 30,2228224000,SSL,Train,doc/assets/datasets/mitoem2_pyra_ssl_train_512_x_512_x_500.png
 MitoEM2,ssSEM/SBF-SEM,Pyramidal neuron,pyra,1,01 x  4096 x 4096 x 500,4096 x 4096 x 500,8 x 8 x 30,8388608000,SSL,Test,doc/assets/datasets/mitoem2_pyra_ssl_test_4096_x_4096_x_500.png
 Neurons,ssSEM,Mouse S1 cortex,Kasthuri cylinder,1,01 x  5000 x 2900 x 300,5000 x 2900 x 300,6 x 6 x 30,4350000000,SFT,Train,doc/assets/datasets/neurons_kasthuri_cylinder_sft_train_5000_x_2900_x_300.png
-SNEMI3D,ssSEM,Mouse S1 cortex,AC4,1,01 x  1024 x 1024 x 100,1024 x 1024 x 100,6 x 6 x 30,104857600,SFT,Train,doc/assets/datasets/snemi3d_ac4_sft_train_1024_x_1024_x_100.png
-SNEMI3D,ssSEM,Mouse S1 cortex,AC3,1,01 x  1024 x 1024 x 100,1024 x 1024 x 100,6 x 6 x 30,104857600,SSL,Train,doc/assets/datasets/snemi3d_ac3_ssl_train_1024_x_1024_x_100.png
+SNEMI3D,ssSEM,Mouse S1 cortex,train,1,01 x  1024 x 1024 x 100,1024 x 1024 x 100,6 x 6 x 30,104857600,SFT,Train,doc/assets/datasets/snemi3d_train_sft_train_1024_x_1024_x_100.png
+SNEMI3D,ssSEM,Mouse S1 cortex,test,1,01 x  1024 x 1024 x 100,1024 x 1024 x 100,6 x 6 x 30,104857600,SSL,Train,doc/assets/datasets/snemi3d_test_ssl_train_1024_x_1024_x_100.png

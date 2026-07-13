@@ -331,7 +331,7 @@ the child's overrides.  The real chain (parent → child) is::
   once `combine.yaml` adds neurons / MICrONS).
 - `combine.yaml`: inherits `snemi3d.yaml` and **replaces** its volume
   lists with a multi-dataset mix (SNEMI3D + neurons + MICrONS train,
-  with SNEMI3D held out for val/test).  Drops AC4 from train so it can
+  with SNEMI3D held out for val/test).  Drops SNEMI3D train from the train set so it can
   serve as the canonical SNEMI3D val volume.
 
 **Convention:** a parameter lives in the *most general* config where

@@ -192,8 +192,8 @@ data:
       - vol: cremi3d_sample_C+_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      # --- SNEMI3D AC3 test volume, IMAGE-ONLY (labels never publicly released) ---
-      - vol: AC3_inputs
+      # --- SNEMI3D test volume, IMAGE-ONLY (labels never publicly released) ---
+      - vol: test_inputs
         root: data/SNEMI3D
         native_resolution: [30, 6, 6]
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
@@ -406,9 +406,9 @@ data:
   val_batch_size: 1
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
-  # SNEMI3D AC4 (labeled holdout).
-  - vol: AC4_inputs
-    seg: AC4_labels
+  # SNEMI3D train (labeled holdout).
+  - vol: train_inputs
+    seg: train_labels
     root: data/SNEMI3D
     task: sft
     native_resolution: [30, 6, 6]

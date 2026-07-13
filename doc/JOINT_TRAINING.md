@@ -46,7 +46,7 @@ small-voxel x ──RandResolutionDegraded──► large-voxel input ──back
                                                     L1(pool(raw→grid), x)  ◄─┘   (no labels)
 ```
 Sources: COSEM 4 nm + unlabeled FlyEM 8 nm (**FIB-25 / Hemibrain / MaleCNS**
-neuropil) + CREMI A+/B+/C+ (padded, image-only) + SNEMI3D **AC3** (label-less
+neuropil) + CREMI A+/B+/C+ (padded, image-only) + SNEMI3D **test** (label-less
 test half) + the full MitoEM2 8–16 nm ladder — all domain-matched EM. The
 degradation (`nanocosmos/transforms/degrade.py::RandResolutionDegraded`)
 composes z slab-integration + decimation, per-section `grid_sample`

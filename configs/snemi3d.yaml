@@ -16,8 +16,8 @@
 # range Z = 30-40 nm, XY = 6-8 nm so the three sources are interchangeable.
 #
 # Splits used below:
-#   train : AC4 + 2 neurons cylinders + 10 MICrONS minnie65 crops
-#   val   : AC4 + 2 neurons cylinders + 2  MICrONS minnie65 crops
+#   train : SNEMI3D train + 2 neurons cylinders + 10 MICrONS minnie65 crops
+#   val   : SNEMI3D train + 2 neurons cylinders + 2  MICrONS minnie65 crops
 #          (the SNEMI3D-family entries overlap with ``train`` -- only
 #          the MICrONS crops are held out; see the ``val_volumes``
 #          comment block below for the rationale)
@@ -164,7 +164,8 @@ data:
   resolution_zoom_prob: 1.0                           # always apply (joint training)
   resolution_zoom_range: [[30, 40], [6, 8], [6, 8]]   # target per-axis nm range
   resolution_map:                                     # volume-prefix -> native nm
-    AC:       [30, 6, 6]
+    train:    [30, 6, 6]
+    test:     [30, 6, 6]
     neurons:  [30, 6, 6]
     minnie65: [40, 8, 8]
 
@@ -183,10 +184,10 @@ data:
   # -------------------------------------------------------------------
   train_volumes:
     # --- SNEMI3D (30x6x6 nm) ---
-    # AC4: SNEMI3D train block, 1024 x 1024 x 100, 401 instance IDs.
+    # train: SNEMI3D train block, 1024 x 1024 x 100, 401 instance IDs.
     #   Download: python scripts/download_snemi3d.py --source snemi
-    - vol: AC4_inputs
-      seg: AC4_labels
+    - vol: train_inputs
+      seg: train_labels
       root: data/SNEMI3D
 
     # neurons: fully-annotated cylinder, same 30x6x6 nm resolution.
@@ -238,7 +239,7 @@ data:
   # ``val_volumes`` and ``test_volumes`` are the same list (anchored
   # via ``&eval_volumes`` / ``*eval_volumes`` below).  Only the two
   # MICrONS minnie65 crops are held out from training; the three
-  # SNEMI3D-family entries (AC4 + the two neurons / neurite11
+  # SNEMI3D-family entries (train + the two neurons / neurite11
   # cylinders) are deliberately shared with ``train_volumes`` so the
   # val-time Mutex Watershed / image-logger panels stay anchored to the same
   # cropped neighbourhoods we see in training (cheap eyeball check
@@ -247,8 +248,8 @@ data:
   # ``RandSpatialCropd`` sample).
   # -------------------------------------------------------------------
   val_volumes: &eval_volumes
-    - vol: AC4_inputs
-      seg: AC4_labels
+    - vol: train_inputs
+      seg: train_labels
       root: data/SNEMI3D
     - vol: neurons_5000x2900x300_x3000_y7200_z950_volume
       seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation

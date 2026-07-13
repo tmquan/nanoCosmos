@@ -5,7 +5,7 @@
 # -----------------
 #   default        <-- you are here
 #     └── snemi3d  (Cosmos3Nano3D + SNEMI3D / neurons / MICrONS)
-#           └── combine   (drops AC4 from train, keeps it in val)
+#           └── combine   (drops SNEMI3D train from train, keeps it in val)
 #
 # Every concrete recipe inherits from this file via ``defaults: [- default]``
 # (or transitively through ``snemi3d`` / ``combine``).  Keys here are the

@@ -29,9 +29,9 @@ class SNEMI3DDataModule(CircuitDataModule):
 
     Args:
         data_root: Path to SNEMI3D data directory.
-        train_volumes: e.g. ``[{"vol": "AC4_inputs", "seg": "AC4_labels"}]``
+        train_volumes: e.g. ``[{"vol": "train_inputs", "seg": "train_labels"}]``
         val_volumes: defaults to train_volumes.
-        test_volumes: e.g. ``[{"vol": "AC3_inputs", "seg": "AC3_labels"}]``
+        test_volumes: e.g. ``[{"vol": "test_inputs", "seg": "test_labels"}]``
         slice_mode: Return 2D slices if True (default: False for 3D).
         num_samples: Number of samples per epoch.
     """
@@ -119,7 +119,7 @@ class SNEMI3DDataModule(CircuitDataModule):
         return 2 if self.slice_mode else 3
 
     _DEFAULT_VOLUMES: List[Dict[str, str]] = [
-        {"vol": "AC4_inputs", "seg": "AC4_labels"},
+        {"vol": "train_inputs", "seg": "train_labels"},
     ]
 
     def setup(self, stage: Optional[str] = None) -> None:

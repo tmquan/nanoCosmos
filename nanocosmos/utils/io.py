@@ -58,7 +58,7 @@ def find_folder(
 
     Args:
         root: Directory containing the volume files.
-        base_name: Filename stem without extension (e.g. ``"AC4_inputs"``).
+        base_name: Filename stem without extension (e.g. ``"train_inputs"``).
         extensions: Extensions to try, in priority order.  Defaults to
             :data:`SUPPORTED_EXTENSIONS`.
 
