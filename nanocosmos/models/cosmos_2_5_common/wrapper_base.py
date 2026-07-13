@@ -796,10 +796,11 @@ class _BaseCosmos25Wrapper(nn.Module):
     # Feature extraction
     # ------------------------------------------------------------------
 
-    def _extract_features(self, latent: torch.Tensor) -> torch.Tensor:
+    def _extract_features(self, latent: torch.Tensor, prompts: Any = None) -> torch.Tensor:
         """Run 3-D DiT backbone and extract multi-layer features.
 
         Returns ``[B, feature_size, D_lat, H_lat, W_lat]``.
+        ``prompts`` is optional per-sample text (Cosmos 3); ignored by null-text paths.
         """
         B, _C, D_lat, H_lat, W_lat = latent.shape
 
@@ -833,7 +834,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         if self._backend in ("diffusers", "cosmos_transfer2"):
             features = self._extract_features_hook(
-                latent, timestep, d_tok, h_tok, w_tok,
+                latent, timestep, d_tok, h_tok, w_tok, prompts=prompts,
             )
         else:
             with self._dit_forward_without_ckpt_when_eval():
@@ -912,6 +913,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         d_tok: int,
         h_tok: int,
         w_tok: int,
+        prompts: Any = None,
     ) -> torch.Tensor:
         """Extract intermediate features from diffusers / cosmos DiT."""
         if self._hook_block_container is None:
@@ -942,7 +944,8 @@ class _BaseCosmos25Wrapper(nn.Module):
                 # null-conditioning + ControlNet-residual call; Cosmos 3
                 # overrides ``_run_dit_forward`` for its omni signature.
                 # The return is ignored -- features are captured by the
-                # persistent block hooks above.
+                # persistent block hooks above.  ``prompts`` is ignored here
+                # (Cosmos 2.5 null text); Cosmos 3's override consumes it.
                 self._run_dit_forward(latent, timestep)
         finally:
             self._hooks_active = False
@@ -963,17 +966,20 @@ class _BaseCosmos25Wrapper(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, prompts: Any = None) -> torch.Tensor:
         """Full forward pass: encode -> DiT features -> unified head.
 
         Args:
             x: Input volume ``[B, C, D, H, W]``.
+            prompts: Optional per-sample text strings (length ``B``) for
+                Cosmos 3 understanding-stream conditioning.  Ignored by
+                wrappers that still feed null text.
 
         Returns:
             Unified head tensor ``[B, HEAD_CHANNELS, D, H, W]`` of raw
             logits / linear values (``aff`` / ``sem`` logits, ``raw`` linear).
         """
-        features, target_size = self._encode_and_extract(x)
+        features, target_size = self._encode_and_extract(x, prompts=prompts)
         return self.decoder_adapter(
             features, target_size=target_size, image=x,
         )
@@ -1010,7 +1016,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         return self.decoder_adapter.wan_reconstruct(features, target_size=target_size)
 
     def _encode_and_extract(
-        self, x: torch.Tensor,
+        self, x: torch.Tensor, prompts: Any = None,
     ) -> tuple[torch.Tensor, tuple[int, int, int]]:
         """Shared head of :meth:`forward` and :meth:`wan_decoder_output`.
 
@@ -1019,6 +1025,9 @@ class _BaseCosmos25Wrapper(nn.Module):
         casts back to the input dtype.  Returns the projected feature
         map plus the original ``(D, H, W)`` so the decoder side can
         crop / interpolate back.
+
+        ``prompts`` is forwarded to :meth:`_extract_features` for Cosmos 3
+        text conditioning (ignored by null-text wrappers).
         """
         original_dtype = x.dtype
         # Capture the ORIGINAL spatial size before any supersample so the
@@ -1058,7 +1067,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         compute_dtype = self._dtype if self._backbone_loaded else original_dtype
         latent = self._encode_to_latent(rgb.to(dtype=compute_dtype))
 
-        features = self._extract_features(latent)
+        features = self._extract_features(latent, prompts=prompts)
         features = features.to(dtype=original_dtype)
         return features, (D_in, H_in, W_in)
 

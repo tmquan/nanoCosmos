@@ -94,14 +94,21 @@ class Cosmos3EdgeWrapper(Cosmos3OmniWrapper):
         """
         if bool(getattr(self.cfg, "reduce_from_parent", False)):
             self._reduce_full_from_parent()
+            # Still load text_tokenizer from the (possibly parent) snapshot.
+            super()._post_load_diffusers(
+                local_path, cache_dir, hf_token, dit_loading_info,
+            )
             return
 
         missing = list((dit_loading_info or {}).get("missing_keys", []))
         parent_repo_id = getattr(self.cfg, "fill_missing_parent_repo_id", None)
-        if not missing or not parent_repo_id:
-            return
-        self._fill_missing_from_parent_repo(
-            missing, parent_repo_id, cache_dir, hf_token,
+        if missing and parent_repo_id:
+            self._fill_missing_from_parent_repo(
+                missing, parent_repo_id, cache_dir, hf_token,
+            )
+        # Load text_tokenizer from the Edge snapshot (metadata prompts).
+        super()._post_load_diffusers(
+            local_path, cache_dir, hf_token, dit_loading_info,
         )
 
     def _reduce_full_from_parent(self) -> None:

@@ -37,6 +37,7 @@ References:
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
 import torch
@@ -175,6 +176,9 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         # dtype ``time_embedder`` ends up at (bf16 after the base load, or
         # bf16 under FSDP MixedPrecision) without mutating the module.
         self._install_time_embedder_dtype_guard()
+        # Populated in ``_post_load_diffusers`` when the HF snapshot is present.
+        self._text_tokenizer = None
+        self._prompt_ids_cache = {}
 
     # ------------------------------------------------------------------
     # Freeze / unfreeze  (warm-up on the WHOLE DiT, INDEPENDENT permanent
@@ -304,10 +308,10 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
             _DEFAULT_IGNORE_PATTERNS,
         )
 
+        # Keep ``text_tokenizer/`` -- Edge/Nano feed real metadata prompts.
         return list(_DEFAULT_IGNORE_PATTERNS) + [
             "vision_encoder/*",
             "sound_tokenizer/*",
-            "text_tokenizer/*",
         ]
 
     # ------------------------------------------------------------------
@@ -437,6 +441,73 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         )
 
     # ------------------------------------------------------------------
+    # Text tokenizer (metadata prompts)
+    # ------------------------------------------------------------------
+
+    def _post_load_diffusers(
+        self,
+        local_path,
+        cache_dir=None,
+        hf_token=None,
+        dit_loading_info=None,
+    ) -> None:
+        """Load ``text_tokenizer`` from the HF snapshot after DiT+VAE.
+
+        Also runs any subclass fill-missing logic via ``super``.
+        """
+        super()._post_load_diffusers(
+            local_path, cache_dir, hf_token, dit_loading_info,
+        )
+        self._prompt_ids_cache = {}
+        self._text_tokenizer = None
+        tok_dir = Path(str(local_path)) / "text_tokenizer"
+        if not tok_dir.is_dir():
+            logger.warning(
+                "Cosmos3: text_tokenizer/ missing under %s -- "
+                "metadata prompts will fall back to null text.",
+                local_path,
+            )
+            return
+        try:
+            from transformers import AutoTokenizer
+            self._text_tokenizer = AutoTokenizer.from_pretrained(
+                str(tok_dir), trust_remote_code=True,
+            )
+            logger.info("Cosmos3: loaded text_tokenizer from %s", tok_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Cosmos3: failed to load text_tokenizer (%s) -- "
+                "metadata prompts will fall back to null text.",
+                exc,
+            )
+            self._text_tokenizer = None
+
+    def _tokenize_prompt(self, prompt: str, device: torch.device) -> torch.Tensor:
+        """Return 1-D LongTensor ``input_ids`` for ``prompt`` (cached on CPU)."""
+        cache = getattr(self, "_prompt_ids_cache", None)
+        if cache is None:
+            self._prompt_ids_cache = {}
+            cache = self._prompt_ids_cache
+        ids = cache.get(prompt)
+        if ids is None:
+            tok = getattr(self, "_text_tokenizer", None)
+            if tok is None:
+                ids = torch.zeros(1, dtype=torch.long)
+            else:
+                encoded = tok(
+                    prompt,
+                    add_special_tokens=True,
+                    return_tensors=None,
+                    truncation=True,
+                    max_length=getattr(tok, "model_max_length", 512) or 512,
+                )
+                ids = torch.tensor(encoded["input_ids"], dtype=torch.long)
+                if ids.numel() == 0:
+                    ids = torch.zeros(1, dtype=torch.long)
+            cache[prompt] = ids
+        return ids.to(device=device, non_blocking=True)
+
+    # ------------------------------------------------------------------
     # Omni forward
     # ------------------------------------------------------------------
 
@@ -444,13 +515,14 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         self,
         latent: torch.Tensor,
         timestep: torch.Tensor,
+        prompt: str | None = None,
     ) -> None:
         """Drive the omni transformer's diffusion (video) tower over ``latent``.
 
         Features are captured by the persistent block hooks (see
         :meth:`_register_persistent_hooks` below), so this only has to
         make ``self.dit`` *run* a single denoising-step forward over one
-        video latent with **null text / image / audio conditioning**.
+        video latent with optional metadata text + null image / audio conditioning.
 
         Unlike the Cosmos 2.5 ``CosmosTransformer3DModel`` (which takes a
         ``hidden_states`` latent + cross-attention text embeddings),
@@ -473,9 +545,14 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         grid_w = (int(latent.shape[4]) + p - 1) // p
         num_vision_tokens = grid_t * grid_h * grid_w
 
-        # Minimal null-text prefix: a single causal "understanding" token.
-        und_len = 1
-        input_ids = torch.zeros(und_len, dtype=torch.long, device=device)
+        # Understanding-stream text: real metadata prompt when available,
+        # else a single null token (legacy unconditional path).
+        if prompt:
+            input_ids = self._tokenize_prompt(str(prompt), device)
+            und_len = int(input_ids.numel())
+        else:
+            und_len = 1
+            input_ids = torch.zeros(und_len, dtype=torch.long, device=device)
         text_indexes = torch.arange(und_len, dtype=torch.long, device=device)
 
         vision_sequence_indexes = torch.arange(
@@ -664,6 +741,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         d_tok: int,
         h_tok: int,
         w_tok: int,
+        prompts=None,
     ) -> torch.Tensor:
         """Capture omni features, fixing the token grid and the batch axis.
 
@@ -680,7 +758,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         """
         if self._hook_block_container is None:
             return super()._extract_features_hook(
-                latent, timestep, d_tok, h_tok, w_tok,
+                latent, timestep, d_tok, h_tok, w_tok, prompts=prompts,
             )
 
         p = int(getattr(self.dit.config, "latent_patch_size", self.cfg.patch_size))
@@ -705,7 +783,15 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
             with ctx:
                 for b in range(B):
                     self._hook_buffer.clear()
-                    self._run_dit_forward(latent[b : b + 1], timestep)
+                    prompt_b = None
+                    if prompts is not None:
+                        try:
+                            prompt_b = prompts[b]
+                        except Exception:  # noqa: BLE001
+                            prompt_b = prompts
+                    self._run_dit_forward(
+                        latent[b : b + 1], timestep, prompt=prompt_b,
+                    )
                     per_sample_layers.append(list(self._hook_buffer))
         finally:
             self._hooks_active = False
@@ -733,8 +819,13 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         collected = [f.to(proj_dtype) for f in collected]
         return self.feature_projector(collected, grid_d, grid_h, grid_w)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, prompts: Any = None) -> torch.Tensor:
         """Full forward: encode -> omni DiT features -> unified head.
+
+        Args:
+            x: Input volume ``[B, C, D, H, W]``.
+            prompts: Optional per-sample metadata strings (length ``B``)
+                for the understanding stream; ``None`` keeps null text.
 
         Differs from the shared base forward in two Cosmos-3-only ways,
         both confined to this override (shared code is untouched):
@@ -757,7 +848,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
            the head dtype (a no-op for the usual fp32-input path).
         """
         with torch.autocast(device_type=x.device.type, enabled=False):
-            features, target_size = self._encode_and_extract(x)
+            features, target_size = self._encode_and_extract(x, prompts=prompts)
             head_param = next(self.decoder_adapter.head.parameters(), None)
             if head_param is not None and features.dtype != head_param.dtype:
                 features = features.to(head_param.dtype)

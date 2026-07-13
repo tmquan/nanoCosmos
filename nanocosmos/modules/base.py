@@ -291,7 +291,8 @@ class BaseCircuitModule(pl.LightningModule):
         # overhead on every step.
         targets = self._prepare_targets(batch)
 
-        head = self.model(images)
+        prompts = batch.get("prompt")
+        head = self.model(images, prompts=prompts) if prompts is not None else self.model(images)
         losses = self.criterion(head, targets)
         total_loss = losses["loss"]
 
@@ -366,7 +367,12 @@ class BaseCircuitModule(pl.LightningModule):
         head = losses = targets = None
         try:
             targets = self._prepare_targets(batch)
-            head = self.model(images)
+            prompts = batch.get("prompt")
+            head = (
+                self.model(images, prompts=prompts)
+                if prompts is not None
+                else self.model(images)
+            )
             losses = self.criterion(head, targets)
 
             # Finite-loss guard.  Unlike ``training_step`` (cadenced, since a

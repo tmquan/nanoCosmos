@@ -59,21 +59,28 @@ def synth_root(tmp_path):
     return str(tmp_path)
 
 
-def _make_dm(root, num_samples=2):
+def _make_dm(root, num_samples=2, *, with_prompts=False, sft_convention=None):
+    ssl_vol = {"vol": "cosem_vol", "root": root, "native_resolution": [4, 4, 4]}
+    sft_vol = {
+        "vol": "fly_vol", "seg": "fly_seg", "root": root,
+        "native_resolution": [8, 8, 8],
+    }
+    if with_prompts:
+        ssl_vol["imaging"] = "FIB-SEM"
+        sft_vol["imaging"] = "FIB-SEM"
+        if sft_convention is not None:
+            sft_vol["label_convention"] = sft_convention
     return Joint3DDataModule(
         data_root=root,
         patch_size=(32, 32, 32),
         pixel_size=(4.0, 4.0, 4.0),
         branches={
-            "ssl": {"batch_size": 1, "sample_weight": 1.0, "volumes": [
-                {"vol": "cosem_vol", "root": root, "native_resolution": [4, 4, 4]},
-            ]},
-            "sft": {"batch_size": 1, "sample_weight": 1.0, "volumes": [
-                {"vol": "fly_vol", "seg": "fly_seg", "root": root,
-                 "native_resolution": [8, 8, 8]},
-            ]},
+            "ssl": {"batch_size": 1, "sample_weight": 1.0, "volumes": [ssl_vol]},
+            "sft": {"batch_size": 1, "sample_weight": 1.0, "volumes": [sft_vol]},
         },
         degrade={"zf_range": [2.0, 4.0], "missing_prob": 0.0},
+        find_boundaries=1.0 if sft_convention else 0.0,
+        boundary_target="semantic",
         num_workers=0,
         persistent_workers=False,
         num_samples=num_samples,
@@ -114,7 +121,7 @@ class _StubBackbone(nn.Module):
         self.vae_input_pm1 = False
         self.conv = nn.Conv3d(1, head_channels, 1)
 
-    def forward(self, x):
+    def forward(self, x, prompts=None):
         return self.conv(x)
 
 
@@ -123,8 +130,35 @@ class _StubJointModule(Joint3DModule):
         return _StubBackbone(model_config["head_channels"])
 
 
+def test_joint_datamodule_condition_prompts(synth_root):
+    dm = _make_dm(
+        synth_root, with_prompts=True, sft_convention="no_gap",
+    )
+    dm.setup()
+    seen = {}
+    for batch in dm.train_dataloader():
+        task = batch["task"][0] if isinstance(batch["task"], (list, tuple)) else batch["task"]
+        assert "prompt" in batch
+        prompt = batch["prompt"][0]
+        seen[task] = prompt
+    assert seen["ssl"] == "FIB-SEM · z4 y4 x4 nm · ssl"
+    assert seen["sft"] == "FIB-SEM · z8 y8 x8 nm · no_gap"
+
+
+def test_bg_gap_skips_sem_label_erosion(synth_root):
+    dm = _make_dm(
+        synth_root, with_prompts=True, sft_convention="bg_gap",
+    )
+    dm.setup()
+    for batch in dm.train_dataloader():
+        task = batch["task"][0] if isinstance(batch["task"], (list, tuple)) else batch["task"]
+        if task == "sft":
+            assert "sem_label" not in batch
+            assert batch["prompt"][0] == "FIB-SEM · z8 y8 x8 nm · bg_gap"
+
+
 def test_joint_train_end_to_end(synth_root):
-    dm = _make_dm(synth_root, num_samples=2)
+    dm = _make_dm(synth_root, num_samples=2, with_prompts=True, sft_convention="no_gap")
     module = _StubJointModule(
         model_config={"pretrained": False},
         optimizer_config={"lr": 1e-4},

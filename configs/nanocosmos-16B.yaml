@@ -1,8 +1,12 @@
 # =====================================================================
 # nanocosmos-16B.yaml  --  resolution-ladder super-resolution + segmentation
 # =====================================================================
+# The 16B sibling of nanocosmos-4B.yaml: same joint recipe / data / loss,
+# but the backbone is Cosmos-3 Nano (variant Nano) instead of Cosmos3-Edge
+# (4B).  Memory knobs stay smaller than Edge (patch_size 200, batch_size 1).
+#
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
-# ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm, 200x256x256) a
+# ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
 # down to wherever its ground truth lives (factor read from the GT shape).
@@ -12,19 +16,26 @@
 #   ssl   self-supervised reconstruction (gated by VOXEL SIZE): degrade the
 #          smallest-voxel data -> reconstruct clean EM.  Sources: COSEM 4 nm
 #          (small voxel) + unlabeled FlyEM (FIB-25/Hemibrain/MaleCNS) + CREMI
-#          padded + MitoEM2 (image-only mito EM) + MICrONS (image-only; labels
-#          dropped -- see sft note).  Label-free.
+#          padded + MitoEM2 (image-only mito EM).  Label-free.
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
-#          head to the label grid -> AffinityFGLoss.  FIB(8) / SNEMI(30,6) /
-#          CREMI(40,4) / H01(33,4).  MICrONS is NOT used for SFT: its auto-seg
-#          treats some black/thick membranes as instances that SNEMI / Neurons /
-#          H01 treat as background, so the label conventions contradict.  A
-#          labeled small-voxel rung (FIB) does BOTH.
-#
+#          head to the label grid -> AffinityFGLoss.  Each labeled volume sets
+#          ``label_convention`` (equal-length tokens):
+#            bg_gap -- membranes / extracellular already label==0
+#                      (Neurons, H01, SNEMI train val)
+#            no_gap -- space-filling / abutting instances; sem gaps come from
+#                      find_boundaries (FIB-25, CREMI, FlyWire, MICrONS)
+#          FIB is both ssl+sft (labeled small-voxel rung).
 # Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
 # Fine grid = 4 nm (smallest voxel; COSEM mip0, finest xy across all sets).  No
 # RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
 # is the only "resampling" and it is derived from the native label shape.
+#
+# Text condition (Cosmos3-Nano): every volume sets ``imaging:`` and SFT volumes
+# set ``label_convention:``.  The fixed prompt is
+#   ``{imaging} · z{Z} y{Y} x{X} nm · {bg_gap|no_gap|ssl}``
+# (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream;
+# ``freeze_understanding_ffn: false`` so mlp.* can adapt.  Volume lists match
+# nanocosmos-4B.yaml; only patch/batch memory knobs differ.
 #
 # Implemented + tested end-to-end: multi-task datamodule
 # (nanocosmos/datamodules/joint3d.py), Lightning module
@@ -44,11 +55,10 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 200 x 256 x 256 @ 4 nm = 0.8 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
-  # super-resolution axis).  Cosmos-3 Wan VAE compresses 4x in z, 16x in xy, so
-  # the DiT token grid is (50, 16, 16) = 12,800 tokens.  Memory-heavy on the 16B
-  # backbone -- pair with gradient checkpointing and a small batch; drop the
-  # patch (e.g. 160x256x256) if it OOMs.
+  # 200 x 256 x 256 @ 4 nm; z-heavy (super-resolution axis).  Cosmos-3 Wan VAE
+  # compresses 4x in z, 16x in xy -> DiT token grid (50, 16, 16) = 12,800 tokens
+  # (same grid as Edge/4B). Nano is memory-heavier: keep patch/batch smaller than
+  # nanocosmos-4B. Drop further (e.g. 160x256x256) if it OOMs.
   patch_size: [200, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -56,16 +66,28 @@ data:
   num_workers: 8
   pin_memory: true
   persistent_workers: true
-  prefetch_factor: 8
+  prefetch_factor: 4
+  # Applied only to sft volumes with label_convention: no_gap (or unset).
+  # bg_gap volumes already have membrane/extracellular as label==0, so
+  # FindBoundariesd is skipped for those groups.
   find_boundaries: 1.0
   boundary_target: semantic
   # sft crop gate: require BOTH the labeled-foreground fraction AND the non-zero
   # EM fraction >= this value, so background-heavy / unlabeled crops and
   # zero-padded EM are rejected (best-seen crop kept after max retries).
-  sft_min_foreground: 0.8
+  sft_min_foreground: 0.7
+  # Instance-diversity gate: sft_min_foreground only checks the label's NON-ZERO
+  # fraction, so a crop entirely filled by ONE giant instance (e.g. a single
+  # dendrite trunk spanning the whole patch) passes trivially yet gives
+  # AffinityFGLoss no inter-instance "push" signal -- only "pull".  Require >=2
+  # distinct instances per crop (median counts are typically 20-125, so retries
+  # are cheap) and cap the largest instance at 90% of foreground as a secondary
+  # net.  0 = disabled.
+  sft_min_instances: 2
+  sft_max_inst_frac: 0.9
   # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
   # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
-  ssl_min_foreground: 0.8
+  ssl_min_foreground: 0.7
   # Contrast gate: reject flat, structureless ssl crops (e.g. resin / embedding
   # medium around a COSEM cell) whose normalised intensity std is below this
   # value.  The non-zero gate above cannot catch these (resin is a non-zero
@@ -73,12 +95,14 @@ data:
   # scale.  Tune up if low-content crops still appear, down if the foreground
   # retry budget is exhausted (best-seen fallback warns in the log).  0 = off.
   ssl_min_std: 0.05
-  # Structure gate (lag-1 spatial autocorrelation on the per-volume [0,1]
-  # scale): reject NOISE-dominated ssl crops that the variance gate cannot
-  # catch (random grain has high std but ~0 autocorrelation). This is what
-  # rejects the confirmed pure-noise MitoEM2 volumes (jurkat_train02 /
-  # macro_train02, autocorr ~0) still listed below, matching nanocosmos-2B.
-  # Real ultrastructure sits at ~0.6-0.8; 0.5 separates cleanly. 0 = off.
+  # Structure gate: reject NOISE-dominated ssl crops (detector / resin grain,
+  # e.g. COSEM regions of embedding medium around the cell).  The variance gate
+  # above CANNOT catch these -- random grain has high local std, so it passes
+  # ssl_min_std with content_frac 1.0.  This is the lag-1 spatial
+  # autocorrelation on the per-volume [0,1] scale: real ultrastructure is
+  # spatially coherent (~0.6-0.8), white noise ~0.  Calibrated on jrc_hela-3
+  # crops: noise crops sit at ~0.25, structured crops at ~0.7, so 0.5 cleanly
+  # separates.  Tune down if the foreground-retry budget is exhausted.  0 = off.
   ssl_min_autocorr: 0.5
   # Round-robin grouping/scheduling unit: each batch is drawn from one group.
   #   "resolution" -- one group per (task, native_resolution); within a group
@@ -126,282 +150,507 @@ data:
       # OpenOrganelle volumes here to scale SSL toward petascale.
       volumes:
       # --- COSEM ~4 nm small voxel (exact z per volume), all tiles ---
-      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z0_volume
+      # jrc_hela-3 x0_y0_z0 / x0_y0_z8192 REMOVED: audited as mostly embedding
+      # RESIN (median lag-1 autocorr ~0.26-0.27 -- ~white noise) around the
+      # HeLa cell edge; passed the old ssl_min_std gate trivially (noise has
+      # high local variance) but fails ssl_min_autocorr.  Replaced with 2
+      # verified-structured tiles found via scripts/collect_meaningful_crops.py
+      # (probe-and-rank against the SAME content_frac + autocorr gates); see
+      # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
+      # Baked to true 4 nm cubic via scripts/resample_cosem_isotropic.py (z-only
+      # trilinear, e.g. 3.24 -> 4 nm) -- see doc/RESOLUTION_LADDER.md #2.1 and the
+      # "for all <4nm, treat as ~4nm?" discussion: the datamodule already clamps
+      # the RECON TARGET resolution to max(native, 4nm) at train time, but that
+      # does NOT change the native crop READ size, so relabeling native_resolution
+      # here without actually resampling the files would silently shrink the read
+      # FOV and skip the image resample -- these are genuinely-resampled files, so
+      # native_resolution: [4,4,4] is now truthful, not a pseudo/declared value.
+      - vol: jrc_hela-3_4nm_x4096_y0_z2048_volume   # autocorr 0.72
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x0_y0_z8192_volume
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_hela-3_4nm_x6144_y0_z2048_volume   # autocorr 0.63
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z0_volume
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_hela-3_4nm_x4096_y0_z0_volume
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_hela-3_4x4x3.24nm_x4096_y0_z4096_volume
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_hela-3_4nm_x4096_y0_z4096_volume
         root: data/COSEM3D
-        native_resolution: [3.24, 4, 4]
-      - vol: jrc_macrophage-2_4x4x3.36nm_x4096_y0_z4096_volume
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_hela-3_4nm_x2048_y0_z4096_volume   # autocorr 0.75
         root: data/COSEM3D
-        native_resolution: [3.36, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z0_volume
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_macrophage-2_4nm_x4096_y0_z4096_volume
         root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
-      - vol: jrc_jurkat-1_4x4x3.44nm_x4096_y0_z4096_volume
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_jurkat-1_4nm_x4096_y0_z0_volume
         root: data/COSEM3D
-        native_resolution: [3.44, 4, 4]
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
+      - vol: jrc_jurkat-1_4nm_x4096_y0_z4096_volume
+        root: data/COSEM3D
+        native_resolution: [4, 4, 4]
+        imaging: FIB-SEM
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
       # 4 train crops per source (1 more held out per source in val_volumes);
       # all verified non-empty (empty corner tiles dropped).
       - vol: flyem3d_8nm_ssl_x2700_y2700_z3500_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       - vol: flyem3d_8nm_ssl_x3000_y3000_z5000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       # --- Hemibrain 8 nm neuropil, image-only ---
       - vol: flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x20000_y20000_z20000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x24000_y24000_z24000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       # --- MaleCNS 8 nm neuropil, image-only ---
       - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      - vol: flyem3d_malecns_8nm_ssl_x20000_y20000_z20000_volume
+        imaging: FIB-SEM
+      # x20000_y20000_z20000 REMOVED: audited autocorr ~0.45 (borderline
+      # low vs the ~0.85-0.95 the rest of this bucket shows). Replaced with a
+      # verified-structured tile (autocorr 0.94) found via
+      # scripts/collect_meaningful_crops.py.
+      - vol: flyem3d_malecns_8nm_ssl_x18000_y18000_z30000_volume   # autocorr 0.94
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
       - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
-      # --- CREMI 40x4x4 padded test volumes, IMAGE-ONLY (no public labels) ---
-      - vol: cremi3d_sample_A+_volume
+        imaging: FIB-SEM
+      # --- CREMI 40x4x4 PADDED test volumes, IMAGE-ONLY (no public labels) ---
+      # Switched Jul 2026 from the CROPPED (151 MB, 125x1250x1250) test
+      # download to the official PADDED (1.46 GB, 200x3072x3072) download --
+      # same tissue, ~4x more context/voxels per sample, so more free SSL
+      # signal from the exact same three challenge test volumes. Verified by
+      # exact full-volume array match: the cropped volume sits at native-voxel
+      # offset (z=37, y=911, x=911) inside the padded one, identically for all
+      # three samples -- see doc/DATASETS.md#cremi-padded-vs-cropped-test-volumes.
+      - vol: cremi3d_sample_A+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      - vol: cremi3d_sample_B+_volume
+        imaging: ssTEM
+      - vol: cremi3d_sample_B+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
-      - vol: cremi3d_sample_C+_volume
+        imaging: ssTEM
+      - vol: cremi3d_sample_C+_padded_volume
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
+        imaging: ssTEM
       # --- SNEMI3D test volume, IMAGE-ONLY (labels never publicly released) ---
       - vol: test_inputs
         root: data/SNEMI3D
         native_resolution: [30, 6, 6]
+        imaging: ssSEM
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
+      # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683);
+      # see doc/DATASETS.md#mitoem2-refresh-from-zenodo-v6-jul-2026.
+      # NOTE: Dataset001_ME2-Beta's NIfTI headers ship voxel spacing (1,1,1)
+      # (an upstream metadata bug -- Jurkat/Macro/Podo/Sperm/Mossy/Pyra headers
+      # are correct); native_resolution below is the metadata.csv-documented
+      # 16 nm, NOT what convert_mitoem2.py would auto-derive from the header.
       # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
       - vol: mitoem2_beta_train01_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       - vol: mitoem2_beta_train02_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       - vol: mitoem2_beta_train03_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       - vol: mitoem2_beta_train04_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_jurkat_train02_volume
+        imaging: FIB-SEM
+      # jurkat_train01 / macro_train01 RESTORED: an older doc note said these
+      # were "removed as empty", but audited fresh against the current
+      # release they are genuine, good EM (autocorr 0.79 / 0.59) -- whatever
+      # was wrong with them upstream previously appears to have been fixed.
+      - vol: mitoem2_jurkat_train01_volume   # autocorr 0.79
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
-      - vol: mitoem2_macro_train02_volume
+        imaging: FIB-SEM
+      - vol: mitoem2_macro_train01_volume   # autocorr 0.59
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
+      # mitoem2_jurkat_train02 / mitoem2_macro_train02 REMOVED: audited as pure
+      # uniform random noise (min=0, max=255, all 256 values present, std~73.9 =
+      # theoretical max). CONFIRMED PERSISTENT in the fresh Zenodo v6 release
+      # too (re-downloaded + checksum-verified against the official
+      # checksums.txt -- these two files are the ONLY ones in the whole
+      # release that FAIL verification) -- a genuine upstream MitoEM2
+      # packaging bug, not a conversion artifact. Passed the old
+      # ssl_min_std/foreground gates trivially (noise has high variance) but
+      # fails ssl_min_autocorr (~0.0 vs ~0.6-0.9 for real EM); see
+      # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
       - vol: mitoem2_podo_train01_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       - vol: mitoem2_podo_train02_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       - vol: mitoem2_sperm_train01_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       - vol: mitoem2_sperm_train02_volume
         root: data/MitoEM2
         native_resolution: [16, 16, 16]
+        imaging: FIB-SEM
       # 8 nm xy / 30 nm z: Mossy/Pyra/Stem
       - vol: mitoem2_mossy_train01_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_mossy_train02_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_mossy_train03_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train01_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train02_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train03_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train04_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train05_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train06_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train07_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train08_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train09_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train10_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train11_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train12_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train13_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train14_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train15_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train16_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
+        imaging: FIB-SEM
       - vol: mitoem2_pyra_train17_volume
         root: data/MitoEM2
         native_resolution: [30, 8, 8]
-      - vol: mitoem2_stem_train01_volume
-        root: data/MitoEM2
-        native_resolution: [30, 8, 8]
-      - vol: mitoem2_stem_train02_volume
-        root: data/MitoEM2
-        native_resolution: [30, 8, 8]
-      # --- MICrONS 40x8x8, IMAGE-ONLY (seg dropped) ---
-      # Moved off the SFT branch: MICrONS auto-seg labels some black / thick
-      # membranes as instances, while SNEMI / Neurons / H01 treat those as
-      # background -- the conventions contradict and poison joint AffinityFGLoss.
-      # Keep the EM as free SSL recon signal on the same 10 train crops.
-      - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
-      - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
-        root: data/MICRONS
-        native_resolution: [40, 8, 8]
+        imaging: FIB-SEM
+      # mitoem2_stem_train01 / mitoem2_stem_train02 REMOVED: audited as
+      # consistently low-structure (25-probe autocorr: train01 max=0.49
+      # median=0.40, ZERO probes reach the 0.5 gate threshold; train02
+      # max=0.49 median=0.44, also 0/25) -- unlike the heterogeneous jrc_hela-3
+      # tiles, there is no good sub-region within these files for the per-crop
+      # ssl_min_autocorr gate to land on.  No CloudVolume source for MitoEM2
+      # (local nnU-Net conversion only), so "ignore in config" is the only fix;
+      # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
     sft:
+      task: sft
       batch_size: 1
       sample_weight: 2.0
-      # Labeled rungs with compatible membrane/background convention:
-      # FIB-25 + SNEMI3D / Neurons + CREMI + H01.  MICrONS moved to SSL
-      # (image-only) -- see note above.  Predict at 4 nm, pool the head to
-      # the native label grid, then AffinityFGLoss.
+      # Labeled rungs tagged with label_convention: bg_gap | no_gap.
+      # Predict at 4 nm, pool the head to the native label grid, then
+      # AffinityFGLoss.  MICrONS is no_gap (auto-seg); SNEMI/Neurons/H01
+      # are bg_gap -- grouping + text tail isolate the conventions.
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
         seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
+        imaging: FIB-SEM
+        label_convention: no_gap
       - vol: neurons_5000x2900x300_x3000_y7200_z950_volume # SNEMI3D 30x6x6
         seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
         root: data/SNEMI3D
         native_resolution: [30, 6, 6]
+        imaging: ssSEM
+        label_convention: bg_gap
       - vol: cremi3d_sample_A_volume                       # CREMI 40x4x4
         seg: cremi3d_sample_A_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
+        imaging: ssTEM
+        label_convention: no_gap
       - vol: cremi3d_sample_B_volume
         seg: cremi3d_sample_B_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
+        imaging: ssTEM
+        label_convention: no_gap
       - vol: cremi3d_sample_C_volume
         seg: cremi3d_sample_C_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
+        imaging: ssTEM
+        label_convention: no_gap
+      # --- FlyWire FAFB v783 40x8x8 (8 nm EM, upsampled m783 seg), 10 train ---
+      - vol: flywire_mip1_1024x1024x256_x28000_y32000_z3000_volume        # train01
+        seg: flywire_mip1_1024x1024x256_x28000_y32000_z3000_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x32000_y40000_z3500_volume        # train02
+        seg: flywire_mip1_1024x1024x256_x32000_y40000_z3500_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x64000_y28000_z1500_volume        # train03
+        seg: flywire_mip1_1024x1024x256_x64000_y28000_z1500_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x72000_y36000_z2800_volume        # train04
+        seg: flywire_mip1_1024x1024x256_x72000_y36000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume        # train05 (richest)
+        seg: flywire_mip1_1024x1024x256_x88000_y20000_z3600_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x96000_y44000_z4000_volume        # train06
+        seg: flywire_mip1_1024x1024x256_x96000_y44000_z4000_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x52000_y32000_z2800_volume        # train07
+        seg: flywire_mip1_1024x1024x256_x52000_y32000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x60000_y44000_z3200_volume        # train08
+        seg: flywire_mip1_1024x1024x256_x60000_y44000_z3200_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x68000_y16000_z2800_volume        # train09
+        seg: flywire_mip1_1024x1024x256_x68000_y16000_z2800_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: flywire_mip1_1024x1024x256_x44000_y24000_z2400_volume        # train10
+        seg: flywire_mip1_1024x1024x256_x44000_y24000_z2400_m783_segmentation
+        root: data/FLYWIRE
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
       # --- H01 cell 33x4x4 (4 nm EM mip0 + c3 seg), 10 train / 2 val ---
       # Human temporal cortex (Shapson-Coe et al.); xy on the fine 4 nm grid,
-      # z = 33 nm.  Extended Jul 2026 to 1024x1024x5000 (z0=0).  Membrane /
-      # background convention matches SNEMI/Neurons.
+      # z = 33 nm.  Extended Jul 2026 to 1024x1024x5000 (z0=0 covers the prior
+      # z=2000 windows).  bg_gap convention (matches Neurons/SNEMI).
       - vol: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume         # train01
         seg: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_volume         # train02
         seg: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_volume         # train03
         seg: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_volume         # train04
         seg: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_volume         # train05
         seg: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_volume         # train06
         seg: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_volume         # train07
         seg: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_volume         # train08
         seg: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_volume         # train09
         seg: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
       - vol: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_volume         # train10
         seg: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
+        imaging: ssTEM
+        label_convention: bg_gap
+
+      # --- MICrONS 40x8x8 labeled (v1300 auto-seg) ---
+      # no_gap space-filling auto-seg; FindBoundariesd applies.
+      # Distinct from bg_gap (SNEMI/Neurons/H01); text-condition
+      # tail + transform grouping isolate the convention.
+      - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
+        seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
+        seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
+        seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
+        seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
+        seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
+        seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
+        seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
+        seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
+        seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
+      - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
+        seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
+        root: data/MICRONS
+        native_resolution: [40, 8, 8]
+        imaging: ssTEM
+        label_convention: no_gap
 
   val_batch_size: 1
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
@@ -412,83 +661,151 @@ data:
     root: data/SNEMI3D
     task: sft
     native_resolution: [30, 6, 6]
+    imaging: ssSEM
+    label_convention: bg_gap
   # --- 20% holdout of the divisible-by-5 datasets (image-only COSEM/FLYEM ->
   #     ssl recon validation) ---
-  - vol: jrc_hela-3_4x4x3.24nm_x8192_y0_z0_volume
+  # x8192_y0_z0 REMOVED: audited autocorr ~0.27 (embedding resin, ~white
+  # noise) -- reconstructing noise made this a meaningless val target.
+  # Replaced with a verified-structured tile (autocorr 0.75).
+  # Baked to true 4 nm cubic via scripts/resample_cosem_isotropic.py (see the
+  # matching note in the ssl branch above).
+  - vol: jrc_hela-3_4nm_x6144_y0_z0_volume   # autocorr 0.75
     root: data/COSEM3D
     task: ssl
-    native_resolution: [3.24, 4, 4]
-  - vol: jrc_macrophage-2_4x4x3.36nm_x7952_y0_z0_volume
+    native_resolution: [4, 4, 4]
+    imaging: FIB-SEM
+  # x7952_y0_z0 REMOVED: audited autocorr ~0.33, 44.7% of voxels outside the
+  # cached norm range (severe under-calibration on top of resin/noise).
+  # Replaced with a verified-structured tile (autocorr 0.85).
+  - vol: jrc_macrophage-2_4nm_x2048_y0_z4096_volume   # autocorr 0.85
     root: data/COSEM3D
     task: ssl
-    native_resolution: [3.36, 4, 4]
-  - vol: jrc_jurkat-1_4x4x3.44nm_x7952_y0_z0_volume
+    native_resolution: [4, 4, 4]
+    imaging: FIB-SEM
+  - vol: jrc_jurkat-1_4nm_x0_y0_z2048_volume   # autocorr 0.84
     root: data/COSEM3D
     task: ssl
-    native_resolution: [3.44, 4, 4]
+    native_resolution: [4, 4, 4]
+    imaging: FIB-SEM
   # FLYEM3D: 1 ssl holdout per source (fib25-surround / hemibrain / malecns), non-empty.
   - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
+    imaging: FIB-SEM
   - vol: flyem3d_hemibrain_8nm_ssl_x16000_y16000_z16000_volume
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
+    imaging: FIB-SEM
   - vol: flyem3d_malecns_8nm_ssl_x16000_y20000_z24000_volume
     root: data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
-  # MICrONS: 2 of 12 crops, IMAGE-ONLY ssl recon val (seg dropped -- same
-  # membrane/background contradiction as the train move to SSL above).
+    imaging: FIB-SEM
+  # MICrONS: 2 of 12 labeled crops (sft instance-metric validation).
+  # no_gap auto-seg (same convention as train).
   - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
+    seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
     root: data/MICRONS
-    task: ssl
+    task: sft
     native_resolution: [40, 8, 8]
+    imaging: ssTEM
+    label_convention: no_gap
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
+    seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
     root: data/MICRONS
-    task: ssl
+    task: sft
     native_resolution: [40, 8, 8]
+    imaging: ssTEM
+    label_convention: no_gap
+  # FlyWire FAFB: 2 of 12 labeled crops (sft instance-metric validation).
+  - vol: flywire_mip1_1024x1024x256_x80000_y16000_z4500_volume        # test01
+    seg: flywire_mip1_1024x1024x256_x80000_y16000_z4500_m783_segmentation
+    root: data/FLYWIRE
+    task: sft
+    native_resolution: [40, 8, 8]
+    imaging: ssTEM
+    label_convention: no_gap
+  - vol: flywire_mip1_1024x1024x256_x104000_y24000_z5000_volume       # test02
+    seg: flywire_mip1_1024x1024x256_x104000_y24000_z5000_m783_segmentation
+    root: data/FLYWIRE
+    task: sft
+    native_resolution: [40, 8, 8]
+    imaging: ssTEM
+    label_convention: no_gap
   # H01 cell: 2 of 12 labeled mip0 crops (sft instance-metric validation).
   - vol: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_volume        # test01
     seg: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_c3_segmentation
     root: data/H01Cell
     task: sft
     native_resolution: [33, 4, 4]
+    imaging: ssTEM
+    label_convention: bg_gap
   - vol: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_volume        # test02
     seg: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_c3_segmentation
     root: data/H01Cell
     task: sft
     native_resolution: [33, 4, 4]
+    imaging: ssTEM
+    label_convention: bg_gap
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
+  # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683).
+  - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
   - vol: mitoem2_beta_test02_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
+  - vol: mitoem2_beta_test03_volume   # NEW
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
+  - vol: mitoem2_jurkat_test01_volume   # NEW -- autocorr 0.79
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
+  - vol: mitoem2_macro_test01_volume   # NEW -- autocorr 0.72
+    root: data/MitoEM2
+    task: ssl
+    native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
   - vol: mitoem2_podo_test01_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
   - vol: mitoem2_sperm_test01_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
+    imaging: FIB-SEM
   - vol: mitoem2_mossy_test01_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
+    imaging: FIB-SEM
   - vol: mitoem2_mossy_test02_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
+    imaging: FIB-SEM
   - vol: mitoem2_pyra_test01_volume
     root: data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
-  - vol: mitoem2_stem_test01_volume
-    root: data/MitoEM2
-    task: ssl
-    native_resolution: [30, 8, 8]
+    imaging: FIB-SEM
+  # mitoem2_stem_test01 REMOVED: audited autocorr median 0.45 (only 24% of
+  # probes reach the 0.5 gate threshold); consistent with both stem TRAIN
+  # volumes above being removed for the same reason -- no cloud source to
+  # replace it with, and no train counterpart left to pair it with anyway.
 
 model:
   type: joint3d          # -> Joint3DModule (Cosmos-3 Nano backbone + Joint3DReconSegLoss)
@@ -501,6 +818,9 @@ model:
   dtype: bf16
   freeze_vae_encoder: true
   freeze_dit_backbone: 5
+  # Real metadata text prompts are fed (data.imaging / label_convention /
+  # ssl tail); leave understanding FFN unfrozen so mlp.* can adapt.
+  freeze_understanding_ffn: false
   freeze_vae_decoder: true
   gradient_checkpointing: true
   vae_input_pm1: true
@@ -615,8 +935,8 @@ training:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   val_check_interval: 1.0
-  limit_train_batches: 1000
-  limit_val_batches: 200
+  limit_train_batches: 500
+  limit_val_batches: 100
   check_val_every_n_epoch: 20
   num_sanity_val_steps: 2
   log_every_n_steps: 100

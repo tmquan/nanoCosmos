@@ -16,8 +16,8 @@ FLYEM3D,eFIB-SEM,Drosophila male CNS,MaleCNS,4,04 x  1024 x 1024 x 1024,1024 x 1
 FLYEM3D,eFIB-SEM,Drosophila male CNS,MaleCNS,1,01 x  1024 x 1024 x 1024,1024 x 1024 x 1024,8 x 8 x 8,1073741824,SSL,Test,doc/assets/datasets/flyem3d_malecns_ssl_test_1024_x_1024_x_1024.png
 FLYWIRE,ssTEM,Drosophila female brain (FAFB),FAFB v783,10,10 x  1024 x 1024 x 256,1024 x 1024 x 256,8 x 8 x 40,2684354560,SFT,Train,doc/assets/datasets/flywire_fafb_v783_sft_train_1024_x_1024_x_256.png
 FLYWIRE,ssTEM,Drosophila female brain (FAFB),FAFB v783,2,02 x  1024 x 1024 x 256,1024 x 1024 x 256,8 x 8 x 40,536870912,SFT,Test,doc/assets/datasets/flywire_fafb_v783_sft_test_1024_x_1024_x_256.png
-H01Cell,ssTEM,Human temporal cortex,H01 mip0 c3,10,10 x  1024 x 1024 x 5000,1024 x 1024 x 5000,4 x 4 x 33,52428800000,SFT,Train,doc/assets/datasets/h01cell_mip0_c3_sft_train_1024_x_1024_x_5000.png
-H01Cell,ssTEM,Human temporal cortex,H01 mip0 c3,2,02 x  1024 x 1024 x 5000,1024 x 1024 x 5000,4 x 4 x 33,10485760000,SFT,Test,doc/assets/datasets/h01cell_mip0_c3_sft_test_1024_x_1024_x_5000.png
+H01Cell,ssTEM,Human temporal cortex,H01 mip0 c3,10,10 x  1024 x 1024 x 5000,1024 x 1024 x 5000,4 x 4 x 33,52428800000,SFT,Train,doc/assets/datasets/h01cell_h01_mip0_c3_sft_train_1024_x_1024_x_5000.png
+H01Cell,ssTEM,Human temporal cortex,H01 mip0 c3,2,02 x  1024 x 1024 x 5000,1024 x 1024 x 5000,4 x 4 x 33,10485760000,SFT,Test,doc/assets/datasets/h01cell_h01_mip0_c3_sft_test_1024_x_1024_x_5000.png
 MICrONS,ssTEM,Mouse V1 cortex,minnie65,10,10 x  4096 x 4096 x 800,4096 x 4096 x 800,8 x 8 x 40,134217728000,SSL,Train,doc/assets/datasets/microns_minnie65_ssl_train_4096_x_4096_x_800.png
 MICrONS,ssTEM,Mouse V1 cortex,minnie65,2,02 x  4096 x 4096 x 800,4096 x 4096 x 800,8 x 8 x 40,26843545600,SSL,Test,doc/assets/datasets/microns_minnie65_ssl_test_4096_x_4096_x_800.png
 MitoEM2,FIB-SEM,Beta cell,beta,1,01 x  760 x 699 x 1097,760 x 699 x 1097,16 x 16 x 16,582770280,SSL,Train,doc/assets/datasets/mitoem2_beta_ssl_train_760_x_699_x_1097.png

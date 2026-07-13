@@ -29,7 +29,7 @@ class _VolumeHandle:
     """Lightweight metadata handle for a single volume — no data in RAM."""
 
     __slots__ = ("image_path", "label_path", "image_key", "label_key",
-                 "shape", "name")
+                 "shape", "name", "prompt")
 
     def __init__(
         self,
@@ -39,6 +39,7 @@ class _VolumeHandle:
         name: str,
         image_key: Optional[str] = None,
         label_key: Optional[str] = None,
+        prompt: Optional[str] = None,
     ) -> None:
         self.image_path = image_path
         self.label_path = label_path
@@ -46,6 +47,7 @@ class _VolumeHandle:
         self.label_key = label_key
         self.shape = shape
         self.name = name
+        self.prompt = prompt
 
 
 def _resolve_hdf5_key(path: Path) -> Optional[str]:
@@ -375,6 +377,7 @@ class LazyVolDataset(Dataset):
                 if label_path.suffix.lower() in (".h5", ".hdf5"):
                     label_key = _resolve_hdf5_key(label_path)
 
+            prompt = vol_spec.get("prompt")
             handle = _VolumeHandle(
                 image_path=img_path,
                 label_path=label_path,
@@ -382,6 +385,7 @@ class LazyVolDataset(Dataset):
                 name=vol_name,
                 image_key=img_key,
                 label_key=label_key,
+                prompt=str(prompt) if prompt else None,
             )
             self._handles.append(handle)
             cumulative += int(np.prod(shape))
@@ -736,6 +740,8 @@ class LazyVolDataset(Dataset):
             "image": image,
             "volume": handle.name,
         }
+        if handle.prompt:
+            sample["prompt"] = handle.prompt
 
         if handle.label_path is not None:
             if cached_label is not None:

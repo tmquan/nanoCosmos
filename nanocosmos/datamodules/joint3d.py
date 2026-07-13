@@ -34,13 +34,20 @@ Config schema (``cfg.data``)::
                                      #   | "subset" | "volume"
     subset_weights: {cremi3d: 50}    # (balance: subset) per-subset schedule weight
     find_boundaries: 1.0             # per-sample boundary-erosion probability
+                                     #   (applied to no_gap / unset sft volumes)
     boundary_target: semantic        # "semantic" (sem_label only) | "both"
     branches:
       ssl: {batch_size, sample_weight, volumes: [{vol, root, native_resolution}]}
-      sft:  {batch_size, sample_weight, volumes: [{vol, seg, root, native_resolution}]}
+      sft:  {batch_size, sample_weight, volumes: [
+               {vol, seg, root, native_resolution, label_convention?}]}
+      #   label_convention (optional, sft): ``bg_gap`` | ``no_gap``
+      #     bg_gap -- membranes / extracellular already label==0; skip
+      #               FindBoundariesd (gaps already present).
+      #     no_gap -- space-filling / abutting instances; apply
+      #               FindBoundariesd so the sem head sees thin gaps.
       #   per-volume ``sample_weight`` (optional) scales its share when
       #   balance: volume (e.g. overfit one volume).
-    val_volumes: [{vol, seg, root, task, native_resolution}]   # optional
+    val_volumes: [{vol, seg, root, task, native_resolution, label_convention?}]
 """
 
 from __future__ import annotations
@@ -68,6 +75,12 @@ from nanocosmos.transforms import (
 )
 
 logger = logging.getLogger(__name__)
+
+from nanocosmos.datamodules.condition_text import (  # noqa: E402
+    LABEL_CONVENTIONS,
+    prompt_from_volume_spec,
+    validate_label_convention,
+)
 
 _DEGRADE_KEYS = (
     "zf_range", "prob", "jitter_prob", "max_jitter", "missing_prob",
@@ -255,7 +268,13 @@ class Joint3DDataModule(pl.LightningDataModule):
     # Per-group transform pipelines
     # ------------------------------------------------------------------
 
-    def _group_transform(self, task: str, native_res: Sequence[float]) -> Compose:
+    def _group_transform(
+        self,
+        task: str,
+        native_res: Sequence[float],
+        *,
+        label_convention: Optional[str] = None,
+    ) -> Compose:
         recon_size = _scaled(self.fine_patch, self.fine_nm,
                              [max(float(r), self.fine_nm) for r in native_res])
         if task == "ssl":
@@ -272,13 +291,17 @@ class Joint3DDataModule(pl.LightningDataModule):
         # membranes instead of near-degenerate full foreground.  Erosion runs on
         # the NATIVE label grid using this group's native resolution, so
         # FindBoundariesd's anisotropy guard (xy-only when z is >2x coarser)
-        # applies per dataset.
+        # applies per dataset.  ``bg_gap`` volumes already have membrane /
+        # extracellular as label==0, so FindBoundariesd is skipped for them.
         sft_tf: List[Any] = [
             EnsureChannelFirstd(keys=["image", "label"], channel_dim="no_channel"),
             Labeld(keys=["label"], spatial_dims=3),
         ]
         out_keys = ["image", "label", "recon_image"]
-        if self.find_boundaries > 0:
+        apply_boundaries = (
+            self.find_boundaries > 0 and label_convention != "bg_gap"
+        )
+        if apply_boundaries:
             if self.boundary_target == "both":
                 sft_tf.append(FindBoundariesd(
                     keys=["label"], prob=self.find_boundaries, pixel_size=native_res,
@@ -308,14 +331,27 @@ class Joint3DDataModule(pl.LightningDataModule):
         volumes: List[Dict[str, Any]],
         num_samples: int,
         deterministic: bool,
+        *,
+        label_convention: Optional[str] = None,
     ) -> LazyVolDataset:
         native_patch = _scaled(self.fine_patch, self.fine_nm, native_res)
+        # Attach fixed text-condition prompts (imaging · z/y/x nm · tail).
+        lazy_vols: List[Dict[str, Any]] = []
+        for vol in volumes:
+            entry = {k: v for k, v in vol.items() if k in ("vol", "seg", "root")}
+            try:
+                entry["prompt"] = prompt_from_volume_spec(vol, task=task)
+            except ValueError as exc:
+                # Keep backward-compat for configs without imaging: (2B/16B).
+                logger.debug("Skipping prompt for %s: %s", vol.get("vol"), exc)
+            lazy_vols.append(entry)
         return LazyVolDataset(
             root_dir=self.data_root,
-            volumes=[{k: v for k, v in vol.items() if k in ("vol", "seg", "root")}
-                     for vol in volumes],
+            volumes=lazy_vols,
             patch_size=native_patch,
-            transform=self._group_transform(task, native_res),
+            transform=self._group_transform(
+                task, native_res, label_convention=label_convention,
+            ),
             num_samples=num_samples,
             # sft: gate on BOTH label and image at sft_min_foreground.
             # ssl: image-only gate (label-less) at ssl_min_foreground.
@@ -334,11 +370,34 @@ class Joint3DDataModule(pl.LightningDataModule):
         )
 
     @staticmethod
-    def _group_by_res(volumes: List[Dict[str, Any]]) -> Dict[Tuple[float, ...], List[Dict[str, Any]]]:
+    def _group_by_res(
+        volumes: List[Dict[str, Any]],
+    ) -> Dict[Tuple[float, ...], List[Dict[str, Any]]]:
         groups: Dict[Tuple[float, ...], List[Dict[str, Any]]] = {}
         for vol in volumes:
             res = tuple(float(r) for r in vol["native_resolution"])
             groups.setdefault(res, []).append(vol)
+        return groups
+
+    @staticmethod
+    def _group_by_res_and_convention(
+        volumes: List[Dict[str, Any]],
+    ) -> Dict[Tuple[Tuple[float, ...], Optional[str]], List[Dict[str, Any]]]:
+        """Bucket by ``(native_resolution, label_convention)``.
+
+        ``label_convention`` is validated when present; missing -> ``None``
+        (legacy configs).  Mixing ``bg_gap`` and ``no_gap`` at the same
+        resolution must not share a transform (FindBoundariesd gating).
+        """
+        groups: Dict[
+            Tuple[Tuple[float, ...], Optional[str]], List[Dict[str, Any]]
+        ] = {}
+        for vol in volumes:
+            res = tuple(float(r) for r in vol["native_resolution"])
+            conv = validate_label_convention(
+                vol.get("label_convention"), vol=str(vol.get("vol")),
+            )
+            groups.setdefault((res, conv), []).append(vol)
         return groups
 
     @staticmethod
@@ -394,28 +453,40 @@ class Joint3DDataModule(pl.LightningDataModule):
 
     def _iter_train_groups(
         self, task: str, vols: List[Dict[str, Any]],
-    ) -> List[Tuple[str, Tuple[float, ...], List[Dict[str, Any]], float]]:
-        """Bucket a branch's volumes into ``(desc, res, vols, multiplier)``
+    ) -> List[Tuple[str, Tuple[float, ...], List[Dict[str, Any]], float, Optional[str]]]:
+        """Bucket a branch's volumes into ``(desc, res, vols, multiplier, convention)``
         round-robin groups per the ``balance`` policy.  ``multiplier`` scales
         the group's schedule length (1.0 = the branch's base share)."""
-        out: List[Tuple[str, Tuple[float, ...], List[Dict[str, Any]], float]] = []
+        out: List[
+            Tuple[str, Tuple[float, ...], List[Dict[str, Any]], float, Optional[str]]
+        ] = []
         if self.balance == "resolution":
-            for res, gvols in self._group_by_res(vols).items():
-                out.append((f"res={res}", res, gvols, 1.0))
+            for (res, conv), gvols in self._group_by_res_and_convention(vols).items():
+                tag = f"res={res}" + (f" conv={conv}" if conv else "")
+                out.append((tag, res, gvols, 1.0, conv))
         elif self.balance == "subset":
-            keyed: Dict[Tuple[str, Tuple[float, ...]], List[Dict[str, Any]]] = {}
+            keyed: Dict[
+                Tuple[str, Tuple[float, ...], Optional[str]], List[Dict[str, Any]]
+            ] = {}
             for v in vols:
                 sub = str(v.get("subset") or self._derive_subset(v["vol"]))
                 res = tuple(float(r) for r in v["native_resolution"])
-                keyed.setdefault((sub, res), []).append(v)
-            for (sub, res), gvols in keyed.items():
+                conv = validate_label_convention(
+                    v.get("label_convention"), vol=str(v.get("vol")),
+                )
+                keyed.setdefault((sub, res, conv), []).append(v)
+            for (sub, res, conv), gvols in keyed.items():
                 mult = self.subset_weights.get(sub, 1.0)
-                out.append((f"subset={sub}", res, gvols, mult))
+                tag = f"subset={sub}" + (f" conv={conv}" if conv else "")
+                out.append((tag, res, gvols, mult, conv))
         else:  # "volume": one group per volume, equally likely (x sample_weight)
             for v in vols:
                 res = tuple(float(r) for r in v["native_resolution"])
+                conv = validate_label_convention(
+                    v.get("label_convention"), vol=str(v.get("vol")),
+                )
                 mult = float(v.get("sample_weight", 1.0))
-                out.append((f"vol={v['vol']}", res, [v], mult))
+                out.append((f"vol={v['vol']}", res, [v], mult, conv))
         return out
 
     # ------------------------------------------------------------------
@@ -437,14 +508,17 @@ class Joint3DDataModule(pl.LightningDataModule):
             # budget stays fixed regardless of how the weights are set (a high
             # ``subset_weights`` simply reallocates the budget toward that
             # subset rather than inflating the epoch).
-            mults = [m for _, _, _, m in branch_groups]
+            mults = [m for _, _, _, m, _ in branch_groups]
             mean_mult = (sum(mults) / len(mults)) if mults else 1.0
             if mean_mult <= 0:
                 mean_mult = 1.0
-            for desc, res, gvols, mult in branch_groups:
+            for desc, res, gvols, mult, conv in branch_groups:
                 n_group = max(bs, int(round(self.num_samples * weight * mult / mean_mult)))
                 try:
-                    ds = self._build_group(task, res, gvols, n_group, deterministic=False)
+                    ds = self._build_group(
+                        task, res, gvols, n_group, deterministic=False,
+                        label_convention=conv,
+                    )
                 except ValueError:
                     # All volumes in the group were skipped (e.g. smaller than
                     # the native patch on some axis).  Skip the empty group
@@ -480,8 +554,11 @@ class Joint3DDataModule(pl.LightningDataModule):
         for v in val_vols:
             by_task.setdefault(v.get("task", "sft"), []).append(v)
         for task, vols in by_task.items():
-            for res, gvols in self._group_by_res(vols).items():
-                ds = self._build_group(task, res, gvols, self.val_num_samples, deterministic=True)
+            for (res, conv), gvols in self._group_by_res_and_convention(vols).items():
+                ds = self._build_group(
+                    task, res, gvols, self.val_num_samples, deterministic=True,
+                    label_convention=conv,
+                )
                 v_datasets.append(ds)
                 v_specs.append((v_off, len(ds), self.val_batch_size))
                 v_off += len(ds)
