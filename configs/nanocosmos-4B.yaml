@@ -155,7 +155,7 @@ data:
   branches:
     ssl:
       task: ssl
-      batch_size: 2
+      batch_size: 3
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
       # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
@@ -438,7 +438,7 @@ data:
       # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
     sft:
       task: sft
-      batch_size: 2
+      batch_size: 3
       sample_weight: 2.0
       # Labeled rungs tagged with label_convention: bg_gap | no_gap.
       # Predict at 4 nm, pool the head to the native label grid, then
@@ -874,7 +874,7 @@ loss:
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency). The SSL recon
   # branch is weighted 10x the SFT seg branch (matches the shipped checkpoint).
-  weight_ssl: 10.0
+  weight_ssl: 2.0
   weight_sft: 1.0
   seg:
     ignore_index: -100
