@@ -77,7 +77,7 @@ data:
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
-  num_workers: 8
+  num_workers: 4
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 4
@@ -98,7 +98,7 @@ data:
   # are cheap) and cap the largest instance at 90% of foreground as a secondary
   # net.  0 = disabled.
   sft_min_instances: 2
-  sft_max_inst_frac: 0.9
+  sft_max_inst_frac: 0.7
   # Reject mostly-empty / zero-padded ssl crops (image-nonzero gate) so the
   # SSL branch never trains/visualizes black patches.  Label-less ssl volumes only.
   ssl_min_foreground: 0.7
@@ -874,7 +874,7 @@ loss:
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency). The SSL recon
   # branch is weighted 10x the SFT seg branch (matches the shipped checkpoint).
-  weight_ssl: 2.0
+  weight_ssl: 5.0
   weight_sft: 1.0
   seg:
     ignore_index: -100

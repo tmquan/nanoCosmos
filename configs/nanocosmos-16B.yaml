@@ -853,7 +853,7 @@ loss:
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency). The SSL recon
   # branch is weighted 10x the SFT seg branch (matches the shipped checkpoint).
-  weight_ssl: 2.0
+  weight_ssl: 5.0
   weight_sft: 1.0
   seg:
     ignore_index: -100
