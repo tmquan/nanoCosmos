@@ -221,12 +221,56 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
     # shared attention ``.self_attn.``.
     _UNDERSTANDING_FFN_MARKER = ".mlp."
 
+    # Full understanding (text) stream = a frozen text encoder when held out.
+    # Matched by EXACT dotted-name SEGMENTS so the understanding modules are
+    # never confused with their generation twins (e.g. ``input_layernorm`` vs
+    # ``input_layernorm_moe_gen``, ``mlp`` vs ``mlp_moe_gen``, the
+    # understanding attention projections ``to_q/to_k/to_v/to_out`` +
+    # ``norm_q/norm_k`` vs the generation ``add_q_proj/.../to_add_out`` +
+    # ``norm_added_q/norm_added_k``).  ``embed_tokens`` is the text input
+    # embedding.  The generation (vision) stream is deliberately EXCLUDED so it
+    # keeps training and can still attend to the (now-static) text keys/values.
+    _UNDERSTANDING_STREAM_SEGMENTS = frozenset({
+        "embed_tokens",
+        "input_layernorm",
+        "post_attention_layernorm",
+        "mlp",
+        "to_q", "to_k", "to_v", "to_out",
+        "norm_q", "norm_k",
+    })
+
     def _understanding_ffn_params(self) -> List[nn.Parameter]:
         """Per-layer understanding-FFN (``mlp.*``) parameters of ``self.dit``."""
         return [
             p for n, p in self.dit.named_parameters()
             if self._UNDERSTANDING_FFN_MARKER in n
         ]
+
+    def _understanding_stream_params(self) -> List[nn.Parameter]:
+        """All understanding (text) stream params of ``self.dit`` (text encoder).
+
+        Selected by exact dotted-name segment membership so the generation
+        (vision) twins (``*_moe_gen``, ``add_*_proj``, ``to_add_out``,
+        ``norm_added_*``) are never matched.
+        """
+        segs = self._UNDERSTANDING_STREAM_SEGMENTS
+        return [
+            p for n, p in self.dit.named_parameters()
+            if segs & set(n.split("."))
+        ]
+
+    def _enforce_understanding_stream_freeze(self) -> bool:
+        """Freeze the whole understanding (text) stream now; return whether any matched."""
+        params = self._understanding_stream_params()
+        for p in params:
+            p.requires_grad_(False)
+        if not params:
+            logger.warning(
+                "Cosmos3: no understanding-stream params matched %s -- "
+                "freeze_understanding_stream has no effect (unexpected DiT "
+                "parameter names?).", sorted(self._UNDERSTANDING_STREAM_SEGMENTS),
+            )
+        return bool(params)
 
     def _enforce_understanding_ffn_freeze(self) -> bool:
         """Freeze the understanding FFN (``mlp.*``) right now; return whether any matched."""
@@ -252,7 +296,15 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         re-applies the same hold-out) or if ``freeze_understanding_ffn`` is
         ``False``.
         """
-        if self._freeze_understanding_ffn:
+        if self._freeze_understanding_stream:
+            n = len(self._understanding_stream_params())
+            self._enforce_understanding_stream_freeze()
+            logger.info(
+                "Cosmos3 understanding STREAM (text encoder: embed_tokens + "
+                "understanding attn/norms + mlp.*, %d params) held permanently "
+                "frozen (freeze_understanding_stream=True).", n,
+            )
+        elif self._freeze_understanding_ffn:
             n = len(self._understanding_ffn_params())
             self._enforce_understanding_ffn_freeze()
             logger.info(
@@ -270,19 +322,33 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         )
 
     def unfreeze_dit_backbone(self) -> None:
-        """Thaw the DiT.  If ``freeze_understanding_ffn``, re-freeze ``mlp.*`` for good."""
+        """Thaw the DiT.
+
+        If ``freeze_understanding_stream`` re-freeze the whole text encoder
+        (embed_tokens + understanding attn/norms + mlp.*) for good; else if
+        ``freeze_understanding_ffn`` re-freeze only ``mlp.*``.
+        """
         self.dit.requires_grad_(True)
         self.dit.train()
-        n_mlp = 0
-        if self._freeze_understanding_ffn:
-            n_mlp = len(self._understanding_ffn_params())
+        held = ""
+        if self._freeze_understanding_stream:
+            n = len(self._understanding_stream_params())
+            self._enforce_understanding_stream_freeze()
+            held = (
+                f" EXCEPT the understanding stream (text encoder, {n} params "
+                "kept permanently frozen)"
+            )
+        elif self._freeze_understanding_ffn:
+            n = len(self._understanding_ffn_params())
             self._enforce_understanding_ffn_freeze()
+            held = (
+                f" EXCEPT the understanding FFN (mlp.*, {n} params kept "
+                "permanently frozen)"
+            )
         self._freeze_dit_backbone = False
         logger.info(
             "Cosmos3 DiT backbone thawed%s; DiT trainable params now %s.",
-            f" EXCEPT the understanding FFN (mlp.*, {n_mlp} params kept "
-            "permanently frozen)" if self._freeze_understanding_ffn else "",
-            f"{self.get_num_parameters(True):,}",
+            held, f"{self.get_num_parameters(True):,}",
         )
 
     # ------------------------------------------------------------------

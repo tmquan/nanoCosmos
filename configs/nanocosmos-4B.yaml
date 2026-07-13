@@ -43,8 +43,10 @@
 # Text condition (Cosmos3-Edge): every volume sets ``imaging:`` and SFT volumes
 # set ``label_convention:``.  The fixed prompt is
 #   ``{imaging} · z{Z} y{Y} x{X} nm · {bg_gap|no_gap|ssl}``
-# (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream;
-# ``freeze_understanding_ffn: false`` so mlp.* can adapt.
+# (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream.
+# ``freeze_understanding_stream: true`` freezes the whole text encoder
+# (embed_tokens + understanding attn/norms + mlp.*); the prompt still conditions
+# because the vision stream keeps training and attends to the static text KV.
 #
 # Implemented + tested end-to-end: multi-task datamodule
 # (nanocosmos/datamodules/joint3d.py), Lightning module
@@ -839,11 +841,23 @@ model:
   #   false -> whole DiT trains from epoch 0 (no warm-up freeze at all).
   #   true  -> whole DiT frozen for the entire run (no thaw).
   freeze_dit_backbone: 5
-  # INDEPENDENT of the freeze_dit_backbone schedule: when true, keeps the
-  # understanding FFN (mlp.*) permanently frozen.  Real metadata prompts
-  # are fed (data.imaging / label_convention / ssl tail), so leave false
-  # and let freeze_dit_backbone govern mlp.* like the rest of the DiT.
+  # Understanding (text) pathway hold-outs, INDEPENDENT of the
+  # freeze_dit_backbone schedule.  The Cosmos3 MoT has SEPARATE weights per
+  # stream and the text stream is causal + vision-independent, so freezing it
+  # does NOT touch the vision stream.
+  #   freeze_understanding_ffn:    freeze only mlp.* (~36% of the DiT).
+  #   freeze_understanding_stream: freeze the WHOLE text encoder -- embed_tokens
+  #                                + understanding attn (to_q/k/v/out, norm_q/k)
+  #                                + understanding norms + mlp.* (SUPERSET; when
+  #                                true the ffn flag is redundant).
+  # We freeze the whole stream: with a fixed tiny prompt vocabulary the prompt
+  # still conditions fully because the generation (vision) stream keeps training
+  # and learns to attend to the now-static text keys/values (a standard frozen
+  # text encoder).  This also reclaims the text encoder's optimizer/grad memory
+  # (notably the large embed_tokens table).  Flip both to false only for
+  # richer/free-form captions or when memory is ample.
   freeze_understanding_ffn: false
+  freeze_understanding_stream: true
   freeze_vae_decoder: true
   # MUST be true: at the epoch-5 thaw the newly-trainable attn/gen-FFN/other
   # add activations + grads + AdamW state; without checkpointing this OOMs
@@ -962,7 +976,7 @@ training:
   # frequency.
   limit_train_batches: 500
   limit_val_batches: 100
-  check_val_every_n_epoch: 20
+  check_val_every_n_epoch: 10
   num_sanity_val_steps: 2
   log_every_n_steps: 100
   enable_progress_bar: true

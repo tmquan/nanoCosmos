@@ -33,8 +33,11 @@
 # Text condition (Cosmos3-Nano): every volume sets ``imaging:`` and SFT volumes
 # set ``label_convention:``.  The fixed prompt is
 #   ``{imaging} · z{Z} y{Y} x{X} nm · {bg_gap|no_gap|ssl}``
-# (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream;
-# ``freeze_understanding_ffn: false`` so mlp.* can adapt.  Volume lists match
+# (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream.
+# ``freeze_understanding_stream: true`` freezes the whole text encoder
+# (embed_tokens + understanding attn/norms + mlp.*); the prompt still conditions
+# because the vision stream keeps training and attends to the static text KV.
+# Volume lists match
 # nanocosmos-4B.yaml; only patch/batch memory knobs differ.
 #
 # Implemented + tested end-to-end: multi-task datamodule
@@ -818,9 +821,18 @@ model:
   dtype: bf16
   freeze_vae_encoder: true
   freeze_dit_backbone: 5
-  # Real metadata text prompts are fed (data.imaging / label_convention /
-  # ssl tail); leave understanding FFN unfrozen so mlp.* can adapt.
+  # Understanding (text) pathway hold-outs, INDEPENDENT of freeze_dit_backbone.
+  # The Cosmos3 MoT has SEPARATE per-stream weights and the text stream is
+  # causal + vision-independent, so freezing it does not touch the vision
+  # stream.  freeze_understanding_stream freezes the WHOLE text encoder
+  # (embed_tokens + understanding attn to_q/k/v/out + norm_q/k + understanding
+  # norms + mlp.*); it SUPERSEDES freeze_understanding_ffn (mlp.* only).  With a
+  # fixed tiny prompt vocabulary the prompt still conditions fully (the vision
+  # stream keeps training and attends to the now-static text KV -- a frozen
+  # text encoder), and we reclaim the text encoder's optimizer/grad memory
+  # (notably the large embed_tokens table).
   freeze_understanding_ffn: false
+  freeze_understanding_stream: true
   freeze_vae_decoder: true
   gradient_checkpointing: true
   vae_input_pm1: true

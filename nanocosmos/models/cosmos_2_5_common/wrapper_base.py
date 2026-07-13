@@ -115,6 +115,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         pretrained: bool = True,
         freeze_dit_backbone: Union[bool, int] = False,
         freeze_understanding_ffn: bool = True,
+        freeze_understanding_stream: bool = False,
         freeze_vae_decoder: bool = False,
         freeze_vae_encoder: bool = True,
         gradient_checkpointing: Union[bool, List[str]] = False,
@@ -207,6 +208,13 @@ class _BaseCosmos25Wrapper(nn.Module):
         # ``unfreeze_dit_backbone``); a no-op for the non-MoT Cosmos-Predict
         # / Cosmos-Transfer wrappers, which have no such branch to select.
         self._freeze_understanding_ffn = bool(freeze_understanding_ffn)
+        # Superset of the FFN hold-out above: freeze the ENTIRE understanding
+        # (text) stream -- embed_tokens + the understanding-only attention
+        # projections/norms + mlp.* -- turning it into a frozen text encoder.
+        # The generation (vision) stream keeps training and still learns to
+        # attend to the now-static text keys/values.  Cosmos3-only (via
+        # ``Cosmos3OmniWrapper``); a no-op for the non-MoT wrappers.
+        self._freeze_understanding_stream = bool(freeze_understanding_stream)
         self._freeze_vae_encoder = freeze_vae_encoder
         # ``gradient_checkpointing`` accepts a bool (all targets) or a list of
         # targets among {"dit", "decode", "head"} so recompute can be traded
