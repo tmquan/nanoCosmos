@@ -230,6 +230,11 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
     # ``norm_added_q/norm_added_k``).  ``embed_tokens`` is the text input
     # embedding.  The generation (vision) stream is deliberately EXCLUDED so it
     # keeps training and can still attend to the (now-static) text keys/values.
+    # ``norm`` is the FINAL understanding-stream RMSNorm (its generation twin is
+    # ``norm_moe_gen``); ``lm_head`` is the text-prediction head.  Both are
+    # understanding-tower and are UNUSED in the feature-extraction forward (we
+    # never predict text), so freezing them both completes the text-encoder
+    # freeze AND avoids a DDP "parameter didn't receive grad" error post-thaw.
     _UNDERSTANDING_STREAM_SEGMENTS = frozenset({
         "embed_tokens",
         "input_layernorm",
@@ -237,6 +242,8 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         "mlp",
         "to_q", "to_k", "to_v", "to_out",
         "norm_q", "norm_k",
+        "norm",
+        "lm_head",
     })
 
     def _understanding_ffn_params(self) -> List[nn.Parameter]:

@@ -832,6 +832,14 @@ model:
   dropout: 0.0                 # no dropout anywhere in the Cosmos3 model (matches 16B)
   pretrained: true
   dtype: bf16
+  # FP8 (Blackwell B300) on the generation-stream DiT Linears via torchao
+  # rowwise.  Only the token-parallel vision matmuls (add_*/to_add_out/
+  # mlp_moe_gen) are converted; the frozen understanding stream, norms,
+  # embeds, proj_in/out and heads stay BF16 (see models/cosmos_2_5_common/
+  # fp8.py).  Decoupled from ``precision: bf16-true``; graceful BF16 fallback
+  # if torchao is unavailable.  Fresh-run setting (changes numerics).
+  fp8: true
+  fp8_recipe: rowwise
   freeze_vae_encoder: true
   # Cosmos 3 MoT warm-up.  ``freeze_dit_backbone`` freezes/thaws the WHOLE
   # DiT on a schedule (independent of freeze_understanding_ffn below):
@@ -859,10 +867,12 @@ model:
   freeze_understanding_ffn: false
   freeze_understanding_stream: true
   freeze_vae_decoder: true
-  # MUST be true: at the epoch-5 thaw the newly-trainable attn/gen-FFN/other
-  # add activations + grads + AdamW state; without checkpointing this OOMs
-  # (and it is incompatible with torch.compile, so compile below is off).
-  gradient_checkpointing: true
+  # ["decode"]: keep ONLY the mandatory per-frame Wan VAE-decode recompute;
+  # run the DiT + head WITHOUT recompute for speed.  FP8 above frees the
+  # vision-Linear activation memory that full checkpointing used to pay for.
+  # NOTE: any checkpointing is incompatible with torch.compile tracing the
+  # checkpoint HOP -- if compile is on, it must skip/scope around the decode.
+  gradient_checkpointing: ["dit", "decode"]
   vae_input_pm1: true
   vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
