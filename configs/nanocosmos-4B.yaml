@@ -79,10 +79,10 @@ data:
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
   # pool to the native label grid, derived from the label shape.
-  num_workers: 4
+  num_workers: 8
   pin_memory: true
   persistent_workers: true
-  prefetch_factor: 4
+  prefetch_factor: 2
   # Applied only to sft volumes with label_convention: no_gap (or unset).
   # bg_gap volumes already have membrane/extracellular as label==0, so
   # FindBoundariesd is skipped for those groups.
@@ -157,7 +157,7 @@ data:
   branches:
     ssl:
       task: ssl
-      batch_size: 3
+      batch_size: 2
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
       # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
@@ -440,7 +440,7 @@ data:
       # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
     sft:
       task: sft
-      batch_size: 3
+      batch_size: 2
       sample_weight: 2.0
       # Labeled rungs tagged with label_convention: bg_gap | no_gap.
       # Predict at 4 nm, pool the head to the native label grid, then
