@@ -132,7 +132,7 @@ class _StubJointModule(Joint3DModule):
 
 def test_joint_datamodule_condition_prompts(synth_root):
     dm = _make_dm(
-        synth_root, with_prompts=True, sft_convention="no_gap",
+        synth_root, with_prompts=True, sft_convention="filled",
     )
     dm.setup()
     seen = {}
@@ -142,23 +142,23 @@ def test_joint_datamodule_condition_prompts(synth_root):
         prompt = batch["prompt"][0]
         seen[task] = prompt
     assert seen["ssl"] == "FIB-SEM · z4 y4 x4 nm · ssl"
-    assert seen["sft"] == "FIB-SEM · z8 y8 x8 nm · no_gap"
+    assert seen["sft"] == "FIB-SEM · z8 y8 x8 nm · filled"
 
 
-def test_bg_gap_skips_sem_label_erosion(synth_root):
+def test_gapped_skips_sem_label_erosion(synth_root):
     dm = _make_dm(
-        synth_root, with_prompts=True, sft_convention="bg_gap",
+        synth_root, with_prompts=True, sft_convention="gapped",
     )
     dm.setup()
     for batch in dm.train_dataloader():
         task = batch["task"][0] if isinstance(batch["task"], (list, tuple)) else batch["task"]
         if task == "sft":
             assert "sem_label" not in batch
-            assert batch["prompt"][0] == "FIB-SEM · z8 y8 x8 nm · bg_gap"
+            assert batch["prompt"][0] == "FIB-SEM · z8 y8 x8 nm · gapped"
 
 
 def test_joint_train_end_to_end(synth_root):
-    dm = _make_dm(synth_root, num_samples=2, with_prompts=True, sft_convention="no_gap")
+    dm = _make_dm(synth_root, num_samples=2, with_prompts=True, sft_convention="filled")
     module = _StubJointModule(
         model_config={"pretrained": False},
         optimizer_config={"lr": 1e-4},

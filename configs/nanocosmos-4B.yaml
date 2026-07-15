@@ -30,9 +30,9 @@
 #   sft    segmentation (gated by LABELS): any labeled rung; pool the small-voxel
 #          head to the label grid -> AffinityFGLoss.  Each labeled volume sets
 #          ``label_convention`` (equal-length tokens):
-#            bg_gap -- membranes / extracellular already label==0
+#            gapped -- membranes / extracellular already label==0
 #                      (Neurons, H01, SNEMI train val)
-#            no_gap -- space-filling / abutting instances; sem gaps come from
+#            filled -- space-filling / abutting instances; sem gaps come from
 #                      find_boundaries (FIB-25, CREMI, FlyWire, MICrONS)
 #          FIB is both ssl+sft (labeled small-voxel rung).
 # Convention: small voxel size = fine (4 nm); large voxel size = coarse (30-40 nm).
@@ -42,7 +42,7 @@
 #
 # Text condition (Cosmos3-Edge): every volume sets ``imaging:`` and SFT volumes
 # set ``label_convention:``.  The fixed prompt is
-#   ``{imaging} · z{Z} y{Y} x{X} nm · {bg_gap|no_gap|ssl}``
+#   ``{imaging} · z{Z} y{Y} x{X} nm · {gapped|filled|ssl}``
 # (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream.
 # ``freeze_understanding_stream: true`` freezes the whole text encoder
 # (embed_tokens + understanding attn/norms + mlp.*); the prompt still conditions
@@ -83,8 +83,8 @@ data:
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 2
-  # Applied only to sft volumes with label_convention: no_gap (or unset).
-  # bg_gap volumes already have membrane/extracellular as label==0, so
+  # Applied only to sft volumes with label_convention: filled (or unset).
+  # gapped volumes already have membrane/extracellular as label==0, so
   # FindBoundariesd is skipped for those groups.
   find_boundaries: 1.0
   boundary_target: semantic
@@ -442,231 +442,231 @@ data:
       task: sft
       batch_size: 2
       sample_weight: 2.0
-      # Labeled rungs tagged with label_convention: bg_gap | no_gap.
+      # Labeled rungs tagged with label_convention: gapped | filled.
       # Predict at 4 nm, pool the head to the native label grid, then
-      # AffinityFGLoss.  MICrONS is no_gap (auto-seg); SNEMI/Neurons/H01
-      # are bg_gap -- grouping + text tail isolate the conventions.
+      # AffinityFGLoss.  MICrONS is filled (auto-seg); SNEMI/Neurons/H01
+      # are gapped -- grouping + text tail isolate the conventions.
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
         seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
         root: data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: neurons_5000x2900x300_x3000_y7200_z950_volume # SNEMI3D 30x6x6
         seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
         root: data/SNEMI3D
         native_resolution: [30, 6, 6]
         imaging: ssSEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: cremi3d_sample_A_volume                       # CREMI 40x4x4
         seg: cremi3d_sample_A_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: cremi3d_sample_B_volume
         seg: cremi3d_sample_B_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: cremi3d_sample_C_volume
         seg: cremi3d_sample_C_segmentation
         root: data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       # --- FlyWire FAFB v783 40x8x8 (8 nm EM, upsampled m783 seg), 10 train ---
       - vol: flywire_mip1_1024x1024x256_x28000_y32000_z3000_volume        # train01
         seg: flywire_mip1_1024x1024x256_x28000_y32000_z3000_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x32000_y40000_z3500_volume        # train02
         seg: flywire_mip1_1024x1024x256_x32000_y40000_z3500_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x64000_y28000_z1500_volume        # train03
         seg: flywire_mip1_1024x1024x256_x64000_y28000_z1500_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x72000_y36000_z2800_volume        # train04
         seg: flywire_mip1_1024x1024x256_x72000_y36000_z2800_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume        # train05 (richest)
         seg: flywire_mip1_1024x1024x256_x88000_y20000_z3600_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x96000_y44000_z4000_volume        # train06
         seg: flywire_mip1_1024x1024x256_x96000_y44000_z4000_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x52000_y32000_z2800_volume        # train07
         seg: flywire_mip1_1024x1024x256_x52000_y32000_z2800_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x60000_y44000_z3200_volume        # train08
         seg: flywire_mip1_1024x1024x256_x60000_y44000_z3200_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x68000_y16000_z2800_volume        # train09
         seg: flywire_mip1_1024x1024x256_x68000_y16000_z2800_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x44000_y24000_z2400_volume        # train10
         seg: flywire_mip1_1024x1024x256_x44000_y24000_z2400_m783_segmentation
         root: data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       # --- H01 cell 33x4x4 (4 nm EM mip0 + c3 seg), 10 train / 2 val ---
       # Human temporal cortex (Shapson-Coe et al.); xy on the fine 4 nm grid,
       # z = 33 nm.  Extended Jul 2026 to 1024x1024x5000 (z0=0 covers the prior
-      # z=2000 windows).  bg_gap convention (matches Neurons/SNEMI).
+      # z=2000 windows).  gapped convention (matches Neurons/SNEMI).
       - vol: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume         # train01
         seg: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_volume         # train02
         seg: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_volume         # train03
         seg: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_volume         # train04
         seg: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_volume         # train05
         seg: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_volume         # train06
         seg: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_volume         # train07
         seg: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_volume         # train08
         seg: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_volume         # train09
         seg: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_volume         # train10
         seg: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_c3_segmentation
         root: data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
-        label_convention: bg_gap
+        label_convention: gapped
 
       # --- MICrONS 40x8x8 labeled (v1300 auto-seg) ---
-      # no_gap space-filling auto-seg; FindBoundariesd applies.
-      # Distinct from bg_gap (SNEMI/Neurons/H01); text-condition
+      # filled space-filling auto-seg; FindBoundariesd applies.
+      # Distinct from gapped (SNEMI/Neurons/H01); text-condition
       # tail + transform grouping isolate the convention.
       - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
         seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
         seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
         seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
         seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
         seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
         seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
         seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
         seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
         seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
         seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
         root: data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
-        label_convention: no_gap
+        label_convention: filled
 
   val_batch_size: 2
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
@@ -678,7 +678,7 @@ data:
     task: sft
     native_resolution: [30, 6, 6]
     imaging: ssSEM
-    label_convention: bg_gap
+    label_convention: gapped
   # --- 20% holdout of the divisible-by-5 datasets (image-only COSEM/FLYEM ->
   #     ssl recon validation) ---
   # x8192_y0_z0 REMOVED: audited autocorr ~0.27 (embedding resin, ~white
@@ -721,21 +721,21 @@ data:
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
   # MICrONS: 2 of 12 labeled crops (sft instance-metric validation).
-  # no_gap auto-seg (same convention as train).
+  # filled auto-seg (same convention as train).
   - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
     seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
     root: data/MICRONS
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
-    label_convention: no_gap
+    label_convention: filled
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
     seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
     root: data/MICRONS
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
-    label_convention: no_gap
+    label_convention: filled
   # FlyWire FAFB: 2 of 12 labeled crops (sft instance-metric validation).
   - vol: flywire_mip1_1024x1024x256_x80000_y16000_z4500_volume        # test01
     seg: flywire_mip1_1024x1024x256_x80000_y16000_z4500_m783_segmentation
@@ -743,14 +743,14 @@ data:
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
-    label_convention: no_gap
+    label_convention: filled
   - vol: flywire_mip1_1024x1024x256_x104000_y24000_z5000_volume       # test02
     seg: flywire_mip1_1024x1024x256_x104000_y24000_z5000_m783_segmentation
     root: data/FLYWIRE
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
-    label_convention: no_gap
+    label_convention: filled
   # H01 cell: 2 of 12 labeled mip0 crops (sft instance-metric validation).
   - vol: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_volume        # test01
     seg: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_c3_segmentation
@@ -758,14 +758,14 @@ data:
     task: sft
     native_resolution: [33, 4, 4]
     imaging: ssTEM
-    label_convention: bg_gap
+    label_convention: gapped
   - vol: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_volume        # test02
     seg: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_c3_segmentation
     root: data/H01Cell
     task: sft
     native_resolution: [33, 4, 4]
     imaging: ssTEM
-    label_convention: bg_gap
+    label_convention: gapped
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
   # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683).
   - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)

@@ -34,16 +34,16 @@ Config schema (``cfg.data``)::
                                      #   | "subset" | "volume"
     subset_weights: {cremi3d: 50}    # (balance: subset) per-subset schedule weight
     find_boundaries: 1.0             # per-sample boundary-erosion probability
-                                     #   (applied to no_gap / unset sft volumes)
+                                     #   (applied to filled / unset sft volumes)
     boundary_target: semantic        # "semantic" (sem_label only) | "both"
     branches:
       ssl: {batch_size, sample_weight, volumes: [{vol, root, native_resolution}]}
       sft:  {batch_size, sample_weight, volumes: [
                {vol, seg, root, native_resolution, label_convention?}]}
-      #   label_convention (optional, sft): ``bg_gap`` | ``no_gap``
-      #     bg_gap -- membranes / extracellular already label==0; skip
+      #   label_convention (optional, sft): ``gapped`` | ``filled``
+      #     gapped -- membranes / extracellular already label==0; skip
       #               FindBoundariesd (gaps already present).
-      #     no_gap -- space-filling / abutting instances; apply
+      #     filled -- space-filling / abutting instances; apply
       #               FindBoundariesd so the sem head sees thin gaps.
       #   per-volume ``sample_weight`` (optional) scales its share when
       #   balance: volume (e.g. overfit one volume).
@@ -291,7 +291,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         # membranes instead of near-degenerate full foreground.  Erosion runs on
         # the NATIVE label grid using this group's native resolution, so
         # FindBoundariesd's anisotropy guard (xy-only when z is >2x coarser)
-        # applies per dataset.  ``bg_gap`` volumes already have membrane /
+        # applies per dataset.  ``gapped`` volumes already have membrane /
         # extracellular as label==0, so FindBoundariesd is skipped for them.
         sft_tf: List[Any] = [
             EnsureChannelFirstd(keys=["image", "label"], channel_dim="no_channel"),
@@ -299,7 +299,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         ]
         out_keys = ["image", "label", "recon_image"]
         apply_boundaries = (
-            self.find_boundaries > 0 and label_convention != "bg_gap"
+            self.find_boundaries > 0 and label_convention != "gapped"
         )
         if apply_boundaries:
             if self.boundary_target == "both":
@@ -386,7 +386,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         """Bucket by ``(native_resolution, label_convention)``.
 
         ``label_convention`` is validated when present; missing -> ``None``
-        (legacy configs).  Mixing ``bg_gap`` and ``no_gap`` at the same
+        (legacy configs).  Mixing ``gapped`` and ``filled`` at the same
         resolution must not share a transform (FindBoundariesd gating).
         """
         groups: Dict[

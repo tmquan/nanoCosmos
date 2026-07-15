@@ -38,7 +38,7 @@ def test_tokenize_prompt_caches_cpu_ids_by_string():
 def test_tokenize_prompt_without_tokenizer_is_null_token():
     obj = SimpleNamespace(_text_tokenizer=None, _prompt_ids_cache={})
     ids = Cosmos3OmniWrapper._tokenize_prompt(
-        obj, "FIB-SEM · z8 y8 x8 nm · bg_gap", torch.device("cpu"),
+        obj, "FIB-SEM · z8 y8 x8 nm · gapped", torch.device("cpu"),
     )
     assert ids.tolist() == [0]
     assert len(obj._prompt_ids_cache) == 1

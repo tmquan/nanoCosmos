@@ -3,8 +3,8 @@
 Every dataset nanocosmos trains on is **3-D electron-microscopy (EM)**, stored
 on disk in one shared convention and pulled in by the datamodule. Most carry
 dense **instance** (neuron-id) labels for the segmentation (`sft`) branch; the
-self-supervised (`ssl`) sources — COSEM3D, MitoEM2, unlabeled FlyEM surround,
-and MICrONS (EM only in the joint recipe; see below) — are **image-only**. This
+self-supervised (`ssl`) sources — COSEM3D, MitoEM2, and the unlabeled FlyEM
+surround — are **image-only**. This
 doc covers what each dataset is, its native resolution, and the exact script
 that downloads (or converts) it.
 
@@ -26,11 +26,12 @@ that downloads (or converts) it.
 | COSEM3D | OpenOrganelle / COSEM cell, **FIB-SEM** | 4 × 4 × ~3.2–5.2 (near-cubic) | *(joint3d SSL anchor)* | Xu et al. 2021 *Nature*; Heinrich et al. 2021 *Nature* | `download_cosem3d.py` | `data/COSEM3D` | `joint3d` |
 | MitoEM2 | Mitochondria EM, **mixed FIB-SEM / ssSEM / SBF-SEM** (8 subsets) | 16 × 16 × 16 & 8 × 8 × 30 | *(joint3d SSL, per-vol)* | Liu, P. 2026, Zenodo (MitoEM 2.0, v6, [10.5281/zenodo.20417683](https://zenodo.org/records/20417683)); orig. Wei et al. 2020, *MICCAI* | `convert_mitoem2.py` | `data/MitoEM2` | `joint3d` |
 
-`COSEM3D` (4 nm), `MitoEM2` (8–16 nm), Hemibrain / MaleCNS (`FLYEM3D`, 8 nm),
-and **MICrONS** (image-only in the joint recipe) are the `ssl` rungs of the
-**joint super-resolution recipe** (`configs/nanocosmos-{16B,4B,2B}.yaml`,
-`data.dataset: joint3d`). **H01Cell** is an `sft` rung (compatible membrane /
-background convention with SNEMI / Neurons). See
+`COSEM3D` (4 nm), `MitoEM2` (8–16 nm), and Hemibrain / MaleCNS (`FLYEM3D`,
+8 nm) are the `ssl` rungs of the **joint super-resolution recipe**
+(`configs/nanocosmos-{16B,4B,2B}.yaml`, `data.dataset: joint3d`). **H01Cell**
+and **MICrONS** are `sft` rungs. Every labeled (`sft`) volume declares a
+[`label_convention`](#label-conventions-gapped--filled) — `gapped` or `filled` —
+so the two annotation styles never poison one another. See
 [`RESOLUTION_LADDER.md`](./RESOLUTION_LADDER.md).
 
 All scripts live in `scripts/` and write the on-disk convention described
@@ -73,6 +74,27 @@ The dataset/datamodule classes (`SNEMI3DDataset`, `MICRONSDataset`,
 `CREMI3DDataset`, `FLYEM3DDataset`, `NeuronsDataset` and their
 `*DataModule`s) only differ in metadata; the CREMI3D and FLYEM3D leaves
 are thin metadata subclasses of `MICRONSDataset`/`MICRONSDataModule`.
+
+---
+
+## Label conventions (`gapped` / `filled`)
+
+Every labeled (`sft`) volume declares `label_convention` in the config, because
+two incompatible instance-annotation styles coexist across datasets:
+
+| convention | meaning | datasets | FindBoundaries |
+|---|---|---|---|
+| `gapped` | membranes / extracellular are already `label==0` — instances separated by native background gaps | SNEMI3D, Neurons, H01Cell | **skipped** (gaps already present) |
+| `filled` | space-filling / abutting instances — membranes are assigned to a neuron (e.g. automated seg) | MICrONS, FlyWire, CREMI, FIB-25 | **applied** — erode a `sem_label` copy to synthesise thin membrane gaps for the sem head; the affinity target always uses the pristine instance labels |
+
+Both are 6-char tokens on purpose: they are emitted as the fixed text-condition
+prompt tail — `{imaging} · z{Z} y{Y} x{X} nm · {gapped|filled|ssl}` (image-only
+`ssl` batches use the `ssl` tail). The datamodule buckets volumes by
+`(native_resolution, label_convention)`, so a `gapped` and a `filled` set at the
+same resolution never share a transform group, and the prompt tail lets the
+model tell them apart. Mixing the conventions under one `AffinityFGLoss` target
+*without* this separation is what previously "poisoned" the SFT branch (and why
+MICrONS used to be dropped to image-only SSL).
 
 ---
 
@@ -136,11 +158,14 @@ Files land in `data/SNEMI3D/` (config volume
   **4 × 4 × 40 nm** is the *annotation/coordinate frame*, not the image
   voxel size.
 - **Segmentation versions:** `v117`, `v343`, `v943`, `v1300` (default,
-  latest, Jan 2025). Seg files are still downloadable, but the **joint**
-  configs (`nanocosmos-{16B,4B,2B}.yaml`) use MICrONS as **image-only SSL**:
-  the auto-seg labels some black / thick membranes as instances, while
-  SNEMI / Neurons / H01 treat those as background — mixing them under
-  `AffinityFGLoss` poisons the SFT branch.
+  latest, Jan 2025). The **joint** configs (`nanocosmos-{16B,4B,2B}.yaml`) use
+  MICrONS on the **`sft`** branch with `label_convention: filled`: its auto-seg
+  is space-filling (membranes assigned to neurons), unlike the `gapped`
+  SNEMI / Neurons / H01. The datamodule groups it separately from the `gapped`
+  sets — and the `filled` prompt tail tags it — so the two conventions no longer
+  poison a shared `AffinityFGLoss` target. (Historically MICrONS was dropped to
+  image-only SSL to avoid exactly that mixing; the `label_convention` split is
+  what lets it re-join SFT — see [Label conventions](#label-conventions-gapped--filled).)
 - **Splits:** 12 pre-defined `4096 × 4096 × 800` crops (10 train + 2
   test) at disjoint XY positions / cortical depths; file names encode the
   origin, e.g.
@@ -167,8 +192,8 @@ uint64 seg): `512³` ≈ 1.1 GB, `1024³` ≈ 9 GB, `2048³` ≈ 72 GB,
 
 - **What:** Human temporal cortex connectomics volume (**H01** release):
   4 nm EM (mip0) + `c3` instance segmentation (8 nm xy, upsampled 2× to the
-  EM grid). Used as an **SFT** rung in the joint recipe (membrane /
-  background convention matches SNEMI / Neurons).
+  EM grid). Used as an **SFT** rung in the joint recipe with
+  `label_convention: gapped` (matches SNEMI / Neurons).
 - **Resolution:** **4 × 4 × 33 nm** (`native_resolution: [33, 4, 4]`).
 - **Splits:** 12 crops `1024 × 1024 × 5000` (10 train + 2 val), `z0=0`
   (avoids corrupt EM shards near the volume end). Stale smaller crops
@@ -659,7 +684,7 @@ in a config. `x{X}_y{Y}_z{Z}` is the crop origin in voxels; image-only crops
 | --- | --- | --- | --- | --- |
 | **SNEMI3D** | `train_inputs` / `train_labels`; `test_inputs` (test, EM only) | `train_inputs`, `train_labels` | train: yes / test: no | `data/SNEMI3D` |
 | **Neurons** | `neurons_{X}x{Y}x{Z}_x{X0}_y{Y0}_z{Z0}` | `neurons_5000x2900x300_x3000_y7200_z950` | yes | `data/SNEMI3D` |
-| **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` (joint recipe: **image-only SSL**, omit `seg:`) | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume` | optional | `data/MICRONS` |
+| **MICrONS** | `minnie65_mip0_4096x4096x800_x{X}_y{Y}_z{Z}` ; seg adds `_v{ver}` (joint recipe: **`sft`, `label_convention: filled`**) | vol `minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume`, seg `…_v1300_segmentation` | yes | `data/MICRONS` |
 | **H01Cell** | `h01cell_mip0_{Sx}x{Sy}x{Sz}_x{X}_y{Y}_z{Z}` ; seg adds `_c3` | vol `h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume`, seg `…_c3_segmentation` | yes | `data/H01Cell` |
 | **CREMI3D** | train `cremi3d_sample_{A,B,C}` ; test (EM only) `cremi3d_sample_{A+,B+,C+}` (cropped) / `cremi3d_sample_{A+,B+,C+}_padded` (padded) | `cremi3d_sample_A_volume`, `cremi3d_sample_A_segmentation`; `cremi3d_sample_A+_padded_volume` | A/B/C: yes / +: no | `data/CREMI3D` |
 | **FLYEM3D** · FIB-25 SFT core | `flyem3d_8nm_x{X}_y{Y}_z{Z}` | `flyem3d_8nm_x2304_y2048_z6144` | yes | `data/FLYEM3D` |

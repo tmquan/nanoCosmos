@@ -4,7 +4,7 @@ Template::
 
     {imaging} · z{Z} y{Y} x{X} nm · {tail}
 
-where ``tail`` is ``ssl`` on the SSL branch and ``bg_gap`` / ``no_gap``
+where ``tail`` is ``ssl`` on the SSL branch and ``gapped`` / ``filled``
 (``label_convention``) on SFT.
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-LABEL_CONVENTIONS = frozenset({"bg_gap", "no_gap"})
+LABEL_CONVENTIONS = frozenset({"gapped", "filled"})
 
 
 def validate_label_convention(raw: Any, *, vol: Optional[str] = None) -> Optional[str]:
@@ -40,8 +40,8 @@ def build_condition_text(
 
     Examples
     --------
-    >>> build_condition_text("ssTEM", [40, 8, 8], task="sft", label_convention="no_gap")
-    'ssTEM · z40 y8 x8 nm · no_gap'
+    >>> build_condition_text("ssTEM", [40, 8, 8], task="sft", label_convention="filled")
+    'ssTEM · z40 y8 x8 nm · filled'
     >>> build_condition_text("FIB-SEM", [8, 8, 8], task="ssl")
     'FIB-SEM · z8 y8 x8 nm · ssl'
     """
@@ -57,7 +57,7 @@ def build_condition_text(
         tail = "ssl"
     else:
         conv = validate_label_convention(label_convention)
-        tail = conv if conv is not None else "no_gap"
+        tail = conv if conv is not None else "filled"
     return f"{str(imaging).strip()} · z{z} y{y} x{x} nm · {tail}"
 
 
