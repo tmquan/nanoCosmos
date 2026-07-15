@@ -83,58 +83,93 @@ def _get_shape(path: Path, key: Optional[str] = None) -> Tuple[int, ...]:
 
 # HDF5 chunk cache size, per open file, per worker thread.  The h5py
 # default is 1 MB which is much smaller than typical EM volume chunks
-# (gzip-compressed minnie65 chunks are ~1-16 MB each).  Bumping this
-# means random patches drawn close together inside one volume hit the
+# (gzip-compressed minnie65 chunks are ~1-16 MB each), so bumping it lets
+# random patches drawn close together inside one volume hit the
 # decompressed-chunk cache and avoid repeated zlib decompression.
-_H5_CHUNK_CACHE_BYTES = 128 * 1024 * 1024  # 128 MB
+#
+# MEMORY: this is a HOST-RAM cost of ``rdcc_nbytes`` *per open file, per
+# worker*.  With ``balance: volume`` (one volume per batch) and
+# ``persistent_workers: true``, a naive unbounded handle cache grows toward
+# ``num_volumes * rdcc_nbytes * num_workers`` as each worker progressively
+# opens every file over epochs (~150 GB on the 4B recipe with the old 128 MB).
+# We therefore (a) keep rdcc modest at 32 MB and (b) LRU-bound the number of
+# open handles per worker to ``_H5_MAX_OPEN_HANDLES`` -- so the footprint is
+# capped at ~``K * rdcc_nbytes`` per worker (~256 MB) instead of unbounded.
+_H5_CHUNK_CACHE_BYTES = 32 * 1024 * 1024    # 32 MB (was 128 MB; see note above)
 _H5_CHUNK_CACHE_NSLOTS = 10007              # prime, h5py-recommended
+# Max HDF5 handles kept open per worker thread.  A volume-balanced batch reads
+# one volume (image [+ seg]) at a time, so a small hot set is plenty; the LRU
+# closes the least-recently-used file when the cap is exceeded.
+_H5_MAX_OPEN_HANDLES = 8
 
 
 def _get_h5_handle(path: str):
     """Return a cached HDF5 file handle for the current worker thread.
 
-    Handles are stored in thread-local storage so each DataLoader worker
-    keeps its own set of open files.  This avoids the overhead of
-    opening and parsing the HDF5 superblock on every sample.
+    Handles live in a per-thread LRU (``OrderedDict``) capped at
+    ``_H5_MAX_OPEN_HANDLES``: on overflow the least-recently-used file is
+    closed and its cached dataset objects dropped, so the per-worker HDF5
+    chunk-cache memory stays bounded (~``K * rdcc_nbytes``) instead of growing
+    toward ``num_volumes * rdcc_nbytes`` under persistent workers.
 
-    The chunk cache is sized via ``rdcc_nbytes`` / ``rdcc_nslots`` so
-    repeated reads from neighbouring regions of the same volume do not
-    re-decompress chunks.
+    The chunk cache is sized via ``rdcc_nbytes`` / ``rdcc_nslots`` so repeated
+    reads from neighbouring regions of the same volume do not re-decompress
+    chunks.
     """
     import h5py
+    from collections import OrderedDict
     cache = getattr(_thread_local, "h5_cache", None)
     if cache is None:
-        cache = {}
+        cache = OrderedDict()
         _thread_local.h5_cache = cache
     handle = cache.get(path)
-    if handle is None:
-        handle = h5py.File(
-            path, "r", swmr=True, locking=False,
-            rdcc_nbytes=_H5_CHUNK_CACHE_BYTES,
-            rdcc_nslots=_H5_CHUNK_CACHE_NSLOTS,
-        )
-        cache[path] = handle
+    if handle is not None:
+        cache.move_to_end(path)                 # mark most-recently-used
+        return handle
+    handle = h5py.File(
+        path, "r", swmr=True, locking=False,
+        rdcc_nbytes=_H5_CHUNK_CACHE_BYTES,
+        rdcc_nslots=_H5_CHUNK_CACHE_NSLOTS,
+    )
+    cache[path] = handle
+    cache.move_to_end(path)
+    # Evict least-recently-used handles beyond the cap.
+    while len(cache) > _H5_MAX_OPEN_HANDLES:
+        old_path, old_handle = cache.popitem(last=False)
+        ds_cache = getattr(_thread_local, "h5_ds_cache", None)
+        if ds_cache is not None:
+            for ck in [k for k in ds_cache if k[0] == old_path]:
+                del ds_cache[ck]
+        try:
+            old_handle.close()
+        except Exception:  # noqa: BLE001 -- best-effort close of an evicted file
+            pass
     return handle
 
 
 def _get_h5_dataset(path: str, key: str):
     """Return a cached ``h5py.Dataset`` object for the current worker thread.
 
-    h5py resolves ``f[key]`` on every access; for a hot read loop that
-    cost is non-zero.  Caching the dataset object eliminates that
-    lookup so each ``__getitem__`` falls straight into the chunked-read
-    path.
+    h5py resolves ``f[key]`` on every access; for a hot read loop that cost is
+    non-zero.  Caching the dataset object eliminates that lookup so each
+    ``__getitem__`` falls straight into the chunked-read path.
+
+    Always fetches the handle first, which refreshes its LRU position -- so a
+    frequently-read dataset never has its underlying file evicted out from
+    under it (a cached dataset object bound to a closed handle would raise).
+    Evicted paths have their dataset entries purged in ``_get_h5_handle``, so a
+    reopened file re-resolves ``f[key]`` against the fresh handle.
     """
-    cache = getattr(_thread_local, "h5_ds_cache", None)
-    if cache is None:
-        cache = {}
-        _thread_local.h5_ds_cache = cache
+    ds_cache = getattr(_thread_local, "h5_ds_cache", None)
+    if ds_cache is None:
+        ds_cache = {}
+        _thread_local.h5_ds_cache = ds_cache
+    f = _get_h5_handle(path)                     # refresh handle LRU (keeps hot file open)
     ck = (path, key)
-    ds = cache.get(ck)
+    ds = ds_cache.get(ck)
     if ds is None:
-        f = _get_h5_handle(path)
         ds = f[key]
-        cache[ck] = ds
+        ds_cache[ck] = ds
     return ds
 
 
