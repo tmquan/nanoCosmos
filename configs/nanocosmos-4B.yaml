@@ -872,9 +872,7 @@ model:
   # vision-Linear activation memory that full checkpointing used to pay for.
   # NOTE: any checkpointing is incompatible with torch.compile tracing the
   # checkpoint HOP -- if compile is on, it must skip/scope around the decode.
-  gradient_checkpointing: 
-  - dit
-  - decode
+  gradient_checkpointing: false
   vae_input_pm1: true
   vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
