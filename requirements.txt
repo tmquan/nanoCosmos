@@ -3,7 +3,7 @@
 # Role of this file
 # -----------------
 # This is the *frozen* version of every package needed to reproduce the
-# CUDA-13 / Python-3.12 development environment.  It bundles together
+# CUDA-13.2 / Python-3.13 development environment.  It bundles together
 # the core runtime, the Cosmos backbone, the GPU (RAPIDS) extras, the
 # download-script helpers, the optional visualizer, AND the dev/test
 # tooling -- in other words, every ``[project.optional-dependencies]``
@@ -15,33 +15,38 @@
 #                                                of the dev environment.
 #   * ``pip install -e ".[cosmos,dev]"``       -- permissive lower bounds,
 #                                                pulled from pyproject.toml.
-#   * ``pip install -e ".[cosmos,fp8,gpu-cu13,viz,scripts,figures,dev]"``
-#                                              -- equivalent of this lockfile
-#                                                without the exact pins.
 #
 # Keep ``pyproject.toml`` as the single source of truth for the package's
 # logical dependency *groups*; this file just freezes specific resolved
 # versions on top of that.
 
 # Core deep learning
---extra-index-url https://download.pytorch.org/whl/cu130
-# Pinned to the versions actually resolved/installed in the frozen
-# CUDA-13 / Python-3.12 env.  torch is the single most serialization-
-# sensitive library (fp8/torchao, FSDP wrapping, torch.save/Lightning
-# checkpoints); leaving it to the extra-index resolver lets it drift.
-torch==2.12.1+cu130
-torchvision==0.27.1+cu130
-pytorch-lightning==2.6.1
+# torch/torchvision are the CUDA-13.2 (cu132) builds -- the driver here is
+# 13.2 (nvidia-smi), and torch==2.13.0+cu132 pulls the matching CUDA 13.2
+# runtime libs (cuda-toolkit==13.2.1, nvidia-cudnn-cu13==9.20.0.48,
+# nvidia-nccl-cu13==2.29.7, ...), which torch pins EXACTLY -- do not bump
+# cudnn/nccl independently (torch is built against those exact versions;
+# a mismatch, especially NCCL, can break DDP).  torch is the single most
+# serialization-sensitive library (fp8/torchao, FSDP wrapping,
+# torch.save/Lightning checkpoints); leave it pinned, not resolver-drifted.
+--extra-index-url https://download.pytorch.org/whl/cu132
+torch==2.13.0+cu132
+torchvision==0.28.0+cu132
+pytorch-lightning==2.6.5
 # torchmetrics is not imported directly by nanocosmos, but it is a hard
 # transitive dependency of pytorch-lightning; pinned here so the frozen
 # lockfile reproduces the exact installed version.
-torchmetrics==1.0.3
-monai==1.5.2
+torchmetrics==1.9.0
+monai==1.6.0
 einops==0.8.2
 # FP8 training on Blackwell+ (B200/B300): torchao float8 module-swap converts
 # the DiT's Linear layers to FP8 (see nanocosmos.models.cosmos_2_5_common.fp8),
 # enabled via ``model.fp8: true``.  Optional -- the code falls back to BF16 if
 # torchao is missing.
+# NOTE: torchao has NO cu132 wheel; the installed build is 0.17.0+cu130.  It
+# runs correctly on the cu132 runtime (CUDA 13.x is minor-version compatible,
+# and it targets the same torch 2.13.0 ABI) -- verified via `pip check` +
+# fp8 conversion smoke test on the B300.  Re-pin to +cu132 once one ships.
 torchao==0.17.0
 
 # GPU acceleration (CUDA 13 wheels on NVIDIA's index).
@@ -51,94 +56,76 @@ torchao==0.17.0
 #     ``nanocosmos.inference.mutex_watershed``.
 #   - cupy / cucim-backed EDT / Gaussian / connected components in
 #     ``nanocosmos.transforms`` (optional; scipy / skimage CPU fallback).
-# For CUDA 12 builds replace cu13 -> cu12 and cuda13x -> cuda12x.
+# cupy-cuda13x works across the whole CUDA 13.x series (via cuda-pathfinder),
+# so the same wheel is valid on the 13.2 runtime.
 #
-# NOTE: install with `pip`, not `uv pip`.  cupy-cuda13x==14.0.1 pins
-# cuda-pathfinder>=1.3.3,<2.dev0 which uv treats as a pre-release
-# request and refuses by default.  If you must use uv, pass
+# NOTE: install with `pip`, not `uv pip`.  cupy-cuda13x pins
+# cuda-pathfinder which uv treats as a pre-release request and refuses by
+# default.  If you must use uv, pass
 # `--prerelease=allow --index-strategy unsafe-best-match`.
 --extra-index-url https://pypi.nvidia.com
-cupy-cuda13x==14.0.1
+cupy-cuda13x==14.1.1
 
 # Configuration
-hydra-core==1.3.2
-omegaconf==2.3.0
+hydra-core==1.3.4
+omegaconf==2.3.1
 
 # Data formats
-h5py==3.15.1
-tifffile==2026.2.16
+h5py==3.16.0
+tifffile==2026.7.14
 pynrrd==1.1.3
-nibabel==5.3.3
-pillow==12.0.0
-cloud-volume==12.13.3
+nibabel==5.4.2
+pillow==12.3.0
+cloud-volume==12.14.1
 
 # Scientific computing
-numpy==2.3.5
-scipy==1.17.0
-scikit-learn==1.8.0
+numpy==2.5.1
+scipy==1.18.0
+scikit-learn==1.9.0
 scikit-image==0.26.0
 
 # Experiment tracking
-wandb==0.25.0
-tensorboard==2.20.0
+wandb==0.28.1
+tensorboard==2.21.0
 
 # Visualization
-matplotlib==3.10.8
-# NOTE: plotly removed -- it is not imported anywhere in the codebase
-# (the visualizer uses FastAPI + WebGL).  Re-add here and in the
-# pyproject ``viz`` group if/when figure code actually uses it.
+matplotlib==3.11.1
 
 # Optional visualizer (``nanocosmos.visualizer``) -- FastAPI + WebGL QA
-# viewer, not on the training/inference path.  fastapi/uvicorn are not
-# yet installed in the frozen env, so they carry lower bounds; pin them
-# to the resolved versions once installed.
-fastapi>=0.115.0
-uvicorn>=0.30.0
+# viewer, not on the training/inference path.
+fastapi==0.139.2
+uvicorn==0.51.0
 pydantic==2.14.0a1
 
-# Cosmos backbones (Cosmos 2.5 Predict + Cosmos 3 Nano)
+# Cosmos backbones (Cosmos 2.5 Predict + Cosmos 3 Nano/Edge)
 #
-# The default backbone (``model.type: cosmos3nano3d``) loads
-# ``Cosmos3OmniTransformer``, which is NOT in any tagged diffusers
-# release yet -- the pinned 0.37.0 only ships the Cosmos 2.5 classes
-# (``CosmosTransformer3DModel`` etc.).  Without the git-main build the
-# wrapper falls back to a randomly-initialised DiT (logged as a warning
-# in ``_BaseCosmos25Wrapper``; see wrapper_base.py).  git main still
-# ships every Cosmos 2.5 class, so Predict keeps working.
-#
-# [verify-weights] Pinned to the exact resolved commit
-# (diffusers 0.39.0.dev0) so the lockfile is reproducible instead of
-# tracking a moving branch.  Changing the diffusers / transformers /
-# safetensors versions can change how HF weights deserialize into the
-# DiT via ``from_pretrained``; re-verify pretrained-weight loading
-# after any bump.  Re-pin to a tagged release once one exposes
-# ``Cosmos3OmniTransformer``.
-diffusers @ git+https://github.com/huggingface/diffusers.git@6d71b76aceff935192e58fee38c5cc5d8d227cf0
-# Cosmos 3 is an omni model: the pipeline pulls a Qwen3-VL vision
-# encoder + Qwen2 tokenizer from transformers, so it is now a hard
-# dependency (Qwen3-VL support requires a recent transformers).
-# transformers and accelerate are NOT imported directly by the package;
-# they are pulled in transitively by diffusers (do not delete as
-# "apparently unused").  Pinned to the resolved versions.
-transformers==5.12.1
-huggingface_hub==1.21.0
-# git-main diffusers requires safetensors>=0.8.0rc0; pinned to the
-# resolved release.
+# Pinned to the exact resolved diffusers commit (0.40.0.dev0).  This build
+# ships ``Cosmos3OmniTransformer`` AND reads Cosmos3-Edge's config flags
+# (``hidden_act: relu2`` / ``qk_norm_for_text: false``), so the released
+# ``nvidia/Cosmos3-Edge`` checkpoint now loads DIRECTLY with no missing keys
+# -- the Nano "fill_missing_from_parent" step becomes a no-op (see
+# nanocosmos/models/cosmos_3_edge/variants.py).  Changing the diffusers /
+# transformers / safetensors versions can change how HF weights deserialize
+# via ``from_pretrained``; re-verify pretrained-weight loading after any bump.
+# Re-pin to a tagged release once one exposes ``Cosmos3OmniTransformer``.
+diffusers @ git+https://github.com/huggingface/diffusers.git@9f6fc2c13610ead670cbac6dbf974b2a24a9e69b
+# Cosmos 3 is an omni model: the pipeline pulls a Qwen3-VL vision encoder +
+# Qwen2 tokenizer from transformers, so it is a hard dependency.
+# transformers and accelerate are NOT imported directly by the package; they
+# are pulled in transitively by diffusers.  Pinned to the resolved versions.
+transformers==5.14.1
+huggingface_hub==1.24.0
 safetensors==0.8.0
-accelerate==1.13.0
+accelerate==1.14.0
 
 # HTTP / networking
-# NOTE: ``requests`` removed -- the download scripts use stdlib
-# urllib.request and non-HTTP fetches go through cloud-volume; requests
-# is not imported by the package or scripts.  cloud-volume pulls its own
-# requests transitively if it needs one.
-charset-normalizer==3.4.7
-chardet==5.2.0
+charset-normalizer==3.4.9
+chardet==7.4.3
 
 # Utilities
-rich==14.3.2
-tqdm==4.66.5
+rich==15.0.0
+tqdm==4.69.0
 
 # Dev / testing
-pytest==9.0.2
-pytest-cov==7.0.0
+pytest==9.1.1
+pytest-cov==7.1.0
