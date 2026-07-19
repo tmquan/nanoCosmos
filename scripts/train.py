@@ -40,8 +40,16 @@ from __future__ import annotations
 import collections
 import datetime
 import inspect
+import logging
 import os
 import warnings
+
+# Silence torchao's pytree deprecation spam: torchao registers its
+# ScaleCalculationMode / KernelPreference enums via torch's register_constant,
+# which now emits a WARNING from ``torch.utils._pytree`` on every process/rank.
+# Raise that one logger to ERROR *before* torch/torchao import -- getLogger
+# returns the same singleton torch will use, so the level sticks.
+logging.getLogger("torch.utils._pytree").setLevel(logging.ERROR)
 
 # Single source of truth for the distributed collective timeout. Used both for
 # the NCCL watchdog heartbeat env var below and the per-strategy process-group
