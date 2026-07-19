@@ -1,15 +1,15 @@
 """Variant registry for Cosmos3-Edge (4B total / 2B dense generator tower).
 
 Cosmos3-Edge has **released weights** on HuggingFace (``nvidia/Cosmos3-Edge``,
-first published ~2026-07-01). The ``EDGE`` variant loads them **directly**
-(``hf_repo_id="nvidia/Cosmos3-Edge"``) and fills the small subset of
-parameters the checkpoint is missing (a checkpoint/library architecture gap,
-see "WHY SOME WEIGHTS ARE MISSING" below) from the released Cosmos3-Nano by
-truncation, rather than either (a) approximating the WHOLE model via
-Nano-reduction (the old default, which discarded Edge's own real weights
-everywhere they DO exist) or (b) leaving the gap at fresh init (a plain
-direct load, which would corrupt the generation-pathway features this
-wrapper extracts).
+first published ~2026-07-01; the repo is now **gated** -- needs an HF token).
+The ``EDGE`` variant loads them **directly** (``hf_repo_id="nvidia/Cosmos3-Edge"``).
+
+RESOLVED (2026-07-19): with diffusers >=0.40.0.dev0 -- which reads Edge's
+``hidden_act: relu2`` / ``qk_norm_for_text: false`` config flags -- the direct
+load reports **no missing keys**, so the former Nano "fill" is dropped
+(``fill_missing_parent_repo_id`` unset).  The history below is kept for
+context; the legacy ``reduce_from_parent=True`` full-reduction path also
+remains available for from-scratch comparisons.
 
 Per the Cosmos 3 technical report (arXiv 2606.02800) Edge is the only tier
 trained *from scratch*, with the dual-tower generator geometry (verified
@@ -31,7 +31,7 @@ The report's stated Edge dims (2048 / 28 / 16 / 8) match Qwen3-1.7B exactly,
 but the released checkpoint's actual FFN width is ``intermediate_size=9216``
 -- WIDER than the naive Qwen3-1.7B match (6144) would suggest.
 
-WHY SOME WEIGHTS ARE MISSING FROM THE DIRECT LOAD (as of 2026-07-07)
+WHY SOME WEIGHTS WERE MISSING (history; resolved 2026-07-19 by the diffusers bump)
 ----------------------------------------------------------------------
 The released ``nvidia/Cosmos3-Edge`` checkpoint's ``transformer/config.json``
 sets ``hidden_act: "relu2"`` and ``qk_norm_for_text: false`` -- i.e. a
@@ -62,8 +62,12 @@ tensors per layer, not trained Edge weights -- but it now only touches the
 small gap instead of the whole model, and the other ~95% of Edge's
 parameters (attention q/k/v/o, up_proj/down_proj, all norms, embeddings,
 patchifier, MoE router, ...) are the checkpoint's OWN trained weights.
-Revisit (drop the fill) once diffusers ships support for Edge's
-``hidden_act``/``qk_norm_for_text`` config flags.
+DONE (2026-07-19): diffusers >=0.40.0.dev0 now reads Edge's
+``hidden_act``/``qk_norm_for_text`` flags and builds the non-gated ReLU^2 MLP
+(no ``gate_proj``) + no text QK-norm, matching the checkpoint exactly -- so the
+direct load has empty ``missing_keys`` and the fill has been removed from the
+EDGE variant.  This ALSO fixes a latent correctness bug: the old gated-SiLU
+path ran Edge with a fabricated Nano ``gate_proj`` and the wrong activation.
 
 Everything else (VAE, ``latent_patch_size``, ``head_dim``, KV heads, Cosmos
 ``rope_theta``, mRoPE section ``[24, 20, 20]``) is shared with Nano/Super --
@@ -89,11 +93,10 @@ _VARIANT_CONFIGS: Dict[str, _VariantConfig] = {
         hf_repo_id="nvidia/Cosmos3-Edge",
         hf_revision="main",
         reduce_from_parent=False,
-        # Parent tier to source the missing gate_proj / norm_q / norm_k
-        # weights from (by depth-remap + truncation) -- see
-        # Cosmos3EdgeWrapper._post_load_diffusers.
-        fill_missing_parent_repo_id="nvidia/Cosmos3-Nano",
-        fill_missing_parent_revision="main",
+        # No Nano fill: as of the 2026-07-19 diffusers upgrade (>=0.40.0.dev0,
+        # which reads Edge's hidden_act=relu2 / qk_norm_for_text=false), the
+        # direct load reports NO missing_keys, so fill_missing_parent_repo_id
+        # is left unset (None -> the fill is a no-op).  See module docstring.
         hidden_dim=2048,
         num_layers=28,
         num_heads=16,
