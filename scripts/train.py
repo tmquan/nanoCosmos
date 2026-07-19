@@ -100,6 +100,18 @@ os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 os.environ.setdefault("NCCL_NVLS_ENABLE", "0")
 os.environ.setdefault("NCCL_ALGO", "Ring")
 os.environ.setdefault("NCCL_PROTO", "Simple")
+
+# Disable torch._native Triton/CuteDSL JIT overrides BEFORE ``import torch``.
+# Nightly torch 2.14 routes some aten ops (notably outer-product ``bmm`` used
+# by Cosmos3 rotary emb) through Triton's ``bmm_outer_product`` kernel. On
+# this Rubin / sm_107 stack the bundled ``ptxas-blackwell`` rejects the arch
+# string ``sm_107a``:
+#   ptxas-blackwell fatal: Value 'sm_107a' is not defined for option 'gpu-name'
+# and training dies on the first sanity-check forward. Falling back to the
+# stock CUDA bmm is correct and cheap for these tiny rotary matmuls.
+# Must be set before torch is imported -- registration happens at import time.
+os.environ.setdefault("TORCH_DISABLE_NATIVE_JIT", "1")
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -153,6 +165,9 @@ def _install_runtime_patches() -> None:
     * Silence a handful of noisy warnings emitted by Lightning / MONAI
       that we cannot fix upstream.
     * Bump ``set_float32_matmul_precision`` so TF32 matmuls are allowed.
+    * Disable cuDNN SDPA so DiT attention falls back to FlashAttention.
+    * On sm_107, route ``torch.exp2`` through ``pow(2, x)`` so NVRTC is
+      not asked to JIT an unsupported ``sm_107`` arch (breaks FP8 scales).
     """
     torch.serialization.add_safe_globals([
         Any,
@@ -193,6 +208,34 @@ def _install_runtime_patches() -> None:
     warnings.filterwarnings("ignore", message=r".*module.*in eval mode at the start of training.*")
 
     torch.set_float32_matmul_precision("high")
+
+    # cuDNN Frontend SDPA is preferred by torch 2.13+ but fails on this
+    # sm_107 + cuDNN stack with:
+    #   RuntimeError: cuDNN Frontend error: No valid execution plans built.
+    # Diffusers' Cosmos DiT hits that on the first forward. FlashAttention
+    # works; force it by turning cuDNN SDPA off.
+    if torch.cuda.is_available() and hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+        torch.backends.cuda.enable_cudnn_sdp(False)
+
+    # ATen has no precompiled ``exp2`` kernel for sm_107, and the bundled
+    # NVRTC (CUDA 13.2/13.3) only knows up to sm_103, so the CUDA JIT path
+    # dies with: ``nvrtc: error: invalid value for --gpu-architecture``.
+    # That surfaces in torchao FP8 scale rounding
+    # (``_round_scale_down_to_power_of_2`` -> ``torch.exp2``). ``pow(2, x)``
+    # and ``exp`` *are* precompiled here, so remap exp2 -> pow on CUDA.
+    if torch.cuda.is_available():
+        _cap = torch.cuda.get_device_capability(0)
+        if _cap >= (10, 7):
+            _orig_exp2 = torch.exp2
+
+            def _exp2_no_nvrtc(input: Any, *args: Any, **kwargs: Any) -> Any:
+                if isinstance(input, torch.Tensor) and input.is_cuda:
+                    two = torch.ones((), device=input.device, dtype=input.dtype) * 2
+                    return torch.pow(two, input)
+                return _orig_exp2(input, *args, **kwargs)
+
+            torch.exp2 = _exp2_no_nvrtc  # type: ignore[assignment]
+            torch.Tensor.exp2 = lambda self: _exp2_no_nvrtc(self)  # type: ignore[method-assign, assignment]
 
 
 # ----------------------------------------------------------------------
