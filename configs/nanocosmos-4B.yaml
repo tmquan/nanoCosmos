@@ -874,7 +874,7 @@ model:
   # checkpoint HOP -- if compile is on, it must skip/scope around the decode.
   gradient_checkpointing: 
   - dit
-  # - decode
+  - decode
   vae_input_pm1: true
   vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
 
