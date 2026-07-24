@@ -968,8 +968,8 @@ training:
     max_push_edges: null
     gate_with_sem: true
     sem_gate_threshold: 0.5
-    grow_boundaries: true
-    grow_max_distance: 4.0
+    grow_boundaries: false
+    grow_max_distance: 0.0
   max_epochs: 101
   accelerator: auto
   devices: auto
