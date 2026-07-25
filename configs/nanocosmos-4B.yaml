@@ -848,7 +848,7 @@ model:
   #                 understanding-FFN hold-out below).
   #   false -> whole DiT trains from epoch 0 (no warm-up freeze at all).
   #   true  -> whole DiT frozen for the entire run (no thaw).
-  freeze_dit_backbone: 5
+  freeze_dit_backbone: false
   # Understanding (text) pathway hold-outs, INDEPENDENT of the
   # freeze_dit_backbone schedule.  The Cosmos3 MoT has SEPARATE weights per
   # stream and the text stream is causal + vision-independent, so freezing it
@@ -886,7 +886,7 @@ optimizer:
     type: cosine_warmup
     T_max: 101
     eta_min: 6.0e-05
-    warmup_epochs: 5
+    warmup_epochs: 0
   dit_backbone_lr: 1.0e-04
 
 # Joint3DReconSegLoss: branch weights + the inner segmentation (AffinityFGLoss)
