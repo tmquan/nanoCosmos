@@ -669,6 +669,9 @@ data:
         label_convention: filled
 
   val_batch_size: 2
+  # Per (task, resolution, convention) val group; with 7 groups and bs=2 → 112
+  # batches (capped by training.limit_val_batches: 100).
+  val_num_samples: 32
   # Validation: sft (labeled -> instance metrics) + ssl (image-only -> recon) holdouts.
   val_volumes:
   # SNEMI3D train (labeled holdout).
