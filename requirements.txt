@@ -21,17 +21,17 @@
 # versions on top of that.
 
 # Core deep learning
-# torch/torchvision are the CUDA-13.2 (cu132) builds -- the driver here is
-# 13.2 (nvidia-smi), and torch==2.13.0+cu132 pulls the matching CUDA 13.2
-# runtime libs (cuda-toolkit==13.2.1, nvidia-cudnn-cu13==9.20.0.48,
-# nvidia-nccl-cu13==2.29.7, ...), which torch pins EXACTLY -- do not bump
-# cudnn/nccl independently (torch is built against those exact versions;
-# a mismatch, especially NCCL, can break DDP).  torch is the single most
-# serialization-sensitive library (fp8/torchao, FSDP wrapping,
-# torch.save/Lightning checkpoints); leave it pinned, not resolver-drifted.
---extra-index-url https://download.pytorch.org/whl/cu132
-torch==2.13.0+cu132
-torchvision==0.28.0+cu132
+# Rubin (sm_107) / driver 620.53 / CUDA 13.2.  The stable cu132 torch 2.13
+# wheel has no sm_107 kernels (its arch list stops at sm_100 / sm_120) and
+# NVRTC rejects ``sm_107``.  This nightly is the build verified on this
+# node: BF16 GEMM and FlashAttention run; ``torch.exp2`` still has no
+# precompiled kernel, which ``scripts/train.py`` remaps.  Do not pin the
+# stable 2.13 wheel back in.  cuDNN / NCCL come from this torch build
+# (nvidia-cudnn-cu13==9.24.0.43, nvidia-nccl-cu13==2.30.7); do not bump
+# them independently.
+--extra-index-url https://download.pytorch.org/whl/nightly/cu132
+torch==2.14.0.dev20260713+cu132
+torchvision==0.29.0.dev20260714+cu132
 pytorch-lightning==2.6.5
 # torchmetrics is not imported directly by nanocosmos, but it is a hard
 # transitive dependency of pytorch-lightning; pinned here so the frozen
@@ -39,15 +39,6 @@ pytorch-lightning==2.6.5
 torchmetrics==1.9.0
 monai==1.6.0
 einops==0.8.2
-# FP8 training on Blackwell+ (B200/B300): torchao float8 module-swap converts
-# the DiT's Linear layers to FP8 (see nanocosmos.models.cosmos_2_5_common.fp8),
-# enabled via ``model.fp8: true``.  Optional -- the code falls back to BF16 if
-# torchao is missing.
-# NOTE: torchao has NO cu132 wheel; the installed build is 0.17.0+cu130.  It
-# runs correctly on the cu132 runtime (CUDA 13.x is minor-version compatible,
-# and it targets the same torch 2.13.0 ABI) -- verified via `pip check` +
-# fp8 conversion smoke test on the B300.  Re-pin to +cu132 once one ships.
-torchao==0.17.0
 
 # GPU acceleration (CUDA 13 wheels on NVIDIA's index).
 # Enables:

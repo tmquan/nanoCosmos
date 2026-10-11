@@ -8,14 +8,10 @@ trained model), sharing the same depth-remap + width-truncation machinery:
   either truncation-copied from the (depth-remapped) parent or left at
   fresh init.
 * :func:`fill_missing_from_parent` -- given a child model that is MOSTLY
-  already correctly loaded (e.g. from its own native pretrained checkpoint),
-  fill in ONLY a specific list of missing parameters from a parent tier,
-  leaving every other already-loaded parameter untouched. Used by
-  Cosmos3-Edge to source a small subset of parameters its own released
-  checkpoint doesn't have (a diffusers/checkpoint architecture gap -- see
-  the "WHY SOME WEIGHTS ARE MISSING" note in
-  ``nanocosmos/models/cosmos_3_edge/variants.py``) from Nano's
-  corresponding (larger) tensors, rather than leaving them at fresh init.
+  already correctly loaded, fill ONLY a listed set of missing parameters
+  from a parent tier. The shipped Edge variant does not call this: the
+  pinned diffusers build matches ``nvidia/Cosmos3-Edge``. It remains for
+  a variant that sets ``fill_missing_parent_repo_id``.
 
 Depth remap (both operations): keep an evenly-spaced subset of the parent's
 decoder blocks (preserves coverage from shallow to deep features) --

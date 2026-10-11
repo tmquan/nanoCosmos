@@ -16,11 +16,12 @@ The wrappers live under `nanocosmos/models/`:
 Two further Cosmos-3 tiers ship in-tree but are not detailed below (they share
 the Nano data flow); see [§3](#3-choosing-a-backbone):
 
-- `Cosmos3EdgeWrapper` — Cosmos-3 Edge (4B), a structural reduction from Nano
-  (`nanocosmos/models/cosmos_3_edge/`, `model.type: joint3d_edge` →
-  `JointEdge3DModule`; shipped config `configs/nanocosmos-4B.yaml`). Until the
-  official Edge weights ship it warm-starts from the released Nano checkpoint and
-  reduces the loaded transformer down to the Edge geometry.
+- `Cosmos3EdgeWrapper` — Cosmos-3 Edge (4B), loaded from the released
+  `nvidia/Cosmos3-Edge` checkpoint (`nanocosmos/models/cosmos_3_edge/`,
+  `model.type: joint3d_edge` → `JointEdge3DModule`; configs
+  `nanocosmos-4B.yaml` and `nanocosmos-4B-pretrain.yaml`). Needs the diffusers
+  commit pinned in `requirements.txt`. A legacy `reduce_from_parent` path
+  remains and is off.
 - `Cosmos3SuperWrapper` — Cosmos-3 Super (64B total / 32B dense generator tower)
   (`nanocosmos/models/cosmos_3_super/`, selectors `cosmos3super3d` →
   `Cosmos3SuperModule` / `joint3d_super` → `JointSuper3DModule`). No Super config
@@ -292,7 +293,7 @@ local iteration and debugging.
 | Use case                                               | Recommended wrapper |
 |--------------------------------------------------------|---------------------|
 | Shipped default (16B omni, DDP; FSDP opt-in for full 16B) | Cosmos 3 (Nano)  |
-| Reduced-from-Nano tier (4B, `joint3d_edge`, `configs/nanocosmos-4B.yaml`) | Cosmos 3 (Edge) |
+| Released 4B tier (`joint3d_edge`, `nanocosmos-4B.yaml` / `-pretrain`) | Cosmos 3 (Edge) |
 | Largest tier (64B total / 32B dense tower, `cosmos3super3d` / `joint3d_super`; no shipped config yet) | Cosmos 3 (Super) |
 | 2B affinity baseline, DDP                              | Cosmos-Predict      |
 | Fast local dev / debugging on a single GPU             | Vista               |

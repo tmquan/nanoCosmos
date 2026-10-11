@@ -13,7 +13,7 @@ nanocosmos/
 ├── LICENSE
 ├── README.md
 ├── pyproject.toml          # package metadata
-├── requirements.txt        # runtime dependencies (mostly pinned; torch/diffusers/transformers are unpinned or VCS refs)
+├── requirements.txt        # pinned lockfile (torch nightly + diffusers git SHA)
 ├── configs/                # Hydra YAMLs (§ Configuration)
 ├── data/                   # (gitignored) raw volumes
 ├── outputs/                # (gitignored) training artefacts
@@ -38,7 +38,8 @@ chain is `default → <dataset> → <project>`.
 | `combine.yaml`        | Multi-dataset affinity training (SNEMI3D + neurons + MICrONS).              |
 | `cosmospredict3d.yaml`| Flattened standalone Cosmos-Predict 2.5 (2B) baseline recipe.               |
 | `nanocosmos-16B.yaml` | Joint SR + segmentation recipe (`dataset: joint3d`, Cosmos-3 Nano backbone). |
-| `nanocosmos-4B.yaml`  | Joint SR + segmentation recipe (`joint3d_edge`, Cosmos-3 Edge 4B backbone, reduced from Nano). |
+| `nanocosmos-4B.yaml`  | Joint SR + segmentation recipe (`joint3d_edge`, Cosmos-3 Edge 4B, direct `nvidia/Cosmos3-Edge` load). |
+| `nanocosmos-4B-pretrain.yaml` | Edge pretrain on multiscale raw EM only (SSL branch, no segmentation). |
 | `nanocosmos-2B.yaml`  | Joint SR + segmentation recipe (`joint3d_2b`, Cosmos-Predict 2.5 2B backbone). |
 | `cosmos3nano3d.yaml`  | Flattened standalone Cosmos3-Nano (16B) recipe.                             |
 
@@ -173,7 +174,6 @@ owns its true delta.
 | `decoder.py`          | `_FeatureProjector3D` / `_DecoderAdapter3D` (VAE decoder + affinity + sem + raw head). |
 | `standalone_dit.py`   | Random-init `_StandaloneDiT3D` fallback for `pretrained=False`.       |
 | `hf_loader.py`        | Rank-aware HF snapshot download (ignores `text_encoder/*`).           |
-| `fp8.py`              | Optional FP8 DiT `nn.Linear` conversion (`apply_float8_to_dit`, torchao float8 training path). |
 
 #### `models/cosmos_predict_2_5/` — Cosmos-Predict 2.5 3-D wrapper
 
@@ -190,8 +190,8 @@ extension hooks.
 #### `models/cosmos_3_common/` — shared scaffolding for the Cosmos 3 family
 
 The three Cosmos 3 tiers (Nano / Edge / Super) share one omni-transformer
-wrapper; each tier package only pins its variant registry (and, for Edge,
-the Nano→Edge reduction).
+wrapper; each tier package only pins its variant registry. Edge also
+keeps a legacy parent-reduction hook, off in the shipped variant.
 
 | File                  | Purpose                                                               |
 | --------------------- | --------------------------------------------------------------------- |
@@ -199,7 +199,7 @@ the Nano→Edge reduction).
 | `wrapper.py`          | `Cosmos3OmniWrapper` — the shared Cosmos 3 omni (`Cosmos3OmniTransformer` + Wan2.2 VAE) feature extractor + head. |
 | `wrapper_base.py`     | Abstract base / extension-hook surface for the tier wrappers.        |
 | `variants.py`         | `_VariantConfig` (subclass of `_VariantConfigBase` from `cosmos_2_5_common`) for the Cosmos 3 tiers. |
-| `reduce.py`           | `reduce_omni_transformer` — structured depth+width reduction (used by the Edge tier). |
+| `reduce.py`           | `reduce_omni_transformer` / `fill_missing_from_parent` — legacy Edge parent-reduction helpers. |
 
 #### `models/cosmos_3_nano/` — Cosmos 3 Nano (16B) wrapper
 
@@ -210,19 +210,20 @@ The shipped default backbone (`snemi3d.yaml` / `default.yaml`,
 | --------------------- | --------------------------------------------------------------------- |
 | `__init__.py`         | Re-exports `Cosmos3Nano3DWrapper` / `Cosmos3NanoWrapper`.            |
 | `wrapper.py`          | `Cosmos3Nano3DWrapper` — thin subclass pinning the Nano variant.    |
-| `wrapper_base.py`     | Nano extension-hook surface.                                         |
 | `variants.py`         | Nano variant registry (`nvidia/Cosmos3-Nano`).                      |
 
-#### `models/cosmos_3_edge/` — Cosmos 3 Edge (4B, reduced from Nano) wrapper
+#### `models/cosmos_3_edge/` — Cosmos 3 Edge (4B) wrapper
 
-Announced-but-unreleased tier (`nanocosmos-4B.yaml`, `joint3d_edge`); warm-starts
-by reducing the loaded Nano transformer.
+Released tier (`nanocosmos-4B.yaml`, `nanocosmos-4B-pretrain.yaml`,
+`joint3d_edge`). Loads `nvidia/Cosmos3-Edge` directly. A legacy
+`reduce_from_parent` path remains in `wrapper.py` and is off in the
+shipped variant.
 
 | File                  | Purpose                                                               |
 | --------------------- | --------------------------------------------------------------------- |
 | `__init__.py`         | Re-exports `Cosmos3EdgeWrapper`.                                     |
-| `wrapper.py`          | `Cosmos3EdgeWrapper` — reduces the loaded Nano transformer to the Edge geometry in `_post_load_diffusers`. |
-| `variants.py`         | Edge variant registry (paper geometry).                             |
+| `wrapper.py`          | `Cosmos3EdgeWrapper` — direct Edge load; optional parent reduction. |
+| `variants.py`         | Edge variant registry (`nvidia/Cosmos3-Edge`, FFN 9216).            |
 
 #### `models/cosmos_3_super/` — Cosmos 3 Super (64B) wrapper
 

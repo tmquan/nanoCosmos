@@ -1,10 +1,10 @@
 """Cosmos3-Edge (4B) **3D** model wrapper for volumetric connectomics.
 
 Thin tier package over :mod:`nanocosmos.models.cosmos_3_common`.  Cosmos3-Edge
-is announced but not yet released, so the wrapper warm-starts from the released
-Cosmos3-Nano via structured reduction (depth + width truncation) -- see
-:class:`Cosmos3EdgeWrapper` and
-:func:`nanocosmos.models.cosmos_3_common.reduce.reduce_omni_transformer`.
+has released weights (``nvidia/Cosmos3-Edge``) and the wrapper loads them
+directly.  A legacy ``reduce_from_parent`` path can still truncate a parent
+transformer; the shipped variant leaves it off.  See
+:class:`Cosmos3EdgeWrapper`.
 
 References:
     - Cosmos 3 technical report: arXiv 2606.02800

@@ -8,9 +8,8 @@ version = "0.1.0"
 description = "A modular PyTorch Lightning infrastructure for connectomics research."
 readme = "README.md"
 license = {text = "MIT"}
-# The frozen env targets CUDA-13 / Python-3.12; several pinned wheels
-# (numpy==2.3.5, cupy-cuda13x==14.0.1, safetensors>=0.8.0rc0, git-main
-# diffusers) are not available for / drop support below 3.12.
+# The runnable env is Python 3.13 / CUDA 13.2 / Rubin sm_107.  The exact
+# pins, including the torch 2.14 cu132 nightly, live in requirements.txt.
 requires-python = ">=3.12"
 # Core runtime dependencies.  These are the imports actually exercised
 # by ``import nanocosmos`` and by the standard training / inference path.
@@ -46,15 +45,11 @@ dependencies = [
 # Pulls HuggingFace + diffusers (+ transformers for the Cosmos 3 omni
 # Qwen3-VL / Qwen2 sub-towers).
 #
-# NOTE: the default ``cosmos3nano3d`` backbone needs
-# ``Cosmos3OmniTransformer``, which is only on diffusers git main as of
-# this writing -- the ``>=0.37.0`` lower bound here is a placeholder.
-# Until a release ships the class, install the git-main build pinned in
-# ``requirements.txt`` (``diffusers @ git+https://github.com/huggingface/diffusers.git``);
-# otherwise the wrapper falls back to a randomly-initialised DiT.  Bump
-# this lower bound to the first release exposing the class once it lands.
+# Cosmos3-Edge needs the diffusers commit that reads ``hidden_act: relu2``
+# and ``qk_norm_for_text: false``.  A PyPI 0.39 install builds a gated-SiLU
+# MLP the Edge checkpoint does not contain.  Same commit as requirements.txt.
 cosmos = [
-    "diffusers>=0.37.0",
+    "diffusers @ git+https://github.com/huggingface/diffusers.git@9f6fc2c13610ead670cbac6dbf974b2a24a9e69b",
     # transformers and accelerate are not imported directly by the
     # package; they are load-bearing transitively via diffusers (the
     # Cosmos 3 omni Qwen3-VL / Qwen2 sub-towers).  Keep declared.
@@ -63,13 +58,6 @@ cosmos = [
     # git-main diffusers requires safetensors>=0.8.0rc0.
     "safetensors>=0.8.0rc0",
     "accelerate>=1.13.0",
-]
-# Optional FP8 training on Blackwell+ (B200/B300): torchao float8
-# module-swap converts the DiT's Linear layers to FP8
-# (nanocosmos.models.cosmos_2_5_common.fp8), enabled via ``model.fp8``.
-# The code falls back to BF16 if torchao is missing.
-fp8 = [
-    "torchao>=0.17.0",
 ]
 # cupy wheels for the GPU Mutex Watershed (``mws_cp``) + DLPack interop
 # and cupy/cucim-backed transforms (EDT / gaussian / connected

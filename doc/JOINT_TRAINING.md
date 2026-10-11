@@ -194,7 +194,7 @@ pass *every* enabled gate, and best-seen ranks on the limiting (minimum) score:
   compose: `ssl_min_std` sets the texture threshold, `ssl_min_foreground` the
   required fraction). This rejects flat / half-empty crops (e.g. a COSEM cell
   edge against resin) that the non-zero gate misses.
-- `ssl_min_autocorr` (shipped `0.5` in nanocosmos-2B) — **structure gate**.
+- `ssl_min_autocorr` (shipped `0.5` in the joint recipes) — **structure gate**.
   Lag-1 spatial autocorrelation on the per-volume `[0, 1]` scale. Random
   detector / resin grain has high local variance (so it passes `ssl_min_std`
   with content fraction `1.0`) yet ~0 spatial coherence, so the content gate
@@ -232,8 +232,10 @@ The whole joint recipe is implemented and unit-tested (`tests/test_joint*.py`):
   `Joint3DReconSegLoss` and handle the label-free `ssl` step + eval.
 - `nanocosmos/callbacks/tensorboard/joint3d_logger.py` — `Joint3DImageLogger`
   logs **both** `ssl` and `sft` panels each epoch (task-namespaced tags).
-- `train.py` selects the module by `model.type` (`joint3d` / `joint3d_2b`); see
-  `configs/nanocosmos-16B.yaml` and `configs/nanocosmos-2B.yaml`.
+- `train.py` selects the module by `model.type` (`joint3d` / `joint3d_edge` /
+  `joint3d_2b` / `joint3d_super`); see `configs/nanocosmos-16B.yaml`,
+  `configs/nanocosmos-4B.yaml`, `configs/nanocosmos-4B-pretrain.yaml`, and
+  `configs/nanocosmos-2B.yaml`.
 - Data: `scripts/download_cosem3d.py` (4 nm COSEM3D), `scripts/download_flyem3d.py`
   (FlyEM 8 nm: fib25 / hemibrain / malecns), `scripts/convert_mitoem2.py`
   (MitoEM2 nnU-Net `.nii.gz` → image-only h5).

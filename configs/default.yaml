@@ -13,7 +13,7 @@
 #
 # To see the exact merged tree for any recipe::
 #
-#   python scripts/show_config.py --config-name <recipe>
+#   python scripts/train.py --config-name <recipe> --cfg job
 # =====================================================================
 
 # Experiment metadata
@@ -150,8 +150,8 @@ loss:
 # Training configuration
 training:
   # Validation-time agglomeration: Mutex Watershed over the predicted
-  # affinities (parameter-free; non-differentiable; GPU mws_cp by default
-  # on CUDA inputs, exact numpy/numba mws_np fallback).
+  # affinities (parameter-free; non-differentiable; GPU mws_th by default
+  # on CUDA inputs, exact numpy/numba mws_np on CPU).
   # ``offsets`` / ``n_pull`` default to the loss's; leave unset
   # unless you override ``AFFINITY_OFFSETS`` in
   # ``nanocosmos/losses/_common.py``.  ``strides`` subsamples the

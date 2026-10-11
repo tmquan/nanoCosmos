@@ -2,9 +2,10 @@
 
 Only the **automatic** training mode is supported.  See
 :class:`BaseCosmosModule` for the full training / evaluation logic.  The Edge
-backbone is warm-started from Nano (or random-init when ``pretrained=false``);
-that logic lives entirely in :class:`Cosmos3EdgeWrapper`, so this module is a
-plain ``_model_cls`` declaration.
+backbone loads the released ``nvidia/Cosmos3-Edge`` checkpoint (or
+random-init when ``pretrained=false``). That logic lives entirely in
+:class:`Cosmos3EdgeWrapper`, so this module is a plain ``_model_cls``
+declaration.
 """
 
 from nanocosmos.losses import AffinityFGLoss

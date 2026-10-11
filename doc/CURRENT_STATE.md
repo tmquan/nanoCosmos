@@ -1,8 +1,8 @@
 # nanoCosmos — Current State
 
-> **Standalone, verified reference (2026-07-03).** This document consolidates and supersedes the drifted `doc/` tree. It was written directly against the code and configs; **where any older doc disagrees, this document and the code win.** Authoritative source files are cited inline throughout.
+> **Standalone reference, updated 2026-10-12.** Written against the code and configs. Where an older doc disagrees, this document and the code win.
 >
-> Scope: what the repo *is today* — architecture, the model/checkpoint surface, the data pipeline, and how to train/evaluate. For the list of stale docs and code this replaces, see [`doc/AUDIT_REPORT.md`](AUDIT_REPORT.md).
+> Scope: what the repo is today — architecture, the model/checkpoint surface, the data pipeline, and how to train. Training is BF16. The FP8 / torchao path has been removed. Cosmos3-Edge loads `nvidia/Cosmos3-Edge` directly.
 
 ---
 
@@ -35,14 +35,14 @@ Five end-to-end backbone wrappers live under `nanocosmos/models/`, all sharing a
 |---|---|---|---|---|
 | **Cosmos-Predict 2.5 (2B)** | `CosmosPredict3DWrapper` | Base DiT + Wan VAE (`nvidia/Cosmos-Predict2.5-2B`, `diffusers/base/post-trained`) | hidden 2048 / 28 layers / 16 heads; latent 16ch, 8× spatial / 4× temporal | `cosmos_2_5_common` |
 | **Cosmos 3 Nano (16B)** | `Cosmos3NanoWrapper` (alias `Cosmos3Nano3DWrapper`) | `Cosmos3OmniTransformer` omni MoT, init from Qwen3-VL 8B (`nvidia/Cosmos3-Nano`) + Wan2.2-TI2V VAE | hidden 4096 / 36 / 32 (8 KV, GQA); latent 48ch, 16× spatial / 4× temporal | `cosmos_3_common` |
-| **Cosmos 3 Edge (4B)** | `Cosmos3EdgeWrapper` | Announced-but-unreleased tier; warm-started by **structurally reducing the loaded Nano transformer** (depth/width truncation) and reusing Nano's VAE | hidden 2048 / 28 / 16 (8 KV) | `cosmos_3_common` |
+| **Cosmos 3 Edge (4B)** | `Cosmos3EdgeWrapper` | Released `nvidia/Cosmos3-Edge` checkpoint, loaded directly (own transformer + own Wan2.2 VAE). Needs the diffusers commit that reads `hidden_act: relu2` | hidden 2048 / 28 / 16 (8 KV), FFN 9216 | `cosmos_3_common` |
 | **Cosmos 3 Super (64B)** | `Cosmos3SuperWrapper` | Omni MoT, init from Qwen3-VL 32B (`nvidia/Cosmos3-Super`) + Wan2.2-TI2V VAE; needs FSDP to train | hidden 5120 / 64 / 64 (8 KV); MLP ratio 5.0 | `cosmos_3_common` |
 | **Vista3D (reference)** | `Vista3DWrapper` | MONAI `SegResNetDS2` (optional `MONAI/VISTA3D-HF` encoder warm start) | conv backbone; no DiT/VAE | `vista` |
 
 Relationships:
 
-- The three **Cosmos-3 tiers (Nano / Edge / Super)** are thin specializations (`wrapper.py` + `variants.py`) over a shared `Cosmos3OmniWrapper` (`cosmos_3_common`); they differ only in the variant geometry and, for Edge, the reduce-from-Nano warm start. **Edge has no released weights** — it is approximated by reducing Nano, or trained from scratch with `pretrained=false`.
-- The **Cosmos-2.5 Predict (2B)** wrapper and all Cosmos-3 wrappers descend from `_BaseCosmos25Wrapper` (`cosmos_2_5_common`), which owns the VAE→DiT→feature-projector→decoder-adapter→head pipeline. All Cosmos wrappers share the freeze schedule, `dit_backbone_lr` param-group split, and optional FP8 path via `BaseCosmosModule`.
+- The three **Cosmos-3 tiers (Nano / Edge / Super)** are thin specializations (`wrapper.py` + `variants.py`) over a shared `Cosmos3OmniWrapper` (`cosmos_3_common`); they differ in variant geometry. Edge loads its own released checkpoint. A legacy `reduce_from_parent=True` path can still truncate a parent transformer, and the shipped configs leave it off. `pretrained=false` trains the Edge geometry from scratch.
+- The **Cosmos-2.5 Predict (2B)** wrapper and all Cosmos-3 wrappers descend from `_BaseCosmos25Wrapper` (`cosmos_2_5_common`), which owns the VAE→DiT→feature-projector→decoder-adapter→head pipeline. All Cosmos wrappers share the freeze schedule and `dit_backbone_lr` param-group split via `BaseCosmosModule`. Weights and Lightning precision are BF16. `model.fp8: true` raises; there is no Float8Linear swap.
 - **Vista3D** is deliberately outside the Cosmos stack — a fast, small backbone for local iteration — but reuses the identical `VistaTaskHead3D`, loss, and Mutex Watershed eval, so results are comparable.
 - Every wrapper projects backbone features through the **same** `VistaTaskHead3D` and emits the **same** head layout, so the loss, metrics, and instance agglomeration are backbone-agnostic.
 
@@ -52,10 +52,9 @@ Hydra config drives all dispatch via inline registries in `scripts/train.py`: `c
 
 1. **Single-task affinity recipes** (`default.yaml`, `snemi3d.yaml`, `combine.yaml`, `cosmospredict3d.yaml`, `cosmos3nano3d.yaml`): one dataset family (SNEMI3D / MICrONS / FLYEM3D / CREMI3D / neurons) with a chosen Cosmos or Vista backbone, supervised by `AffinityFGLoss`.
 2. **Joint reconstruction + segmentation ("nanoCosmos") recipes** (`nanocosmos-2B.yaml` / `-4B.yaml` / `-16B.yaml`): one backbone on a fixed fine voxel grid, trained on a `joint3d` multi-task datamodule with two round-robin branches — **SSL** (self-supervised reconstruction, no labels) and **SFT** (segmentation, labels pooled to native grid) — supervised by `Joint3DReconSegLoss`. `joint3d_2b`→Cosmos-Predict 2B, `joint3d`→Nano 16B, `joint3d_edge`→Edge 4B, `joint3d_super`→Super 64B. The `Joint3D*` modules subclass `Cosmos3Nano3DModule` and swap only the backbone wrapper and loss.
+3. **Edge pretrain** (`nanocosmos-4B-pretrain.yaml`): the same Edge backbone and fine grid, SSL only. No labeled SFT branch. The head stays `N_AFF+2` so a later SFT run can load the checkpoint without a head-shape change.
 
 > **Authoritative sources.** Head/channel layout and offsets: `nanocosmos/losses/_common.py`. Config→code dispatch and CLI: `scripts/train.py` (`build_datamodule`, `build_module`). Backbone geometries and provenance: `nanocosmos/models/*/variants.py`. Public API surface: `nanocosmos/__init__.py`. Where this document and inline docstrings disagree with those files, the code wins.
-
-**Caveat surfaced during verification:** `scripts/train.py` still references `nanocosmos/transforms/skeleton.py` in comments (lines ~13/57), but no such module exists in the tree — treat the "kimimaro/EDT skeleton transform" mentions as stale.
 
 ---
 
@@ -93,7 +92,7 @@ The key conceptual distinction is **`models/` (a wrapper = the whole `nn.Module`
 ```
 pl.LightningModule
 └── BaseCircuitModule                       (modules/base.py)  — shared loop; declares _model_cls/_loss_cls contract
-    ├── BaseCosmosModule                    (modules/cosmos_2_5_common/base.py) — freeze schedule, dit_backbone_lr param split, fp8 hookup; the ONLY place that calls save_hyperparameters()
+    ├── BaseCosmosModule                    (modules/cosmos_2_5_common/base.py) — freeze schedule, dit_backbone_lr param split, BF16-only guard; the ONLY place that calls save_hyperparameters()
     │   ├── CosmosPredict3DModule           _model_cls=CosmosPredict3DWrapper, _loss_cls=AffinityFGLoss
     │   ├── Cosmos3NanoModule               (alias Cosmos3Nano3DModule)  _model_cls=Cosmos3NanoWrapper
     │   ├── Cosmos3EdgeModule               _model_cls=Cosmos3EdgeWrapper
@@ -287,7 +286,7 @@ Tier wrappers subclass `Cosmos3OmniWrapper`, set the registry + default variant 
 | `Cosmos3EdgeWrapper` | `cosmos_3_edge/wrapper.py` | `"EDGE"` | 2048 / 28 / 16 / 48 / 16× / 4× |
 | `Cosmos3SuperWrapper` | `cosmos_3_super/wrapper.py` | `"SUPER"` | 5120 / 64 / 64 / 48 / 16× / 4× |
 
-**`Cosmos3EdgeWrapper` fragility:** it overrides `_post_load_diffusers` (`wrapper.py:37`) to replace `self.dit` with a structurally reduced transformer via `reduce_omni_transformer` when `cfg.reduce_from_parent` is set — Edge downloads the **Nano** repo and truncates depth 36→28 and width (`models/cosmos_3_common/reduce.py`, `child.load_state_dict(..., strict=False)`). An Edge checkpoint's `model.dit.*` keys/shapes are the reduced-Edge geometry, produced dynamically at construction; raw Nano weights do not match Edge shapes.
+**`Cosmos3EdgeWrapper` load path:** the shipped `EDGE` variant sets `reduce_from_parent=False` and leaves `fill_missing_parent_repo_id` unset, so `_post_load_diffusers` is a no-op besides loading the text tokenizer. `model.dit.*` is the released Edge transformer. The legacy `reduce_from_parent=True` path still replaces `self.dit` via `reduce_omni_transformer` (depth + width truncation). Do not flip that flag under an existing Edge checkpoint: Nano shapes do not match Edge shapes.
 
 #### Vista family — `Vista3DWrapper` (`models/vista/wrapper.py:25`)
 
@@ -327,11 +326,11 @@ The `block` `nn.Sequential` has **index-shifting conditional layers** (`heads.py
 - **`Vista3DModule` checkpoints carry NO `hyper_parameters`** — neither `BaseCircuitModule` nor `BaseVistaModule` calls it.
 - On the datamodule side, the `CircuitDataModule` family (SNEMI3D/MICRONS/CREMI/FLYEM/Neurons) saves hyperparameters, but **`Joint3DDataModule` does not** (`datamodules/joint3d.py`).
 
-There are **no** `torch.save` / `torch.load` / `load_from_checkpoint` calls anywhere in the package — checkpoint write/read is entirely delegated to Lightning's `ModelCheckpoint` / `Trainer(ckpt_path=...)`. The only explicit `load_state_dict` sites are two warm-start weight-porting utilities that run at construction, before any Lightning checkpoint is written: `reduce_omni_transformer` (Edge DiT reduction, `models/cosmos_3_common/reduce.py`) and `load_pretrained_vista3d_encoder` (`models/vista/hf_loader.py`). Both use `strict=False`.
+There are **no** `torch.save` / `torch.load` / `load_from_checkpoint` calls anywhere in the package — checkpoint write/read is entirely delegated to Lightning's `ModelCheckpoint` / `Trainer(ckpt_path=...)`. The construction-time `load_state_dict(..., strict=False)` sites are the legacy Edge helpers in `models/cosmos_3_common/reduce.py` (off for the shipped Edge variant) and `load_pretrained_vista3d_encoder` (`models/vista/hf_loader.py`).
 
 ### Checkpoint-compatibility rules a maintainer must respect
 
-1. **`model.dit.*` is the highest-risk prefix.** Its class and key set change with `pretrained` (diffusers vs `_StandaloneDiT3D`), with `variant`, with the Cosmos-3 unit-latent-patch repatch (rebuilt `proj_in`/`proj_out`), with the Edge structured reduction, and with the FP8 module-swap (`fp8: true` replaces DiT `nn.Linear` with `Float8Linear`, preserving FQNs but changing the parameter/buffer set). A bf16 and an fp8 checkpoint of the same DiT are not interchangeable.
+1. **`model.dit.*` is the highest-risk prefix.** Its class and key set change with `pretrained` (diffusers vs `_StandaloneDiT3D`), with `variant`, with the Cosmos-3 unit-latent-patch repatch (rebuilt `proj_in`/`proj_out`), and with the legacy Edge `reduce_from_parent` path. Training is BF16. `model.fp8: true` raises before the backbone is built.
 2. **`model.decoder_adapter.*` is second.** The presence of `to_latent`, `original_conv_out`, and `skip_stem`, and the class of `decoder_body` (Wan decoder vs `_ProgressiveUpsampler3D`), all flip on `pretrained` and `highres_skip`.
 3. **Head width is pinned by the loss offset count** (`head_channels = n_offsets + 2`), not by `model.head_channels`. Keep the offset set stable across save/resume.
 4. **Head key indices shift** with `(in_channels == refine_channels)` and `(dropout > 0)`; do not change `feature_size`/dropout/skip between train and resume without re-mapping keys.
@@ -460,6 +459,7 @@ Training is a single Hydra entry point: `scripts/train.py` (decorated `@hydra.ma
 python scripts/train.py                                   # default.yaml
 python scripts/train.py --config-name cosmospredict3d     # 2B Cosmos-Predict baseline
 python scripts/train.py --config-name nanocosmos-2B       # joint recon+seg (2B)
+python scripts/train.py --config-name nanocosmos-4B-pretrain  # Edge, raw-EM SSL only
 # Hydra dotted overrides work on any key:
 python scripts/train.py --config-name snemi3d data.batch_size=8 training.max_epochs=200
 python scripts/train.py training.fast_dev_run=true
@@ -495,7 +495,7 @@ All architecture/dataset selection is by config value, resolved through inline r
 
 ### Available configs
 
-Two families. **Inheritance chain**: `default` ← `snemi3d` ← `combine` (via Hydra `defaults:`). **Flattened standalone recipes** (no `defaults:`): `cosmospredict3d`, `cosmos3nano3d`, and the three joint recipes `nanocosmos-{2B,4B,16B}`. Inspect the merged tree with `python scripts/show_config.py --config-name <recipe>` (referenced in `default.yaml`).
+Two families plus the Edge pretrain. **Inheritance chain**: `default` ← `snemi3d` ← `combine` (via Hydra `defaults:`). **Flattened standalone recipes** (no `defaults:`): `cosmospredict3d`, `cosmos3nano3d`, the three joint recipes `nanocosmos-{2B,4B,16B}`, and `nanocosmos-4B-pretrain`. Inspect the merged tree with `python scripts/train.py --config-name <recipe> --cfg job`.
 
 | Config | `model.type` → module | `data.dataset` | Notes (verified) |
 |---|---|---|---|
@@ -535,9 +535,8 @@ Backends (`_resolve_backend`, mutex_watershed.py:945): `auto` selects **`mws_th`
 
 ### Corrections to the input maps
 
-- The GPU MWS default is `mws_th` (native torch), not `mws_cp` — verified in `_resolve_backend` (mutex_watershed.py:945). The `mws_cp`/`mws_np` phrasing in `base.py` comments and `default.yaml` is stale relative to the resolver.
-- `train.py:57` references `nanocosmos/transforms/skeleton.py`, which does not exist in the tree (confirmed stale comment).
-- `combine.yaml` has no top-level `model.type`/`dataset`; it inherits `cosmos3nano3d` + `snemi3d` from its `defaults: [snemi3d]` chain (verified), so it does resolve to a valid module at runtime.
+- The GPU MWS default is `mws_th` (native torch) for `backend: auto` on CUDA. `mws_cp` is the opt-in cupy path (`backend: cupy`). `mws_np` is the exact CPU fallback.
+- `combine.yaml` has no top-level `model.type`/`dataset`; it inherits `cosmos3nano3d` + `snemi3d` from its `defaults: [snemi3d]` chain, so it resolves to a valid module at runtime.
 
 Authoritative files: `/localhome/local-tranminhq/nanoCosmos/scripts/train.py`, `/localhome/local-tranminhq/nanoCosmos/numa_run.sh`, `/localhome/local-tranminhq/nanoCosmos/configs/*.yaml`, `/localhome/local-tranminhq/nanoCosmos/nanocosmos/modules/base.py`, `/localhome/local-tranminhq/nanoCosmos/nanocosmos/inference/{mutex_watershed,sliding_window}.py`, `/localhome/local-tranminhq/nanoCosmos/nanocosmos/callbacks/{__init__.py,memory.py,tensorboard/heads.py}`.
 
@@ -545,7 +544,6 @@ Authoritative files: `/localhome/local-tranminhq/nanoCosmos/scripts/train.py`, `
 
 ## Verified environment & quick facts
 
-- **Env:** conda env `nanocosmos` — Python 3.13, torch 2.12.1+cu130, pytorch-lightning 2.6.1, MONAI 1.5.2, 8× CUDA.
-- **Tests:** `python -m pytest tests/` → 173 passed (~29 s, CPU-friendly; joint-module/datamodule tests run `fast_dev_run` end-to-end).
-- **Checkpoint contract:** Lightning ckpt; weights under `model.*`; `hyper_parameters` = `{model,optimizer,loss,training}_config` (Cosmos/Joint only; Vista saves none). Head width = `len(loss offsets) + 2`. Preserve `model.dit.*`, `model.vae_encoder/decoder.*`, `model.decoder_adapter.*` (incl. `decoder_body.*` alias), `model.feature_projector.*`, `model._fallback_down.*`, and the `Cosmos3Nano3D*` aliases.
-- **Known stale comments in code (safe to ignore / clean):** references to `nanocosmos/transforms/skeleton.py` and a `kimimaro/EDT` pipeline (`scripts/train.py`), and to a `cosmos_transfer` package (`models/cosmos_2_5_common`) — neither exists in the tree.
+- **Env:** conda env `nanocosmos` — Python 3.13, torch `2.14.0.dev20260713+cu132`, torchvision `0.29.0.dev20260714+cu132`, pytorch-lightning 2.6.5, MONAI 1.6.0, diffusers `0.40.0.dev0` at `9f6fc2c`, 8× Rubin (sm_107). Pins are `requirements.txt`.
+- **Tests:** `python -m pytest tests/`. Joint-module and datamodule tests run `fast_dev_run` end-to-end.
+- **Checkpoint contract:** Lightning ckpt; weights under `model.*`; `hyper_parameters` = `{model,optimizer,loss,training}_config` (Cosmos/Joint only; Vista saves none). Head width = `len(loss offsets) + 2`. Preserve `model.dit.*`, `model.vae_encoder/decoder.*`, `model.decoder_adapter.*` (incl. `decoder_body.*` alias), `model.feature_projector.*`, `model._fallback_down.*`, and the `Cosmos3Nano3D*` aliases. Do not resume an FP8 checkpoint into this BF16 build.

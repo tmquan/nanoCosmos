@@ -152,11 +152,11 @@ class JointEdge3DModule(Joint3DModule):
     """Cosmos3-**Edge** (4B) backbone trained with the joint recon + seg loss.
 
     Identical recipe to :class:`Joint3DModule` (the Nano joint module); the only
-    difference is the backbone -- the 4B Cosmos3-Edge omni transformer, which is
-    warm-started by reducing the released Nano checkpoint (see
-    :class:`~nanocosmos.models.cosmos_3_edge.Cosmos3EdgeWrapper`) or random-init
-    when ``model.pretrained=false``.  Edge shares Nano's Wan2.2 VAE (16x spatial
-    / 4x temporal), so the data / loss / pooling recipe is unchanged.
+    difference is the backbone -- the 4B Cosmos3-Edge omni transformer, loaded
+    from the released ``nvidia/Cosmos3-Edge`` checkpoint (see
+    :class:`~nanocosmos.models.cosmos_3_edge.Cosmos3EdgeWrapper`), or random-init
+    when ``model.pretrained=false``.  Edge uses the same Wan2.2 VAE family
+    (16x spatial / 4x temporal), so the data / loss / pooling recipe is unchanged.
     """
 
     _model_cls = Cosmos3EdgeWrapper

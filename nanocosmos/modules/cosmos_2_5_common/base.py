@@ -113,6 +113,15 @@ class BaseCosmosModule(BaseCircuitModule):
         )
 
     def _build_model(self, model_config: Dict[str, Any]) -> torch.nn.Module:
+        # Reject before constructing the backbone.  FP8 swapped DiT linears
+        # for torchao Float8Linear; that path is gone, and a true flag would
+        # otherwise build a BF16 module and then fail.
+        if model_config.get("fp8", False):
+            raise ValueError(
+                "model.fp8 is no longer supported. Train in BF16 "
+                "(model.dtype=bf16 and training.precision=bf16-true) "
+                "and drop model.fp8 / model.fp8_recipe from the config."
+            )
         model = self._model_cls(
             in_channels=model_config.get("in_channels", 1),
             head_channels=model_config.get("head_channels", HEAD_CHANNELS),
@@ -134,18 +143,6 @@ class BaseCosmosModule(BaseCircuitModule):
             vae_symmetrize_z=model_config.get("vae_symmetrize_z", False),
             **self._extra_model_kwargs(model_config),
         )
-        # Optional FP8 (Blackwell+) on the DiT's matmul-heavy Linear layers.
-        # Module-swap (torchao float8) decoupled from Lightning precision, so
-        # ``training.precision: bf16-true`` is unchanged; the conv VAE is never
-        # touched.  Done here (pre-DDP wrap, post all backbone surgery).
-        if model_config.get("fp8", False):
-            from nanocosmos.models.cosmos_2_5_common.fp8 import apply_float8_to_dit
-
-            dit = getattr(model, "dit", None)
-            if dit is not None:
-                apply_float8_to_dit(
-                    dit, recipe=str(model_config.get("fp8_recipe", "rowwise")),
-                )
         return model
 
     def _extra_model_kwargs(

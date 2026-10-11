@@ -11,6 +11,8 @@ which runs SNEMI3D-shaped data with the unified aff/sem/raw head.  Recipes:
 * ``--config-name snemi3d``       -- SNEMI3D only, single-task affinity recipe.
 * ``--config-name combine``       -- multi-dataset SNEMI3D + neurons + MICrONS.
 * ``--config-name nanocosmos-16B``-- joint SR + segmentation (Cosmos-3 Nano).
+* ``--config-name nanocosmos-4B`` -- joint SR + segmentation (Cosmos-3 Edge).
+* ``--config-name nanocosmos-4B-pretrain`` -- Edge pretrain, multiscale raw EM only.
 * ``--config-name nanocosmos-2B`` -- joint SR + segmentation (Cosmos-Predict 2B).
 
 Examples
@@ -44,11 +46,10 @@ import logging
 import os
 import warnings
 
-# Silence torchao's pytree deprecation spam: torchao registers its
-# ScaleCalculationMode / KernelPreference enums via torch's register_constant,
-# which now emits a WARNING from ``torch.utils._pytree`` on every process/rank.
-# Raise that one logger to ERROR *before* torch/torchao import -- getLogger
-# returns the same singleton torch will use, so the level sticks.
+# An installed torchao (no longer used by this repo) registers
+# KernelPreference via torch's register_constant and warns from
+# ``torch.utils._pytree`` on every rank.  Silence that one logger before
+# torch is imported; getLogger returns the singleton torch will use.
 logging.getLogger("torch.utils._pytree").setLevel(logging.ERROR)
 
 # Single source of truth for the distributed collective timeout. Used both for
@@ -225,12 +226,12 @@ def _install_runtime_patches() -> None:
     if torch.cuda.is_available() and hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
         torch.backends.cuda.enable_cudnn_sdp(False)
 
-    # ATen has no precompiled ``exp2`` kernel for sm_107, and the bundled
-    # NVRTC (CUDA 13.2/13.3) only knows up to sm_103, so the CUDA JIT path
-    # dies with: ``nvrtc: error: invalid value for --gpu-architecture``.
-    # That surfaces in torchao FP8 scale rounding
-    # (``_round_scale_down_to_power_of_2`` -> ``torch.exp2``). ``pow(2, x)``
-    # and ``exp`` *are* precompiled here, so remap exp2 -> pow on CUDA.
+    # ATen has no precompiled ``exp2`` kernel for sm_107 (Rubin), and the
+    # bundled NVRTC only knows up to sm_103, so any CUDA ``exp2`` dies with
+    # ``nvrtc: error: invalid value for --gpu-architecture``. ``pow(2, x)``
+    # is precompiled, so remap exp2 -> pow. BF16 matmul and FlashAttention
+    # do not need this; it keeps later ops (and any leftover scale code)
+    # from JIT-compiling.
     if torch.cuda.is_available():
         _cap = torch.cuda.get_device_capability(0)
         if _cap >= (10, 7):
@@ -794,7 +795,7 @@ def _resolve_checkpoint(cfg: DictConfig, module: pl.LightningModule) -> Optional
     config, not from the checkpoint's saved ``hyper_parameters``. For a full
     resume the structural model_config keys (variant, head_channels / loss
     offset count, feature_size, dropout, highres_skip, pretrained,
-    vae_symmetrize_z, fp8) MUST match what the checkpoint was trained with, or
+    vae_symmetrize_z, dtype) MUST match what the checkpoint was trained with, or
     the strict Lightning restore will fail on renumbered/reshaped keys. Run
     ``python scripts/check_ckpt_loadable.py --full`` to verify a checkpoint
     still reconstructs+loads before launching a long resume.

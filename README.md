@@ -82,7 +82,7 @@ Skim of the top level:
 nanoCosmos/             repo root
 ├── configs/             Hydra configs (default → snemi3d → combine;
 │                         nanocosmos-16B / nanocosmos-4B / nanocosmos-2B
-│                         = joint SR+seg recipe)
+│                         = joint SR+seg; nanocosmos-4B-pretrain = raw-EM SSL)
 ├── nanocosmos/          importable package (losses, models, modules,
 │                        datasets, datamodules, transforms, inference,
 │                        preprocessors, metrics, visualizer, callbacks)
@@ -120,8 +120,11 @@ python scripts/train.py --config-name combine loss.weight_sem.weight=0.0 loss.we
 #   ssl (degraded->clean EM reconstruction) + sft (affinity + sem) on a
 #   shared backbone via Joint3DReconSegLoss; see doc/JOINT_TRAINING.md.
 python scripts/train.py --config-name nanocosmos-16B   # Cosmos-3 Nano backbone
-python scripts/train.py --config-name nanocosmos-4B    # Cosmos-3 Edge (reduced from Nano)
+python scripts/train.py --config-name nanocosmos-4B    # Cosmos-3 Edge (released checkpoint)
 python scripts/train.py --config-name nanocosmos-2B    # Cosmos-Predict 2.5 (2B)
+
+# Edge pretrain on multiscale raw EM only (SSL, no segmentation):
+python scripts/train.py --config-name nanocosmos-4B-pretrain
 ```
 
 ### GPU memory: avoiding slow OOM drift on long runs

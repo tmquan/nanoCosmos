@@ -11,9 +11,9 @@ Five end-to-end backbone wrappers live here:
 * :class:`Cosmos3Nano3DWrapper` -- Cosmos 3 (Nano) 16B omni
   Mixture-of-Transformers (``Cosmos3OmniTransformer`` + Wan VAE) with
   the same head.
-* :class:`Cosmos3EdgeWrapper` -- Cosmos 3 (Edge) 4B tier; announced but
-  not yet released, so it warm-starts by structurally reducing the
-  loaded Nano transformer (``nanocosmos-4B.yaml``).
+* :class:`Cosmos3EdgeWrapper` -- Cosmos 3 (Edge) 4B tier; loads the
+  released ``nvidia/Cosmos3-Edge`` checkpoint directly
+  (``nanocosmos-4B.yaml``, ``nanocosmos-4B-pretrain.yaml``).
 * :class:`Cosmos3SuperWrapper` -- Cosmos 3 (Super) 64B tier; a thin
   variant specialisation of the shared omni wrapper.
 * :class:`Vista3DWrapper` -- SegResNetDS2 backbone with the same

@@ -89,6 +89,45 @@ def _make_dm(root, num_samples=2, *, with_prompts=False, sft_convention=None):
     )
 
 
+def test_joint_datamodule_ssl_only(synth_root):
+    """Pretrain path: an ssl-only branch config never yields labels or sft."""
+    dm = Joint3DDataModule(
+        data_root=synth_root,
+        patch_size=(32, 32, 32),
+        pixel_size=(4.0, 4.0, 4.0),
+        branches={
+            "ssl": {
+                "batch_size": 1,
+                "sample_weight": 1.0,
+                "volumes": [{
+                    "vol": "cosem_vol", "root": synth_root,
+                    "native_resolution": [4, 4, 4], "imaging": "FIB-SEM",
+                }],
+            },
+        },
+        degrade={"zf_range": [2.0, 4.0], "missing_prob": 0.0},
+        val_volumes=[{
+            "vol": "cosem_vol", "root": synth_root, "task": "ssl",
+            "native_resolution": [4, 4, 4], "imaging": "FIB-SEM",
+        }],
+        num_workers=0,
+        persistent_workers=False,
+        num_samples=2,
+        val_num_samples=2,
+        val_batch_size=1,
+    )
+    dm.setup()
+    assert set(dm.branches) == {"ssl"}
+    for loader in (dm.train_dataloader(), dm.val_dataloader()):
+        for batch in loader:
+            task = batch["task"][0] if isinstance(batch["task"], (list, tuple)) else batch["task"]
+            assert task == "ssl"
+            assert "label" not in batch
+            assert "sem_label" not in batch
+            assert tuple(batch["image"].shape) == (1, 1, 32, 32, 32)
+            assert tuple(batch["recon_image"].shape[-3:]) == (32, 32, 32)
+
+
 def test_joint_datamodule_batch_contract(synth_root):
     dm = _make_dm(synth_root)
     dm.setup()

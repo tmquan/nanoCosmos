@@ -1,32 +1,18 @@
-"""Cosmos3-Edge (4B) backbone wrapper -- direct load + parent-fill for the
-handful of parameters the released checkpoint is missing.
+"""Cosmos3-Edge (4B) backbone wrapper.
 
 A tier specialisation of
 :class:`nanocosmos.models.cosmos_3_common.wrapper.Cosmos3OmniWrapper`.
-``nvidia/Cosmos3-Edge`` has released weights on HuggingFace and the ``EDGE``
-variant loads them **directly** (own transformer + own Wan2.2 VAE). The
-released checkpoint is missing a small, fixed set of parameters relative to
-what the installed ``diffusers`` version's ``Cosmos3VLTextMoTDecoderLayer``
-always instantiates -- see the "WHY SOME WEIGHTS ARE MISSING" section in
-:mod:`nanocosmos.models.cosmos_3_edge.variants` for the full finding (short
-version: Edge's real MLP is non-gated/ReLU^2 and has no QK-norm on the text
-pathway, so it never shipped ``mlp.gate_proj`` / ``mlp_moe_gen.gate_proj`` /
-``self_attn.norm_q`` / ``self_attn.norm_k``, but diffusers unconditionally
-builds all four regardless of config). :meth:`_post_load_diffusers` catches
-these as ``missing_keys`` (via ``from_pretrained(...,
-output_loading_info=True)``) and fills each one from the released
-Cosmos3-Nano checkpoint by depth-remapping Edge's 28 layers onto Nano's 36
-and truncating Nano's (larger) tensor down to Edge's shape -- the same
-mechanism as the older full-model reduction, just targeted at only the
-actually-missing parameters instead of every parameter.
+``nvidia/Cosmos3-Edge`` has released weights and the ``EDGE`` variant loads
+them directly (own transformer + own Wan2.2 VAE). The pinned diffusers
+commit reads ``hidden_act: relu2`` and ``qk_norm_for_text: false``, so that
+load reports no missing keys and the Nano fill stays off.
 
-A legacy ``reduce_from_parent=True`` path (full-model reduction from a
-parent tier, e.g. for a from-scratch comparison or if a future variant has
-no released checkpoint at all) is still supported and takes priority when
-set.
-
-With ``pretrained=false`` this falls back to the shared standalone path (a
-random-init Edge-geometry DiT + learned conv tokenizer, no Wan2.2 VAE).
+:meth:`_post_load_diffusers` still implements two legacy paths, both off in
+the shipped variant: ``reduce_from_parent=True`` replaces the loaded
+transformer with a depth-and-width reduction, and a set
+``fill_missing_parent_repo_id`` fills reported ``missing_keys`` from a
+parent checkpoint. With ``pretrained=false`` the shared standalone path
+builds a random-init Edge-geometry DiT and a learned conv tokenizer.
 """
 
 import logging
@@ -45,10 +31,9 @@ logger = logging.getLogger(__name__)
 class Cosmos3EdgeWrapper(Cosmos3OmniWrapper):
     """Cosmos3-Edge (4B) omni transformer as a volumetric EM feature extractor.
 
-    Loads the released ``nvidia/Cosmos3-Edge`` checkpoint directly and fills
-    the small set of parameters it's missing (relative to what the
-    installed diffusers class expects) from Cosmos3-Nano by truncation --
-    see the module docstring.
+    Loads the released ``nvidia/Cosmos3-Edge`` checkpoint directly. The
+    Nano fill and the full parent reduction run only when the variant
+    asks for them; the shipped ``EDGE`` config does not.
     """
 
     _variant_configs = _VARIANT_CONFIGS
