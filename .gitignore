@@ -1,6 +1,5 @@
 *.ckpt
 outputs/*
-SERVER.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -219,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Machine bootstrap notes (hostnames, lease ids). Not part of the package.
+SERVER.md
