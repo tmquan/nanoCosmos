@@ -25,10 +25,10 @@ Every tier shares the Wan2.2-TI2V VAE (``AutoencoderKLWan``: ``z_dim=48``,
 ``num_key_value_heads=8`` (GQA), ``rope_theta=5e6``, mRoPE section
 ``[24, 20, 20]`` and ``use_moe=true``.
 
-The Cosmos 2.5 family's :class:`_VariantConfigBase` carries the download +
-shape metadata common to all Cosmos backbones; this subclass adds the Cosmos 3
-MoT / GQA fields so the standalone fallback (and the Edge reduction path) can
-reconstruct the shape.  Only BF16 is officially supported by Cosmos 3.
+:class:`_VariantConfigBase` carries the download and shape metadata
+common to the tiers.  This subclass adds the MoT / GQA fields so the
+standalone fallback and the Edge reduction path can reconstruct the
+shape.  Cosmos 3 trains in BF16.
 """
 
 from dataclasses import dataclass

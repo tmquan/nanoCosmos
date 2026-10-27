@@ -1,10 +1,8 @@
-"""Random-init 3-D DiT fallback for the Cosmos 2.5 family.
+"""Random-init 3-D DiT fallback for the shared Cosmos wrapper.
 
-Used by both Cosmos-Transfer 2.5 and Cosmos-Predict 2.5 wrappers when
-neither ``diffusers`` nor the upstream ``cosmos_*`` package can provide
-pretrained weights.  Shape-compatible with the official variants
-(hidden dim / layer count / head count follow
-:class:`_VariantConfigBase`) but trained from scratch.
+Used when ``pretrained=False`` or when the diffusers snapshot cannot
+be loaded.  Shape-compatible with :class:`_VariantConfigBase` (hidden
+dim / layer count / head count) and trained from scratch.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -81,7 +79,7 @@ class _DiTBlock(nn.Module):
 
 
 class _StandaloneDiT3D(nn.Module):
-    """Minimal 3-D DiT matching the Cosmos 2.5 family's shape.
+    """Minimal 3-D DiT matching the configured variant's shape.
 
     Patch embedding operates on volumetric patches
     ``(P_d, P_h, P_w) = (patch_size,) * 3`` producing a 1-D sequence of

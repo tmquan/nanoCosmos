@@ -1,7 +1,7 @@
-"""Shared backbone wrapper for the Cosmos 2.5 / Cosmos 3 families.
+"""Shared backbone wrapper for the Cosmos 3 tiers.
 
-:class:`_BaseCosmos25Wrapper` factors out everything the Cosmos-Predict 2.5
-and Cosmos 3 (Nano / Edge / Super) wrappers have in common:
+:class:`_BaseCosmos25Wrapper` is the scaffold Nano, Edge, and Super
+share. The module name is historical. It factors out:
 
 * HuggingFace snapshot download + diffusers-class instantiation (base
   DiT + Wan-style VAE)
@@ -14,11 +14,10 @@ and Cosmos 3 (Nano / Edge / Super) wrappers have in common:
 * parameter-contiguity fix for DDP
 
 Subclasses extend it via the hooks (:meth:`_init_arch_state`,
-:meth:`_post_load_diffusers`, ...): the Cosmos 3 omni family overrides
-:meth:`_post_load_diffusers` to repatch/reduce the DiT, while
-Cosmos-Predict 2.5 inherits this base class without overrides. (An earlier
-Cosmos-Transfer 2.5 ControlNet variant used the same hooks but is no longer
-part of this repo.)
+:meth:`_post_load_diffusers`, :meth:`_run_dit_forward`, ...). The
+Cosmos 3 omni family overrides :meth:`_post_load_diffusers` to
+repatch and reduce the DiT, and overrides :meth:`_run_dit_forward`
+for the omni token stream.
 """
 
 import logging
@@ -83,24 +82,20 @@ def _resolve_freeze_dit_backbone(
 
 
 class _BaseCosmos25Wrapper(nn.Module):
-    """Shared base for Cosmos 2.5 wrappers (Transfer / Predict).
+    """Shared base for the Cosmos 3 wrappers (Nano, Edge, Super).
 
-    Subclasses set :attr:`_variant_configs` to their family's variant
+    Subclasses set :attr:`_variant_configs` to their tier's variant
     registry.  They may also override the following extension hooks:
 
     * :meth:`_init_arch_state` -- runs once between shared state setup
-      and the backbone build.  Use it to initialise architecture-
-      specific attributes (e.g. ``self.controlnet``) that downstream
-      methods depend on.
+      and the backbone build.
     * :meth:`_post_load_diffusers` -- runs after the base DiT + VAE
       have been successfully loaded via diffusers.  The Cosmos 3 omni
       family uses this to repatch / structurally reduce the DiT.
     * :meth:`_hook_should_detach` / :meth:`_any_trainable` -- adjust
-      gradient policy when an extra trainable branch (e.g. ControlNet)
-      is in play.
-    * :meth:`_compute_controlnet_residuals` -- compute residual hidden
-      states summed into the base DiT every ``controlnet_block_every_n``
-      blocks; defaults to ``None`` (no residuals).
+      gradient policy when an extra trainable branch is in play.
+    * :meth:`_run_dit_forward` -- one DiT step so the feature hooks
+      fire.  Cosmos 3 overrides the historical call convention.
     """
 
     _variant_configs: Dict[str, _VariantConfigBase] = {}
@@ -110,7 +105,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         in_channels: int = 1,
         head_channels: int = HEAD_CHANNELS,
         feature_size: int = 64,
-        variant: str = "2B",
+        variant: str = "NANO",
         dtype: str = "bf16",
         pretrained: bool = True,
         freeze_dit_backbone: Union[bool, int] = False,
@@ -136,7 +131,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         if not self._variant_configs:
             raise RuntimeError(
                 f"{type(self).__name__} did not set ``_variant_configs``.  "
-                "Concrete Cosmos 2.5 wrappers must populate this with a "
+                "Concrete Cosmos 3 wrappers must populate this with a "
                 "variant -> _VariantConfigBase mapping."
             )
 
@@ -205,15 +200,15 @@ class _BaseCosmos25Wrapper(nn.Module):
         # permanently frozen regardless of the whole-DiT freeze/thaw state.
         # Consumed only by :class:`~nanocosmos.models.cosmos_3_common.wrapper.
         # Cosmos3OmniWrapper` (via ``_post_init_freezes`` /
-        # ``unfreeze_dit_backbone``); a no-op for the non-MoT Cosmos-Predict
-        # / Cosmos-Transfer wrappers, which have no such branch to select.
+        # ``unfreeze_dit_backbone``).  Subclasses without that branch
+        # leave the flag unread.
         self._freeze_understanding_ffn = bool(freeze_understanding_ffn)
         # Superset of the FFN hold-out above: freeze the ENTIRE understanding
         # (text) stream -- embed_tokens + the understanding-only attention
         # projections/norms + mlp.* -- turning it into a frozen text encoder.
         # The generation (vision) stream keeps training and still learns to
-        # attend to the now-static text keys/values.  Cosmos3-only (via
-        # ``Cosmos3OmniWrapper``); a no-op for the non-MoT wrappers.
+        # attend to the now-static text keys/values.  Cosmos 3 only (via
+        # ``Cosmos3OmniWrapper``).
         self._freeze_understanding_stream = bool(freeze_understanding_stream)
         self._freeze_vae_encoder = freeze_vae_encoder
         # ``gradient_checkpointing`` accepts a bool (all targets) or a list of
@@ -270,7 +265,7 @@ class _BaseCosmos25Wrapper(nn.Module):
             out_dim=feature_size,
         ).float()
 
-        if self._backend in ("diffusers", "cosmos_transfer2"):
+        if self._backend == "diffusers":
             self._register_persistent_hooks()
 
         self.decoder_adapter = _DecoderAdapter3D(
@@ -331,8 +326,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         Runs after the shared dataclass / config attributes are set but
         BEFORE :meth:`_build_backbone` (which may, via
         :meth:`_post_load_diffusers`, depend on attributes the subclass
-        needs to expose -- e.g. Cosmos-Transfer's ``self.controlnet =
-        None``).
+        needs to expose).
         """
         return
 
@@ -359,13 +353,12 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         Runs unconditionally after the ``if initial_frozen: freeze_dit_backbone()
         else: self.dit.train()`` branch above, so it sees the final initial
-        trainable state and can layer additional, narrower freezes on top --
-        e.g. Cosmos-Transfer uses this to freeze its ControlNet branch when
-        configured to do so, and :class:`~nanocosmos.models.cosmos_3_common.
-        wrapper.Cosmos3OmniWrapper` uses it to enforce the permanent
-        understanding-FFN freeze (``freeze_understanding_ffn``) even when
-        ``freeze_dit_backbone: false`` would otherwise leave the whole DiT
-        (including that branch) trainable from the start.
+        trainable state and can layer additional, narrower freezes on top.
+        :class:`~nanocosmos.models.cosmos_3_common.wrapper.Cosmos3OmniWrapper`
+        uses it to enforce the permanent understanding-FFN freeze
+        (``freeze_understanding_ffn``) even when ``freeze_dit_backbone:
+        false`` would otherwise leave the whole DiT (including that
+        branch) trainable from the start.
         """
         return
 
@@ -373,8 +366,8 @@ class _BaseCosmos25Wrapper(nn.Module):
         """Whether the persistent feature hook should detach captured outputs.
 
         Default: detach when the DiT backbone is frozen.  Subclasses
-        with an additional trainable branch (e.g. ControlNet) override
-        this to keep the gradient path alive.
+        with an additional trainable branch override this to keep the
+        gradient path alive.
         """
         return self._freeze_dit_backbone
 
@@ -395,34 +388,26 @@ class _BaseCosmos25Wrapper(nn.Module):
         padding_mask: torch.Tensor,
         null_condition: torch.Tensor,
     ) -> Optional[List[torch.Tensor]]:
-        """Compute ControlNet residual hidden states (Transfer-only).
+        """Optional per-block residual hidden states for the DiT call.
 
-        Default: returns ``None`` (Predict has no ControlNet branch).
-        Cosmos-Transfer overrides this to run its ``controlnet`` over
-        the same EM latent and return the per-block residuals that
-        ``CosmosTransformer3DModel.forward`` will sum into the base
-        DiT every ``controlnet_block_every_n`` blocks.
+        Default: ``None``.  Cosmos 3 does not override this hook.
         """
         return None
 
     def _diffusers_transformer_cls_name(self) -> str:
         """diffusers class name to load the base DiT into ``self.dit``.
 
-        Default: ``"CosmosTransformer3DModel"`` (the Cosmos 2.5 base
-        DiT used by Predict / Transfer).  Subclasses on a different
-        backbone family (e.g. Cosmos 3 with its omni
-        ``Cosmos3OmniTransformer``) override this so
-        :meth:`_try_load_diffusers` imports the right class.
+        The historical default is ``"CosmosTransformer3DModel"``.
+        Cosmos 3 overrides this to ``"Cosmos3OmniTransformer"`` so
+        :meth:`_try_load_diffusers` imports the omni class.
         """
         return "CosmosTransformer3DModel"
 
     def _diffusers_vae_cls_name(self) -> str:
         """diffusers class name to load the VAE into ``self.vae_*``.
 
-        Default: ``"AutoencoderKLWan"`` -- the Wan VAE shared across the
-        Cosmos 2.5 *and* Cosmos 3 stacks (Cosmos 3 ships the
-        Wan2.2-TI2V VAE under the same class), so subclasses rarely need
-        to override this.
+        Default: ``"AutoencoderKLWan"`` -- the Wan2.2-TI2V VAE Cosmos 3
+        ships under this class.  Subclasses rarely need to override it.
         """
         return "AutoencoderKLWan"
 
@@ -450,13 +435,10 @@ class _BaseCosmos25Wrapper(nn.Module):
         the backbone *run* over ``latent`` with the right (null)
         conditioning for the family.
 
-        Default: the Cosmos 2.5 ``CosmosTransformer3DModel`` call
-        convention (null text / image cross-attention embeddings, a
-        unit padding mask, a zero condition mask, and -- for
-        Cosmos-Transfer -- ControlNet residuals via
-        :meth:`_compute_controlnet_residuals`).  Backbones with a
-        different forward signature (e.g. Cosmos 3) override this whole
-        method.
+        The base body uses null text / image embeddings, a unit padding
+        mask, a zero condition mask, and optional residuals from
+        :meth:`_compute_controlnet_residuals`.  Cosmos 3 overrides this
+        method for the omni token stream.
         """
         B = latent.shape[0]
         dit_cfg = getattr(self.dit, "config", None)
@@ -484,10 +466,8 @@ class _BaseCosmos25Wrapper(nn.Module):
             B, 1, *latent.shape[2:], device=latent.device, dtype=latent.dtype,
         )
 
-        # Subclass hook -- Cosmos-Transfer runs its ControlNet over the
-        # *same* EM latent first so its residuals can be summed into the
-        # base DiT every ``controlnet_block_every_n`` blocks.  Predict
-        # returns ``None`` and the DiT runs alone.
+        # Optional residuals.  The Cosmos 3 override of this method does
+        # not call this hook; the default implementation returns ``None``.
         block_controlnet_hidden_states = self._compute_controlnet_residuals(
             latent, timestep, enc_hidden, padding_mask, null_condition,
         )
@@ -557,10 +537,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         _saved_dtype = torch.get_default_dtype()
         try:
-            loaded = (
-                self._try_load_diffusers(cache_dir, hf_token)
-                or self._try_load_cosmos_package(cache_dir, hf_token)
-            )
+            loaded = self._try_load_diffusers(cache_dir, hf_token)
         finally:
             torch.set_default_dtype(_saved_dtype)
 
@@ -649,68 +626,9 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         # Subclass hook -- e.g. Cosmos3-Edge uses ``dit_loading_info`` to
         # fill any checkpoint/architecture gaps from a parent tier.
-        # Predict is a no-op here.
+        # Tiers that do not override this hook leave it a no-op.
         self._post_load_diffusers(local_path, cache_dir, hf_token, dit_loading_info)
         return True
-
-    def _try_load_cosmos_package(
-        self,
-        cache_dir: Optional[str],
-        hf_token: Optional[str],
-    ) -> bool:
-        # Try the upstream ``cosmos_transfer2`` / ``cosmos_predict2``
-        # packages in turn.  Both expose a ``Pipeline`` class with the
-        # same DiT/VAE attribute conventions; only the import path
-        # differs.
-        pipeline_cls = None
-        for module_name, attr_name in (
-            ("cosmos_transfer2.inference", "CosmosTransfer2Pipeline"),
-            ("cosmos_predict2.inference", "CosmosPredict2Pipeline"),
-        ):
-            try:
-                module = __import__(module_name, fromlist=[attr_name])
-            except ImportError:
-                continue
-            pipeline_cls = getattr(module, attr_name, None)
-            if pipeline_cls is not None:
-                break
-
-        if pipeline_cls is None:
-            logger.debug("No upstream cosmos_* package available.")
-            return False
-
-        try:
-            pipe = pipeline_cls.from_pretrained(
-                self.cfg.hf_repo_id,
-                cache_dir=cache_dir,
-                token=hf_token,
-            )
-            if hasattr(pipe, "vae") and hasattr(pipe.vae, "encoder"):
-                self.vae_encoder = pipe.vae.encoder.to(self._dtype)
-
-            if hasattr(pipe, "vae") and hasattr(pipe.vae, "decoder"):
-                self.vae_decoder = pipe.vae.decoder.to(self._dtype)
-
-            if hasattr(pipe, "dit"):
-                self.dit = pipe.dit.to(self._dtype)
-            elif hasattr(pipe, "transformer"):
-                self.dit = pipe.transformer.to(self._dtype)
-            else:
-                logger.warning(
-                    "Could not locate DiT module on %s pipeline.",
-                    pipeline_cls.__name__,
-                )
-                return False
-
-            self._backbone_loaded = True
-            self._backend = "cosmos_transfer2"
-            logger.info(
-                "Loaded 3-D backbone via %s.", pipeline_cls.__name__,
-            )
-            return True
-        except Exception as exc:
-            logger.warning("Upstream cosmos_* pipeline load failed: %s", exc)
-            return False
 
     def _build_standalone_backbone(self) -> None:
         self.dit = _StandaloneDiT3D(self.cfg)
@@ -840,7 +758,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         timestep = torch.zeros(B, device=latent.device, dtype=latent.dtype)
 
-        if self._backend in ("diffusers", "cosmos_transfer2"):
+        if self._backend == "diffusers":
             features = self._extract_features_hook(
                 latent, timestep, d_tok, h_tok, w_tok, prompts=prompts,
             )
@@ -897,11 +815,9 @@ class _BaseCosmos25Wrapper(nn.Module):
                     return
                 out = output[0] if isinstance(output, tuple) else output
                 # Only detach when there is no trainable path through
-                # this block.  Subclasses with trainable side branches
-                # (e.g. Cosmos-Transfer's ControlNet, whose residuals
-                # are summed into block outputs) override
-                # ``_hook_should_detach`` to keep the gradient path
-                # back to those branches alive.
+                # this block.  Subclasses with a trainable side branch
+                # override ``_hook_should_detach`` to keep that gradient
+                # path alive.
                 if self._hook_should_detach():
                     out = out.detach()
                 if out.dim() == 3:
@@ -939,21 +855,18 @@ class _BaseCosmos25Wrapper(nn.Module):
         self._hook_buffer.clear()
         self._hooks_active = True
 
-        # Grad must be enabled whenever *any* trainable branch is in
-        # play.  Subclasses with side branches (e.g. Cosmos-Transfer's
-        # ControlNet) override ``_any_trainable`` to keep autograd on
-        # even when the base DiT is frozen.
+        # Grad must be enabled whenever any trainable branch is in
+        # play.  Subclasses override ``_any_trainable`` to keep autograd
+        # on when the base DiT is frozen but another branch is not.
         any_trainable = self._any_trainable()
 
         try:
             ctx = torch.enable_grad() if any_trainable else torch.no_grad()
             with ctx:
-                # Family-specific forward.  Default builds the Cosmos 2.5
-                # null-conditioning + ControlNet-residual call; Cosmos 3
-                # overrides ``_run_dit_forward`` for its omni signature.
-                # The return is ignored -- features are captured by the
-                # persistent block hooks above.  ``prompts`` is ignored here
-                # (Cosmos 2.5 null text); Cosmos 3's override consumes it.
+                # Subclass forward.  Cosmos 3 overrides
+                # ``_run_dit_forward`` for the omni signature.  The return
+                # is ignored -- features are captured by the persistent
+                # block hooks above.
                 self._run_dit_forward(latent, timestep)
         finally:
             self._hooks_active = False
@@ -1203,8 +1116,8 @@ class _BaseCosmos25Wrapper(nn.Module):
         """The VAE decoder body's upsampling sub-blocks.
 
         Block-level checkpointing of these is correct only when the body is
-        driven by a single ``feat_cache=None`` call (the non-residual Cosmos 2.5
-        Wan VAE).  The residual Wan2.2 VAE (Cosmos 3) instead decodes
+        driven by a single ``feat_cache=None`` call (a non-residual Wan
+        VAE).  The residual Wan2.2 VAE Cosmos 3 ships instead decodes
         frame-by-frame through a stateful causal-conv cache that block-level
         checkpointing desyncs, so that path sets
         ``_skip_decoder_body_checkpoint`` and checkpoints per frame in its own

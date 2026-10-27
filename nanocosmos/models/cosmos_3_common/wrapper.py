@@ -25,9 +25,9 @@ This file owns only the Cosmos 3-specific pieces:
 * the omni forward call (:meth:`_run_dit_forward`) + feature-capture hooks;
 * the residual Wan2.2 VAE decoder wrap.
 
-Because the base DiT is kept on the ``self.dit`` attribute -- exactly as
-Predict / Transfer do -- every downstream convention that keys on
-``model.dit.*`` keeps working unchanged: the optimiser param-group split, the
+The base DiT stays on the ``self.dit`` attribute, so every downstream
+convention that keys on ``model.dit.*`` keeps working: the optimiser
+param-group split, the
 ``freeze_dit_backbone`` schedule, and the
 ``ckpt_path_skip_prefixes=[model.dit.]`` warm-start filter.
 
@@ -131,7 +131,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
     the channel layout is owned by :mod:`nanocosmos.losses._common`.
 
     The depth axis of the EM volume maps to the model's temporal (video)
-    axis, exactly as for the Cosmos 2.5 wrappers::
+    axis::
 
         EM volume  [B, C, D, H, W]  <->  video  [B, C, T, H, W]
 
@@ -369,8 +369,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
 
     def _diffusers_vae_cls_name(self) -> str:
         # Cosmos 3 ships the Wan2.2-TI2V VAE under the same diffusers
-        # class the Cosmos 2.5 stack already uses (just a different
-        # config: z_dim=48, 16x spatial / 4x temporal).
+        # class (config: z_dim=48, 16x spatial / 4x temporal).
         return "AutoencoderKLWan"
 
     def _hf_ignore_patterns(self) -> Optional[List[str]]:
@@ -597,8 +596,6 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         make ``self.dit`` *run* a single denoising-step forward over one
         video latent with optional metadata text + null image / audio conditioning.
 
-        Unlike the Cosmos 2.5 ``CosmosTransformer3DModel`` (which takes a
-        ``hidden_states`` latent + cross-attention text embeddings),
         ``Cosmos3OmniTransformer.forward`` consumes a *packed, unbatched*
         joint token stream and explicit index/position bookkeeping.  We
         reconstruct the minimal version of that stream the diffusers
@@ -972,8 +969,8 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
 
         ``_DecoderAdapter3D._decode_body`` decodes by calling
         ``decoder_body(latent)`` exactly once with ``feat_cache=None``.
-        That is correct for the *non-residual* Wan VAE used by Cosmos 2.5,
-        but the Wan2.2-TI2V VAE Cosmos 3 ships (``is_residual=True``) only
+        That is correct for a *non-residual* Wan VAE, but the
+        Wan2.2-TI2V VAE Cosmos 3 ships (``is_residual=True``) only
         performs temporal upsampling on its *cached* path, while its
         residual ``avg_shortcut`` (``DupUp3D``) always doubles the
         temporal axis -- so a single un-cached call hits a ``t`` vs
@@ -982,8 +979,8 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         Rather than touch the shared adapter, we wrap *this* model's
         decoder ``forward`` so an un-cached call internally performs the
         VAE's own frame-by-frame cached decode.  The wrap is gated on
-        ``is_residual`` and a diffusers backend, so non-residual VAEs
-        (Cosmos 2.5) are left byte-for-byte untouched.
+        ``is_residual`` and a diffusers backend, so a non-residual VAE
+        is left untouched.
         """
         if getattr(self, "_c3_residual_decode_wrapped", False):
             return

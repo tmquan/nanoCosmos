@@ -27,10 +27,6 @@ Required overrides for new ``CircuitDataset`` leaves
 Datamodules in :mod:`nanocosmos.datamodules` choose between eager and
 lazy at runtime based on the ``use_lazy`` config flag.
 
-Extending this module
----------------------
-See ``doc/CONTRIBUTING.md`` "How to add a new dataset" for a copy-paste
-recipe (preprocessor -> leaf dataset -> leaf datamodule -> YAML).
 """
 
 from nanocosmos.datasets.base import CircuitDataset

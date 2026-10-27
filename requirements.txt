@@ -24,8 +24,7 @@
 # Rubin (sm_107) / driver 620.53 / CUDA 13.2.  The stable cu132 torch 2.13
 # wheel has no sm_107 kernels (its arch list stops at sm_100 / sm_120) and
 # NVRTC rejects ``sm_107``.  This nightly is the build verified on this
-# node: BF16 GEMM and FlashAttention run; ``torch.exp2`` still has no
-# precompiled kernel, which ``scripts/train.py`` remaps.  Do not pin the
+# node: BF16 GEMM and FlashAttention run.  Do not pin the
 # stable 2.13 wheel back in.  cuDNN / NCCL come from this torch build
 # (nvidia-cudnn-cu13==9.24.0.43, nvidia-nccl-cu13==2.30.7); do not bump
 # them independently.

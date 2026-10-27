@@ -12,9 +12,9 @@ from nanocosmos.modules.cosmos_3_common.base import BaseCosmosModule
 class Cosmos3NanoModule(BaseCosmosModule):
     """Cosmos3-Nano (16B) 3-D volumetric segmentation module.
 
-    Like Cosmos-Predict (and unlike Cosmos-Transfer), Cosmos 3 has no
-    ControlNet branch, so :meth:`_extra_model_kwargs` returns the empty
-    default; everything else (in/head channels, ``freeze_dit_backbone``
+    Cosmos 3 has no extra constructor branch, so
+    :meth:`_extra_model_kwargs` returns the empty default; everything
+    else (in/head channels, ``freeze_dit_backbone``
     schedule, optimiser param-group split on ``model.dit.*``) is inherited
     from :class:`BaseCosmosModule`.
     """

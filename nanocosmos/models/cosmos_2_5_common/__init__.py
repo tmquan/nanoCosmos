@@ -1,19 +1,17 @@
-"""Shared scaffolding for the Cosmos 2.5 backbone wrappers.
+"""Shared scaffolding for the Cosmos 3 backbone wrappers.
 
-This package factors out everything the Cosmos 2.5 wrappers have in
-common -- shared primitive layers, the random-init standalone DiT
-fallback, the rank-aware HuggingFace snapshot downloader, the
-unified-head decoder adapter, and the abstract
-:class:`_BaseCosmos25Wrapper` that ties them together.
+This package holds the pieces Nano, Edge, and Super share: primitive
+layers, the random-init standalone DiT fallback, the rank-aware
+HuggingFace snapshot downloader, the task head, the decoder adapter,
+and :class:`_BaseCosmos25Wrapper`. Each tier package
+(``cosmos_3_nano`` / ``cosmos_3_edge`` / ``cosmos_3_super``) only owns
+its variant registry and any tier-specific load hook.
 
-The backbone-specific package
-(:mod:`nanocosmos.models.cosmos_predict_2_5`) only owns:
-
-* its variant registry (``hf_repo_id`` / ``hf_revision``)
-* the (optional) extension hooks of :class:`_BaseCosmos25Wrapper`
+The module name is historical. Cosmos 3 is the only family that uses it.
 
 Module layout::
 
+    heads.py          -- TaskHead3D (affinity + sem + raw head)
     layers.py         -- shared primitives (_NORM, _PointwiseLinear, _adapt_to_rgb)
     variants.py       -- _VariantConfigBase dataclass
     hf_loader.py      -- rank-aware HuggingFace snapshot download

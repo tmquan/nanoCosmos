@@ -20,7 +20,7 @@
 #
 # Runtime: 8x Rubin (sm_107), driver 620.53, CUDA 13.2.  Weights and the
 # Lightning precision are BF16 (``dtype: bf16``, ``precision: bf16-true``).
-# No FP8.  ``compile`` stays off (activation checkpointing).  Volume roots
+# ``compile`` stays off (activation checkpointing).  Volume roots
 # are absolute under ``/home/nvidia/data``.  Library pin is
 # ``requirements.txt``: torch 2.14.0.dev20260713+cu132 and diffusers
 # @ 9f6fc2c (the build that reads Edge ``hidden_act: relu2``).
@@ -528,7 +528,7 @@ model:
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
 
 optimizer:
   lr: 0.0002

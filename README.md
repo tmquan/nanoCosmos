@@ -1,16 +1,15 @@
 # nanocosmos
 
 A PyTorch Lightning infrastructure for **spatially-coloured (nanocosmos-style)
-instance segmentation** of 3-D connectomics volumes, adapted from the
-`neurons` research codebase and built on top of NVIDIA's
-Cosmos-Predict 2.5 / Cosmos 3 video-diffusion backbones (DiT + VAE).
+instance segmentation** of 3-D connectomics volumes, built on NVIDIA's
+Cosmos 3 video-diffusion backbones (DiT + Wan2.2 VAE). The shipped tiers
+are Nano (16B), Edge (4B), and Super (64B).
 
-> **First time here?**  Start with [`doc/INDEX.md`](doc/INDEX.md), which
-> routes you to the right doc for the question you're asking.  TL;DR:
-> [`STRUCTURE.md`](doc/STRUCTURE.md) for the file map,
-> [`WALKTHROUGH.md`](doc/WALKTHROUGH.md) for what one batch actually
-> does, [`GOTCHAS.md`](doc/GOTCHAS.md) when something goes silently
-> wrong.
+> **Datasets.** [`doc/DATASETS.md`](doc/DATASETS.md) is the catalog
+> (what each volume is, resolution, download script).
+> [`doc/RESOLUTION_LADDER.md`](doc/RESOLUTION_LADDER.md) places those
+> volumes on the voxel-size ladder and assigns SSL / SFT roles.
+> Per-subset counts live in [`doc/data.csv`](doc/data.csv).
 
 ## Architecture at a glance
 
@@ -18,7 +17,7 @@ Cosmos-Predict 2.5 / Cosmos 3 video-diffusion backbones (DiT + VAE).
 flowchart LR
     cli["python scripts/train.py<br/>--config-name snemi3d"] --> hydra["Hydra compose<br/>(default + snemi3d)"]
     hydra --> dm["LightningDataModule<br/>(LazyVolDataset + MONAI transforms)"]
-    hydra --> mod["LightningModule<br/>(Cosmos3Nano3D / CosmosPredict3D / Vista3D)"]
+    hydra --> mod["LightningModule<br/>(Cosmos 3 Nano / Edge / Super)"]
     hydra --> tr["Trainer<br/>(DDP, callbacks, logger)"]
     dm --> tr
     mod --> tr
@@ -29,17 +28,17 @@ flowchart LR
     wrap -.->|"eval"| mws["Mutex Watershed<br/>(instances)"]
 ```
 
-Three end-to-end backbones live under `nanocosmos/models/`:
+Three Cosmos 3 backbones live under `nanocosmos/models/`:
 
-- **`Cosmos3Nano3DWrapper`** — Cosmos 3 (Nano) 16B omni transformer; the
+- **`Cosmos3Nano3DWrapper`** — Cosmos 3 Nano (16B) omni transformer; the
   shipped default backbone for the `snemi3d` recipe.
-- **`CosmosPredict3DWrapper`** — Cosmos-Predict 2.5 (base DiT + Wan VAE);
-  the flattened 2B baseline (`configs/cosmospredict3d.yaml`).
-- **`Vista3DWrapper`** — SegResNetDS2 for fast local iteration.
+- **`Cosmos3EdgeWrapper`** — Cosmos 3 Edge (4B); loads
+  `nvidia/Cosmos3-Edge` (`configs/nanocosmos-4B.yaml`).
+- **`Cosmos3SuperWrapper`** — Cosmos 3 Super (64B).
 
-All emit the same affinity + sem + raw head.  For the channel layout,
-the loss, and the Mutex Watershed eval, see
-[`doc/MUTEXWATERSHED.md`](doc/MUTEXWATERSHED.md).
+All emit the same affinity + sem + raw head. The channel layout lives in
+`nanocosmos/losses/_common.py`. At eval, predicted affinities are
+agglomerated by `nanocosmos.inference.mutex_watershed`.
 
 ## What it does
 
@@ -48,8 +47,8 @@ Every backbone trains one **affinity + sem + raw per-voxel head**
 derived at runtime from the loss offset set (`head_channels =
 len(loss_offsets) + 2`; see `nanocosmos/modules/base.py`).  The default
 `snemi3d` layout uses `N_AFF = 14` offsets, so `HEAD_CHANNELS = 16`; the
-flagship recipes (`nanocosmos-2B/4B/16B` and the standalone
-`cosmospredict3d` / `cosmos3nano3d`) declare 30 offsets, so
+flagship recipes (`nanocosmos-4B` / `nanocosmos-16B` and the standalone
+`cosmos3nano3d`) declare 30 offsets, so
 `HEAD_CHANNELS = 32`:
 
 | channels | field | meaning |
@@ -70,25 +69,21 @@ affinities (masked BCE + soft-Dice + focal) directly against the binary
 label-derived target; at evaluation / inference the predicted
 affinities are agglomerated into instances by the **parameter-free
 Mutex Watershed** (`nanocosmos.inference.mutex_watershed`, GPU or CPU).
-See [`doc/MUTEXWATERSHED.md`](doc/MUTEXWATERSHED.md) for the full design,
-the algorithm, and a worked example.
 
 ## Layout
 
-The full file-by-file map lives in [`doc/STRUCTURE.md`](doc/STRUCTURE.md).
 Skim of the top level:
 
 ```
 nanoCosmos/             repo root
 ├── configs/             Hydra configs (default → snemi3d → combine;
-│                         nanocosmos-16B / nanocosmos-4B / nanocosmos-2B
+│                         nanocosmos-16B / nanocosmos-4B
 │                         = joint SR+seg; nanocosmos-4B-pretrain = raw-EM SSL)
 ├── nanocosmos/          importable package (losses, models, modules,
 │                        datasets, datamodules, transforms, inference,
 │                        preprocessors, metrics, visualizer, callbacks)
-├── doc/                 STRUCTURE / ORGANIZATION / MUTEXWATERSHED / ARCHITECT
-│                        / WALKTHROUGH / GOTCHAS / CONTRIBUTING / INDEX
-│                        / DATASETS / JOINT_TRAINING / RESOLUTION_LADDER
+├── doc/                 DATASETS / RESOLUTION_LADDER / data.csv
+│                        / dataset preview PNGs
 ├── scripts/             train.py entry point + dataset downloaders
 ├── tests/               pytest suite
 ├── pyproject.toml
@@ -118,10 +113,10 @@ python scripts/train.py --config-name combine loss.weight_sem.weight=0.0 loss.we
 
 # Joint super-resolution + segmentation (resolution-ladder recipe):
 #   ssl (degraded->clean EM reconstruction) + sft (affinity + sem) on a
-#   shared backbone via Joint3DReconSegLoss; see doc/JOINT_TRAINING.md.
-python scripts/train.py --config-name nanocosmos-16B   # Cosmos-3 Nano backbone
-python scripts/train.py --config-name nanocosmos-4B    # Cosmos-3 Edge (released checkpoint)
-python scripts/train.py --config-name nanocosmos-2B    # Cosmos-Predict 2.5 (2B)
+#   shared backbone via Joint3DReconSegLoss.
+python scripts/train.py --config-name nanocosmos-16B   # Cosmos 3 Nano
+python scripts/train.py --config-name nanocosmos-4B    # Cosmos 3 Edge (released checkpoint)
+python scripts/train.py --config-name cosmos3nano3d    # flattened Nano recipe
 
 # Edge pretrain on multiscale raw EM only (SSL, no segmentation):
 python scripts/train.py --config-name nanocosmos-4B-pretrain
@@ -178,18 +173,6 @@ fields = slice_head(head)  # {"aff", "sem", "raw"} views
 ```bash
 pytest tests/ -q
 ```
-
-## Where to look first
-
-| You want to ...                                                | Open                                                          |
-| -------------------------------------------------------------- | ------------------------------------------------------------- |
-| Skim the codebase before doing anything                        | [`doc/STRUCTURE.md`](doc/STRUCTURE.md)                        |
-| Understand what one training batch actually does               | [`doc/WALKTHROUGH.md`](doc/WALKTHROUGH.md)                    |
-| Know the head's channel layout, loss + Mutex Watershed         | [`doc/MUTEXWATERSHED.md`](doc/MUTEXWATERSHED.md)              |
-| Know the backbone parameter budgets                            | [`doc/ARCHITECT.md`](doc/ARCHITECT.md)                        |
-| Add a new dataset / loss / backbone / transform                | [`doc/CONTRIBUTING.md`](doc/CONTRIBUTING.md)                  |
-| Debug a silent failure (head dropping, freeze schedule, ...)   | [`doc/GOTCHAS.md`](doc/GOTCHAS.md)                            |
-| Tour all docs at once                                          | [`doc/INDEX.md`](doc/INDEX.md)                                |
 
 ## License
 

@@ -10,10 +10,10 @@ which runs SNEMI3D-shaped data with the unified aff/sem/raw head.  Recipes:
 
 * ``--config-name snemi3d``       -- SNEMI3D only, single-task affinity recipe.
 * ``--config-name combine``       -- multi-dataset SNEMI3D + neurons + MICrONS.
-* ``--config-name nanocosmos-16B``-- joint SR + segmentation (Cosmos-3 Nano).
-* ``--config-name nanocosmos-4B`` -- joint SR + segmentation (Cosmos-3 Edge).
+* ``--config-name cosmos3nano3d`` -- flattened Cosmos 3 Nano (16B) recipe.
+* ``--config-name nanocosmos-16B``-- joint SR + segmentation (Cosmos 3 Nano).
+* ``--config-name nanocosmos-4B`` -- joint SR + segmentation (Cosmos 3 Edge).
 * ``--config-name nanocosmos-4B-pretrain`` -- Edge pretrain, multiscale raw EM only.
-* ``--config-name nanocosmos-2B`` -- joint SR + segmentation (Cosmos-Predict 2B).
 
 Examples
 --------
@@ -42,15 +42,8 @@ from __future__ import annotations
 import collections
 import datetime
 import inspect
-import logging
 import os
 import warnings
-
-# An installed torchao (no longer used by this repo) registers
-# KernelPreference via torch's register_constant and warns from
-# ``torch.utils._pytree`` on every rank.  Silence that one logger before
-# torch is imported; getLogger returns the singleton torch will use.
-logging.getLogger("torch.utils._pytree").setLevel(logging.ERROR)
 
 # Single source of truth for the distributed collective timeout. Used both for
 # the NCCL watchdog heartbeat env var below and the per-strategy process-group
@@ -175,8 +168,6 @@ def _install_runtime_patches() -> None:
       that we cannot fix upstream.
     * Bump ``set_float32_matmul_precision`` so TF32 matmuls are allowed.
     * Disable cuDNN SDPA so DiT attention falls back to FlashAttention.
-    * On sm_107, route ``torch.exp2`` through ``pow(2, x)`` so NVRTC is
-      not asked to JIT an unsupported ``sm_107`` arch (breaks FP8 scales).
     """
     torch.serialization.add_safe_globals([
         Any,
@@ -225,26 +216,6 @@ def _install_runtime_patches() -> None:
     # works; force it by turning cuDNN SDPA off.
     if torch.cuda.is_available() and hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
         torch.backends.cuda.enable_cudnn_sdp(False)
-
-    # ATen has no precompiled ``exp2`` kernel for sm_107 (Rubin), and the
-    # bundled NVRTC only knows up to sm_103, so any CUDA ``exp2`` dies with
-    # ``nvrtc: error: invalid value for --gpu-architecture``. ``pow(2, x)``
-    # is precompiled, so remap exp2 -> pow. BF16 matmul and FlashAttention
-    # do not need this; it keeps later ops (and any leftover scale code)
-    # from JIT-compiling.
-    if torch.cuda.is_available():
-        _cap = torch.cuda.get_device_capability(0)
-        if _cap >= (10, 7):
-            _orig_exp2 = torch.exp2
-
-            def _exp2_no_nvrtc(input: Any, *args: Any, **kwargs: Any) -> Any:
-                if isinstance(input, torch.Tensor) and input.is_cuda:
-                    two = torch.ones((), device=input.device, dtype=input.dtype) * 2
-                    return torch.pow(two, input)
-                return _orig_exp2(input, *args, **kwargs)
-
-            torch.exp2 = _exp2_no_nvrtc  # type: ignore[assignment]
-            torch.Tensor.exp2 = lambda self: _exp2_no_nvrtc(self)  # type: ignore[method-assign, assignment]
 
 
 # ----------------------------------------------------------------------
@@ -395,42 +366,31 @@ def build_module(cfg: DictConfig) -> pl.LightningModule:
         Cosmos3EdgeModule,
         Cosmos3Nano3DModule,
         Cosmos3SuperModule,
-        CosmosPredict3DModule,
         Joint3DModule,
         JointEdge3DModule,
-        JointPredict3DModule,
         JointSuper3DModule,
-        Vista3DModule,
     )
 
     module_classes = {
-        "vista3d": Vista3DModule,
         "cosmos3edge3d": Cosmos3EdgeModule,
         "cosmos3nano3d": Cosmos3Nano3DModule,
         "cosmos3super3d": Cosmos3SuperModule,
-        "cosmospredict3d": CosmosPredict3DModule,
-        # The joint reconstruction + segmentation recipe.  ``joint3d`` uses the
-        # Cosmos-3 Nano (16B) backbone; ``joint3d_edge`` the Cosmos3-Edge (4B,
-        # reduced-from-Nano) backbone; ``joint3d_super`` the Cosmos3-Super (64B)
-        # backbone; ``joint3d_2b`` the Cosmos-Predict 2.5 (2B) backbone -- all
-        # share the same loss / datamodule.  See doc/JOINT_TRAINING.md.
+        # Joint reconstruction + segmentation. ``joint3d`` is Cosmos 3 Nano
+        # (16B), ``joint3d_edge`` is Edge (4B), ``joint3d_super`` is Super
+        # (64B). They share the loss and the joint datamodule.
         "joint3d": Joint3DModule,
         "joint3d_edge": JointEdge3DModule,
         "joint3d_super": JointSuper3DModule,
-        "joint3d_2b": JointPredict3DModule,
         # Legacy / verbose aliases.
         "cosmos3_nano_3d": Cosmos3Nano3DModule,
         "cosmos3_edge_3d": Cosmos3EdgeModule,
         "cosmos3_super_3d": Cosmos3SuperModule,
-        "cosmos_predict25_3d": CosmosPredict3DModule,
-        "joint_predict3d": JointPredict3DModule,
     }
 
     model_cfg = dict(cfg.get("model", {}))
-    # The ``joint3d_2b`` fallback is only used if ``model.type`` is entirely
-    # absent; every shipped Hydra config sets it explicitly (e.g. default.yaml
-    # -> cosmos3nano3d), so the two "defaults" never actually conflict.
-    model_type = model_cfg.pop("type", "joint3d_2b").lower()
+    # Used only when ``model.type`` is absent. Shipped configs set it
+    # explicitly (default.yaml -> cosmos3nano3d).
+    model_type = model_cfg.pop("type", "cosmos3nano3d").lower()
 
     cls = module_classes.get(model_type)
     if cls is None:
@@ -548,8 +508,8 @@ def setup_callbacks(cfg: DictConfig) -> List[pl.Callback]:
     if img_cfg.get("enabled", True):
         # The joint recipe needs the task-aware logger (reconstruction panels +
         # sft segmentation panels pooled to the native label grid).  Matches
-        # every joint variant: ``joint3d`` (Nano), ``joint3d_2b`` /
-        # ``joint_predict3d`` (Cosmos-Predict 2B).
+        # every joint variant: ``joint3d`` (Nano), ``joint3d_edge``,
+        # ``joint3d_super``.
         _model_type = str(cfg.get("model", {}).get("type", "")).lower()
         is_joint = _model_type.startswith("joint")
         if is_joint:
@@ -725,7 +685,7 @@ def build_trainer(
         accelerator=training_cfg.get("accelerator", "auto"),
         devices=training_cfg.get("devices", 1),
         strategy=setup_strategy(cfg),
-        precision=training_cfg.get("precision", "32-true"),
+        precision=training_cfg.get("precision", "bf16-true"),
         callbacks=callbacks,
         logger=logger,
         profiler=profiler,
@@ -781,8 +741,8 @@ def _resolve_checkpoint(cfg: DictConfig, module: pl.LightningModule) -> Optional
     * ``+ckpt_path_skip_prefixes=[<prefix>, ...]`` -- drop any state-dict
       key whose dotted name starts with one of the given prefixes
       *before* loading.  Use to keep freshly-instantiated submodules
-      (e.g. a new ``model.controlnet.*`` branch, or pretrained HF DiT
-      weights) instead of overwriting them with an old ckpt's values.
+      (e.g. pretrained HF DiT weights) instead of overwriting them
+      with an old ckpt's values.
     * ``+ckpt_path_only_prefixes=[<prefix>, ...]`` -- inverse allowlist:
       keep *only* keys matching one of these prefixes.  Mutually
       exclusive with ``ckpt_path_skip_prefixes``.
@@ -971,7 +931,7 @@ def main(cfg: DictConfig) -> None:
     console.log(f"  Max epochs:   {training_cfg.get('max_epochs', 100)}")
     console.log(f"  Accelerator:  {training_cfg.get('accelerator', 'auto')}")
     console.log(f"  Devices:      {training_cfg.get('devices', 1)}")
-    console.log(f"  Precision:    {training_cfg.get('precision', '32-true')}")
+    console.log(f"  Precision:    {training_cfg.get('precision', 'bf16-true')}")
 
     console.rule("Starting Training")
 

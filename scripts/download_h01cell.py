@@ -52,7 +52,7 @@ EM_Z_MAX = 5293
 DEFAULT_EXTEND_SIZE = (1024, 1024, 5000)
 DEFAULT_EXTEND_Z0 = 0
 
-# Original 12 mip0 xy origins (EM 4 nm coords) wired into nanocosmos-2B.yaml.
+# Original 12 mip0 xy origins (EM 4 nm coords) wired into the joint recipes.
 # (label, x, y) -- z replaced by --extend.
 EXISTING_XY: List[Tuple[str, int, int]] = [
     ("train01", 320000, 320000),

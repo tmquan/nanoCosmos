@@ -41,7 +41,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Cosmos backbones (Cosmos 2.5 Predict + Cosmos 3 Nano).
+# Cosmos 3 backbones (Nano 16B, Edge 4B, Super 64B).
 # Pulls HuggingFace + diffusers (+ transformers for the Cosmos 3 omni
 # Qwen3-VL / Qwen2 sub-towers).
 #
@@ -86,7 +86,7 @@ viz = [
     "uvicorn>=0.30.0",
     "pydantic>=2.0.0",
 ]
-# Doc-figure generators (``doc/figures/*.py``, ``doc/assets/*.py``).
+# Doc-figure generator (``doc/assets/generate_dataset_previews.py``).
 # matplotlib is used only by these scripts, not by ``import nanocosmos``
 # or the training / inference path, so it is out of core ``dependencies``.
 figures = [

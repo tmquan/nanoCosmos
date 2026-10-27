@@ -2,7 +2,7 @@
 Multi-task datamodule for the joint reconstruction + segmentation recipe.
 
 Feeds :class:`~nanocosmos.modules.Joint3DModule` the batch contract it expects
-(see doc/JOINT_TRAINING.md): ``task`` (``"ssl"`` | ``"sft"``), the fine-grid
+``task`` (``"ssl"`` | ``"sft"``), the fine-grid
 ``image``, the native-grid ``label`` (sft), and the ``recon_image`` target.
 
 Geometry (see doc/RESOLUTION_LADDER.md).  The network runs on a fixed fine
@@ -342,7 +342,7 @@ class Joint3DDataModule(pl.LightningDataModule):
             try:
                 entry["prompt"] = prompt_from_volume_spec(vol, task=task)
             except ValueError as exc:
-                # Keep backward-compat for configs without imaging: (2B/16B).
+                # Volumes that omit ``imaging`` skip the text prompt.
                 logger.debug("Skipping prompt for %s: %s", vol.get("vol"), exc)
             lazy_vols.append(entry)
         return LazyVolDataset(

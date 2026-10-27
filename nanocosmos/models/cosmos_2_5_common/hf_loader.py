@@ -1,7 +1,6 @@
-"""Rank-aware HuggingFace snapshot download for Cosmos 2.5 backbones.
+"""Rank-aware HuggingFace snapshot download for Cosmos 3 backbones.
 
-Used by :mod:`nanocosmos.models.cosmos_predict_2_5`.  The function is
-generic over ``repo_id`` / ``revision``.
+Generic over ``repo_id`` / ``revision``.
 """
 
 import logging
@@ -11,9 +10,8 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Files never read by the Cosmos 2.5 wrappers.  The T5-XXL text encoder
-# is upstream Cosmos baggage: our wrappers feed null prompt embeddings,
-# so skipping it saves ~15 GB per checkpoint snapshot.
+# Files the wrappers do not read.  These wrappers feed null prompt
+# embeddings, so the upstream text encoder and tokenizer are skipped.
 _DEFAULT_IGNORE_PATTERNS: List[str] = [
     "*.md",
     "*.txt",
@@ -24,8 +22,8 @@ _DEFAULT_IGNORE_PATTERNS: List[str] = [
 ]
 
 # Default cache subdirectory under ``~/.cache/nanocosmos/`` when the
-# caller does not pass ``cache_dir``.  Shared between Transfer and
-# Predict so HuggingFace's per-repo subdirs naturally separate them.
+# caller does not pass ``cache_dir``.  The folder name is historical;
+# per-repo subdirectories separate Nano, Edge, and Super.
 _DEFAULT_CACHE_SUBDIR = "cosmos25"
 
 
@@ -55,7 +53,7 @@ def _download_from_hf(
         from huggingface_hub import snapshot_download
     except ImportError:
         raise ImportError(
-            "huggingface_hub is required for Cosmos 2.5 weight "
+            "huggingface_hub is required for Cosmos 3 weight "
             "download.  Install with: pip install huggingface_hub"
         )
 

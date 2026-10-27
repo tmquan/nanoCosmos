@@ -1,8 +1,8 @@
 """
-Cosmos 2.5 Lightning-module base for 3-D volumetric segmentation.
+Cosmos 3 Lightning-module base for 3-D volumetric segmentation.
 
 Specialisation of :class:`~nanocosmos.modules.base.BaseCircuitModule`
-for the Cosmos 2.5 backbone (Cosmos-Predict).  The base
+for the Cosmos 3 backbones (Nano, Edge, Super).  The base
 ``BaseCircuitModule`` owns training, evaluation and logging;
 this module adds:
 
@@ -18,8 +18,8 @@ this module adds:
   in :meth:`configure_optimizers`; empty groups are filtered out
   before AdamW sees them.
 
-Only the **automatic** training mode is supported (predict from the
-volume alone).  Point-prompt / proofread training is a Vista-only path.
+Only the **automatic** training mode is supported (the volume is the
+only input).
 
 Subclasses with architecture-specific model kwargs override
 :meth:`_extra_model_kwargs` to add them; the base ``_build_model`` only
@@ -52,7 +52,7 @@ _GRAD_GUARD_LOG_FN = getattr(
 
 
 class BaseCosmosModule(BaseCircuitModule):
-    """Abstract base for Cosmos-Predict / Cosmos-Transfer 3-D modules.
+    """Lightning base for the Cosmos 3 tiers (Nano, Edge, Super).
 
     Subclasses **must** define :attr:`_model_cls` and :attr:`_loss_cls`.
 
@@ -113,21 +113,18 @@ class BaseCosmosModule(BaseCircuitModule):
         )
 
     def _build_model(self, model_config: Dict[str, Any]) -> torch.nn.Module:
-        # Reject before constructing the backbone.  FP8 swapped DiT linears
-        # for torchao Float8Linear; that path is gone, and a true flag would
-        # otherwise build a BF16 module and then fail.
-        if model_config.get("fp8", False):
-            raise ValueError(
-                "model.fp8 is no longer supported. Train in BF16 "
-                "(model.dtype=bf16 and training.precision=bf16-true) "
-                "and drop model.fp8 / model.fp8_recipe from the config."
-            )
-        model = self._model_cls(
+        ctor_kwargs: Dict[str, Any] = dict(
             in_channels=model_config.get("in_channels", 1),
             head_channels=model_config.get("head_channels", HEAD_CHANNELS),
             feature_size=model_config.get("feature_size", 64),
-            variant=model_config.get("variant", "2B"),
             dtype=model_config.get("dtype", "bf16"),
+        )
+        # Omit variant when unset so Nano / Edge / Super keep their own
+        # class defaults (NANO / EDGE / SUPER).
+        if model_config.get("variant") is not None:
+            ctor_kwargs["variant"] = model_config["variant"]
+        model = self._model_cls(
+            **ctor_kwargs,
             pretrained=model_config.get("pretrained", True),
             freeze_dit_backbone=model_config.get("freeze_dit_backbone", False),
             freeze_understanding_ffn=model_config.get("freeze_understanding_ffn", True),
@@ -150,8 +147,8 @@ class BaseCosmosModule(BaseCircuitModule):
     ) -> Dict[str, Any]:
         """Subclass hook: forward arch-specific kwargs to ``_model_cls``.
 
-        Cosmos-Predict has no extras and inherits the empty-dict default;
-        a future backbone with extra constructor kwargs would override this.
+        The Cosmos 3 tiers inherit the empty-dict default. A backbone
+        with extra constructor kwargs overrides this.
         """
         return {}
 

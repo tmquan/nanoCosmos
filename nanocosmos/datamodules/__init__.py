@@ -26,8 +26,7 @@ Public surface
 Extending this module
 ---------------------
 A new datamodule is typically a 50-line subclass declaring its
-``dataset_class``.  See ``doc/CONTRIBUTING.md`` "How to add a new
-dataset" for the full recipe.
+``dataset_class``.
 """
 
 from nanocosmos.datamodules.base import CircuitDataModule

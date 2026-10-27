@@ -10,8 +10,8 @@ Public surface
   -- patch-wise blended inference over volumes that don't fit on the GPU.
 - :class:`nanocosmos.inference.mutex_watershed.MutexWatershed` -- the
   parameter-free agglomeration that turns predicted affinities into
-  instance ids (the production eval / inference path; see
-  :doc:`MUTEXWATERSHED`).  It dispatches per-input between
+  instance ids (the production eval / inference path).  It dispatches
+  per-input between
   :func:`~nanocosmos.inference.mutex_watershed.mws_th` (GPU torch Boruvka,
   native zero-copy, default for CUDA inputs),
   :func:`~nanocosmos.inference.mutex_watershed.mws_cp` (GPU cupy Boruvka,

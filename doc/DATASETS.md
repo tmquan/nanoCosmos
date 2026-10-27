@@ -28,7 +28,7 @@ that downloads (or converts) it.
 
 `COSEM3D` (4 nm), `MitoEM2` (8–16 nm), and Hemibrain / MaleCNS (`FLYEM3D`,
 8 nm) are the `ssl` rungs of the **joint super-resolution recipe**
-(`configs/nanocosmos-{16B,4B,2B}.yaml`, `data.dataset: joint3d`). **H01Cell**
+(`configs/nanocosmos-{16B,4B}.yaml`, `data.dataset: joint3d`). **H01Cell**
 and **MICrONS** are `sft` rungs. Every labeled (`sft`) volume declares a
 [`label_convention`](#label-conventions-gapped--filled) — `gapped` or `filled` —
 so the two annotation styles never poison one another. See
@@ -158,7 +158,7 @@ Files land in `data/SNEMI3D/` (config volume
   **4 × 4 × 40 nm** is the *annotation/coordinate frame*, not the image
   voxel size.
 - **Segmentation versions:** `v117`, `v343`, `v943`, `v1300` (default,
-  latest, Jan 2025). The **joint** configs (`nanocosmos-{16B,4B,2B}.yaml`) use
+  latest, Jan 2025). The **joint** configs (`nanocosmos-{16B,4B}.yaml`) use
   MICrONS on the **`sft`** branch with `label_convention: filled`: its auto-seg
   is space-filling (membranes assigned to neurons), unlike the `gapped`
   SNEMI / Neurons / H01. The datamodule groups it separately from the `gapped`
@@ -305,7 +305,7 @@ python scripts/download_cremi3d.py --out-dir data/CREMI3D --samples A+ B+ C+ --p
   contribute **4 train + 1 val** `1024³` crops; the FIB-25 surround now
   contributes **2 train + 1 val** (the two empty corner tiles
   `x1024_y4096_z4096` and `x4096_y1024_z4096` were removed after the content
-  gate flagged them). Listed in `configs/nanocosmos-{16B,4B,2B}.yaml`
+  gate flagged them). Listed in `configs/nanocosmos-{16B,4B}.yaml`
   (`data.branches.ssl` / `val_volumes`). **Caveat:** Hemibrain / MaleCNS tissue
   does **not** fill its bounding box, so corner / off-tissue origins (e.g.
   `x4000_y4000_z4000`) download as all-zero tiles (CloudVolume
@@ -395,7 +395,7 @@ per-volume `[0, 1]` scale (config keys under `data.`):
 
 > All three gate keys are wired into `LazyVolDataset` (via `Joint3DDataModule`),
 > but each defaults to `0` (**disabled**) if the key is absent from the config.
-> `ssl_min_autocorr: 0.5` is set in `nanocosmos-2B.yaml`, `nanocosmos-4B.yaml`,
+> `ssl_min_autocorr: 0.5` is set in `nanocosmos-4B.yaml`,
 > `nanocosmos-16B.yaml`, and `nanocosmos-4B-pretrain.yaml`.
 
 **Why the structure gate is needed.** A variance/std test *cannot* tell real
@@ -459,7 +459,7 @@ python scripts/collect_meaningful_crops.py --source flyem3d --dataset malecns --
 
 The `.h5` files below **remain on disk** (not deleted, in case anyone wants to
 re-inspect them) but are **removed from every joint config**
-(`nanocosmos-2B.yaml`, `nanocosmos-4B.yaml`, `nanocosmos-16B.yaml`, and
+(`nanocosmos-4B.yaml`, `nanocosmos-16B.yaml`, and
 `nanocosmos-4B-pretrain.yaml`) -- do not re-add them. Each file below
 was confirmed junk by the audit above (not a one-off borderline score):
 
@@ -479,7 +479,7 @@ was confirmed junk by the audit above (not a one-off borderline score):
 
 ### Full dataset meaningfulness audit (Jul 2026)
 
-Every volume referenced anywhere in `configs/nanocosmos-2B.yaml` (83 unique
+Every volume referenced anywhere in `configs/nanocosmos-4B.yaml` (83 unique
 files: `ssl` + `sft` train branches + `val_volumes`) was audited the same way:
 ~15 random sub-patches per file (scaled to the SSL training-patch size), each
 scored for `content_frac` (`ssl_min_std` gate), lag-1 `autocorr`
@@ -552,7 +552,7 @@ All 11 in-use COSEM3D crops (8 `ssl`-branch train + 3 val holdouts across
 e.g. `jrc_hela-3` 3.24 nm -> 4 nm, an 0.81x downsample), replacing the
 `..._4x4x{3.24,3.36,3.44}nm_..._volume.h5` filenames with
 `..._4nm_..._volume.h5`, `native_resolution: [4, 4, 4]` now truthful in
-`configs/nanocosmos-2B.yaml` / `-4B.yaml`.
+`configs/nanocosmos-4B.yaml` / `nanocosmos-16B.yaml`.
 
 This is a real, on-disk resample, not just a config relabel. Per
 `doc/RESOLUTION_LADDER.md` #2.1, the joint datamodule already *clamps* the
@@ -628,7 +628,7 @@ crops slipped through.
 
 The code plumbing (both `LazyVolDataset` and `Joint3DDataModule`) is in place.
 The keys default to `0` (**disabled**) when absent. The joint segmentation
-recipes (`nanocosmos-2B.yaml`, `nanocosmos-4B.yaml`, `nanocosmos-16B.yaml`)
+recipes (`nanocosmos-4B.yaml`, `nanocosmos-16B.yaml`)
 set `sft_min_instances: 2` / `sft_max_inst_frac: 0.9`. The pretrain config
 has no SFT branch, so it does not set them. `ssl_min_autocorr: 0.5` is set
 in all four.
@@ -700,8 +700,8 @@ Notes on the stem fields:
   (key `main`, axes transposed `X,Y,Z` → `Z,Y,X`) and used **image-only in the
   `ssl` branch**.  The folder's own split is honoured: `imagesTr` → ssl **train**,
   `imagesTs` → ssl **validation** holdout (`task: ssl` recon).  As of the Jul
-  2026 refresh (see below) the joint configs (`nanocosmos-2B.yaml`,
-  `nanocosmos-4B.yaml`, `nanocosmos-16B.yaml`, `nanocosmos-4B-pretrain.yaml`)
+  2026 refresh (see below) the joint configs (`nanocosmos-4B.yaml`,
+  `nanocosmos-16B.yaml`, `nanocosmos-4B-pretrain.yaml`)
   carry the refreshed MitoEM2 layout (**30 train / 10 val**).
   See `doc/data.csv` for the exact per-subset counts.  Two native
   resolutions: `[16,16,16]` (Beta/Jurkat/Macro/Podo/Sperm) and `[30,8,8]`
@@ -798,7 +798,7 @@ on disk with its shape / resolution / dtype / seg-fg%.
    (`(z, y, x)` nm), keyed by a **prefix of the volume name** (e.g.
    `flyem3d`, `cremi3d`, `minnie65`, `neurons`, `AC`). It is consumed
    only by the `resolution_zoom` augmentation.
-4. **Resolution policy** (`cosmos3nano3d.yaml` / `cosmospredict3d.yaml`):
+4. **Resolution policy** (`cosmos3nano3d.yaml`):
    `resolution_zoom_mode: union` with `resolution_zoom_prob` **0.9** (nano) /
    **0.5** (predict) — the fraction of training patches that are jittered
    (the rest are fed at native scale). Each anisotropic patch is resampled to
@@ -837,5 +837,5 @@ on disk with its shape / resolution / dtype / seg-fg%.
    - Legacy `resolution_zoom_mode: ratio` (anisotropy-preserving, single
      scale factor) is still available.
 
-For the recipe to add a brand-new dataset (preprocessor → leaf dataset →
-leaf datamodule → YAML), see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+A new dataset is a preprocessor, a leaf dataset, a leaf datamodule, and a
+YAML volume list that follows the on-disk convention above.

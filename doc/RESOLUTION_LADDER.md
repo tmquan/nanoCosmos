@@ -58,20 +58,20 @@ fetch** — we do **not** download whole volumes (Hemibrain/MaleCNS are
 peta-voxel; even FIB-25 is ~3.5e11 vox). Especially for SSL a handful of
 crops suffices. `Nx A×B×C` = N crops of that size. **USED_SIZE values below are
 a starting proposal — tune per compute/coverage.** The implemented volume
-lists live in `configs/nanocosmos-{16B,4B,2B}.yaml`; the authoritative per-subset
+lists live in `configs/nanocosmos-{16B,4B}.yaml`; the authoritative per-subset
 census (counts, sizes, voxel totals, task/split) is **[`doc/data.csv`](./data.csv)**.
 SSL also includes **MitoEM2**, image-only **CREMI+**, and the label-less SNEMI3D **test**.
 Several originally-listed COSEM/FIB-25/MitoEM tiles were **pruned** after the SSL
 content gate flagged them as mostly-empty — so the USED_SIZE counts below are
 upper-bound proposals; `data.csv` is current.
 
-> The sft/ssl data knobs are documented in
-> [`JOINT_TRAINING.md`](./JOINT_TRAINING.md) §4.1–4.2: boundary-aware sem
-> supervision (`find_boundaries` / `boundary_target: semantic` → a separate
-> eroded `sem_label`, with a no-full-erase guard so thin instances are never
-> deleted) and the SSL crop gates — `ssl_min_std` (the active **local
-> block-content** gate that rejects flat resin/empty crops) plus the legacy
-> `ssl_min_foreground` non-zero gate.
+> SFT uses boundary-aware sem supervision (`find_boundaries` /
+> `boundary_target: semantic` → a separate eroded `sem_label`, with a
+> no-full-erase guard so thin instances are never deleted). SSL crop
+> gates are `ssl_min_std` (the active **local block-content** gate that
+> rejects flat resin/empty crops) plus the legacy `ssl_min_foreground`
+> non-zero gate. Details and per-volume notes are in
+> [`DATASETS.md`](./DATASETS.md).
 
 | rank | volume | (z,y,x) nm | up z·xy | role | AVAIL_SIZE (x×y×z vox) | USED_SIZE (x×y×z vox) |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -201,7 +201,7 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 
 1. **Census + fine grid.** Adopt §2; fine grid = **4 nm cubic** (§2.1).
    (Revisit FOV/memory: the shipped configs use a `[200, 256, 256]` (16B) or
-   `[400, 256, 256]` (2B / 4B) @ 4 nm patch — see §6.)
+   `[400, 256, 256]` (4B) @ 4 nm patch — see §6.)
 2. **Acquire SSL data.**
    - `scripts/download_cosem3d.py` — 4 nm COSEM3D cubes (`jrc_hela-3`,
      `jrc_macrophage-2`, `jrc_jurkat-1`).
@@ -209,11 +209,11 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
      (image-only crops outside the proofread core), for 8 nm neuropil SSL.
    - optionally **Hemibrain / MaleCNS** image crops (8 nm), for scale.
 3. **Acquire SFT data.** FIB-25 core + SNEMI3D + CREMI + H01 + MICrONS
-   (+ FlyWire in 2B/4B). Each labeled volume carries a `label_convention`
+   (+ FlyWire). Each labeled volume carries a `label_convention`
    (`gapped` for SNEMI / Neurons / H01; `filled` for MICrONS / FlyWire /
    CREMI / FIB-25) so the two annotation styles are grouped + prompt-tagged
    separately instead of conflicting under one loss.
-4. **Config.** `configs/nanocosmos-{16B,4B,2B}.yaml`: `ssl` = COSEM +
+4. **Config.** `configs/nanocosmos-{16B,4B}.yaml`: `ssl` = COSEM +
    unsegmented FIB-25 (+ Hemibrain / MaleCNS) + MitoEM2; `sft` = the labeled
    rungs (incl. H01 + MICrONS), each carrying its native `(z, y, x)` so the
    pool factor is derived per volume.
@@ -229,7 +229,7 @@ way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 
 A 4 nm grid at 160³ sees only 0.64 µm — small context for large neurites
 (the shipped configs use `[200, 256, 256]` (16B, ~0.8 × 1.0 × 1.0 µm) or
-`[400, 256, 256]` (2B / 4B, ~1.6 × 1.0 × 1.0 µm)).
+`[400, 256, 256]` (4B, ~1.6 × 1.0 × 1.0 µm)).
 Levers: bigger voxel patch (more memory), non-cubic voxel patch (more z-planes
 since z is synthesized), or a slightly larger-voxel grid (e.g. 6 nm: 0.96 µm
 FOV, only CREMI/COSEM mildly downsampled). Decide alongside the 16B memory

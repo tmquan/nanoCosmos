@@ -1,4 +1,4 @@
-"""Decoder-side modules shared by the Cosmos 2.5 wrappers.
+"""Decoder-side modules shared by the Cosmos 3 wrappers.
 
 The decoder hosts one unified task head that emits the canonical
 ``[B, HEAD_CHANNELS, D, H, W]`` affinity + sem + raw tensor consumed by
@@ -18,11 +18,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
+from nanocosmos.models.cosmos_2_5_common.heads import TaskHead3D
 from nanocosmos.models.cosmos_2_5_common.layers import (
     _NORM,
     _PointwiseLinear,
 )
-from nanocosmos.models.vista import VistaTaskHead3D
 from nanocosmos.losses import HEAD_CHANNELS
 
 logger = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ class _DecoderAdapter3D(nn.Module):
     adds ``skip_stem.*`` keys AND widens the head's first conv. The shipped
     last.ckpt is the (pretrained=True, highres_skip=False) combination
     (head_in = hidden_ch = 96); changing either flag on resume adds/removes
-    keys and breaks the strict load. See doc/CURRENT_STATE.md checkpoint rules.
+    keys and breaks the strict load.
     """
 
     def __init__(
@@ -198,15 +198,11 @@ class _DecoderAdapter3D(nn.Module):
             self.skip_stem = None
             head_in = self._hidden_ch
 
-        # VISTA3D-style unified task head.  It mirrors MONAI's
-        # ``ClassMappingClassify.image_post_mapping`` (2× residual
-        # UnetrBasicBlock at a shared refinement width with instance
-        # norm) and replaces the class-embedding mask-attention with a
-        # 1×1 conv so we can emit the HEAD_CHANNELS dense field.  Refinement
-        # runs at ``feature_size`` so parameter cost stays
-        # independent of the VAE decoder's output width (``_hidden_ch``
-        # can be much larger on the 14B variant).
-        self.head = VistaTaskHead3D(
+        # Residual task head. Two UnetrBasicBlocks refine at
+        # ``feature_size`` and a 1×1 conv emits the HEAD_CHANNELS field.
+        # Refinement width stays at ``feature_size`` so the cost does not
+        # track the VAE decoder's output width (``_hidden_ch``).
+        self.head = TaskHead3D(
             in_channels=head_in,
             out_channels=self.head_channels,
             refine_channels=feature_size,

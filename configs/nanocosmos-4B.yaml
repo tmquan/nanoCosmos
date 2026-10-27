@@ -9,13 +9,13 @@
 # pinned in requirements.txt (9f6fc2c), which honors Edge's
 # ``hidden_act: relu2`` and ``qk_norm_for_text: false``.  Older diffusers
 # (0.39) builds a gated-SiLU MLP the checkpoint does not contain.
-# Runtime matches the pretrain config: BF16, no FP8, volume roots under
+# Runtime matches the pretrain config: BF16, volume roots under
 # ``/home/nvidia/data``, ``hydra.job.chdir: false``.  Edge shares
 # Nano's Wan2.2-TI2V VAE (same 16x-xy / 4x-z compression, same DiT token
 # grid) but ~4x fewer transformer params, so it usually fits with a
 # comparable or larger batch than the 16B recipe.
 #
-# The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
+# The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md):
 # ONE Cosmos3-Edge (4B) backbone predicts on a fixed FINE grid (4 nm, 400x256x256) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
@@ -869,7 +869,7 @@ model:
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
 
 optimizer:
   lr: 0.0002

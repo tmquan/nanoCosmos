@@ -1,20 +1,18 @@
 # =====================================================================
 # cosmos3nano3d.yaml  --  FLATTENED standalone config
 # =====================================================================
-# Self-contained (NO ``defaults:`` chain).  Based on
-# ``cosmospredict3d.yaml`` (the combine recipe), swapped to the
-# Cosmos-3 Nano (16B) omni-transformer backbone with the 16B-specific
-# overrides applied:
+# Self-contained (NO ``defaults:`` chain).  Flattened Cosmos 3 Nano
+# (16B) recipe:
 #   model.type = cosmos3nano3d, variant = Nano
 #   model.gradient_checkpointing = true   (16B activation memory)
 #   data.batch_size = 2, val_batch_size = 2
 #   training.limit_val_batches = 200
 #   training.compile = false, compile_fullgraph = false  (cudagraphs are
-#       incompatible with the Cosmos-3 forward-hook feature capture)
+#       incompatible with the Cosmos 3 forward-hook feature capture)
 #
-# NOTE: Cosmos-3 Nano's VAE is 16x spatial compression (vs Cosmos-Predict
-# 2.5's 8x), so membranes are blurrier -> expect MORE under-segmentation
-# than the 2B baseline unless paired with a high-res input path.
+# Cosmos 3 Nano's VAE uses 16x spatial compression, which blurs
+# membranes.  Pair it with a high-resolution input when
+# under-segmentation shows up.
 #
 # Run with:
 #   python scripts/train.py --config-name cosmos3nano3d
@@ -265,7 +263,7 @@ model:
   # shifts the latent distribution, so it is a fresh-run setting: a checkpoint
   # trained with the old [0,1] input will not resume cleanly with it on.
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
 
 optimizer:
   lr: 0.0002
@@ -349,7 +347,7 @@ loss:
     # classes per offset; the target is positive-dominated, which biased the
     # head to high affinities everywhere -> MWS under-segmentation.  This
     # matters even more for Nano: its 16x VAE latent blurs membranes, so the
-    # head over-merges more than the 8x 2B baseline.
+    # head over-merges when the input is not already high resolution.
     class_balance: auto
     class_balance_clip: 10.0
     # Add the complementary split-class soft-Dice so boundaries get direct

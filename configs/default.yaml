@@ -7,9 +7,10 @@
 #     └── snemi3d  (Cosmos3Nano3D + SNEMI3D / neurons / MICrONS)
 #           └── combine   (drops SNEMI3D train from train, keeps it in val)
 #
-# Every concrete recipe inherits from this file via ``defaults: [- default]``
-# (or transitively through ``snemi3d`` / ``combine``).  Keys here are the
-# safe, dataset-agnostic defaults; per-recipe tuning lives in the child.
+# ``snemi3d`` and ``combine`` inherit this file.  The joint recipes
+# (``nanocosmos-16B``, ``nanocosmos-4B``, ``nanocosmos-4B-pretrain``) and
+# ``cosmos3nano3d`` are self-contained.  Keys here are the safe,
+# dataset-agnostic defaults; per-recipe tuning lives in the child.
 #
 # To see the exact merged tree for any recipe::
 #
@@ -34,7 +35,7 @@ logger: tensorboard  # Options: tensorboard, wandb
 #   the listed prefixes -- use when the live model has submodules that
 #   should keep their fresh init (e.g. pretrained HF DiT, a newly-added
 #   ControlNet branch).
-#     +ckpt_path_skip_prefixes='[model.dit.,model.controlnet.]'
+#     +ckpt_path_skip_prefixes='[model.dit.]'
 # * ``ckpt_path_only_prefixes`` is the inverse allowlist: keep *only*
 #   keys matching one of the listed prefixes.
 #     +ckpt_path_only_prefixes='[model.feature_projector.,model.decoder_adapter.]'
@@ -74,9 +75,9 @@ data:
 
 # Model configuration
 model:
-  type: cosmos3nano3d  # Options: cosmos3nano3d, cosmospredict3d, vista3d
-  # Backbone variant.  cosmos3nano3d -> "Nano" (16B, the only published
-  # Cosmos 3 generator); cosmospredict3d -> "2B".
+  type: cosmos3nano3d  # Options: cosmos3nano3d, cosmos3edge3d, cosmos3super3d, joint3d, joint3d_edge, joint3d_super
+  # Backbone variant. cosmos3nano3d -> "Nano" (16B). Edge and Super
+  # configs set EDGE / SUPER on their own recipes.
   variant: Nano
   in_channels: 1
   # Affinity + sem + raw head (HEAD_CHANNELS = N_AFF + 2 = 16):
@@ -86,12 +87,12 @@ model:
   head_channels: 16
   feature_size: 64
   dropout: 0.2
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
   # If true, the wrapper will auto-pull pretrained weights from HuggingFace
   # on first instantiation:
-  #   cosmos3nano3d    -> nvidia/Cosmos3-Nano        (16B omni MoT; BF16 only)
-  #   cosmospredict3d  -> nvidia/Cosmos-Predict2.5-2B
-  #   vista3d          -> MONAI/VISTA3D-HF
+  #   cosmos3nano3d    -> nvidia/Cosmos3-Nano   (16B omni MoT; BF16)
+  #   cosmos3edge3d    -> nvidia/Cosmos3-Edge   (4B)
+  #   cosmos3super3d   -> nvidia/Cosmos3-Super  (64B)
   # Downloads are cached under ~/.cache/nanocosmos/.  Set to false to
   # train from scratch.
   # NOTE: cosmos3nano3d needs a bleeding-edge ``diffusers`` (>= 0.37,
@@ -99,8 +100,8 @@ model:
   pretrained: true
 
 # Optimizer configuration
-# Algorithm is hard-coded to AdamW in `BaseCosmosModule.configure_optimizers` /
-# `BaseVistaModule.configure_optimizers`; this block tunes its hyperparameters
+# Algorithm is hard-coded to AdamW in `BaseCosmosModule.configure_optimizers`;
+# this block tunes its hyperparameters
 # and the LR scheduler wrapper (`_maybe_wrap_scheduler` in modules/base.py).
 optimizer:
   lr: 1.0e-3
@@ -176,7 +177,7 @@ training:
   enable_model_summary: true
   deterministic: false
   benchmark: true
-  # torch.compile on the DiT backbone (Cosmos-only; no-op on Vista).
+  # torch.compile on the DiT backbone.
   # false/null = off; true = "reduce-overhead" (~1 min compile);
   # "max-autotune" = best runtime but 5-15 min first compile.
   compile: false

@@ -1,10 +1,9 @@
 """
 Base Lightning module shared by every Nanocosmos training recipe.
 
-All modules in :mod:`nanocosmos.modules` (e.g. ``CosmosPredict3DModule``,
-``Cosmos3NanoModule``, ``Cosmos3EdgeModule``, ``Cosmos3SuperModule``,
-``Vista3DModule``, and the ``Joint*3DModule`` recipes -- a representative,
-non-exhaustive list) run the same training / evaluation loop:
+All modules in :mod:`nanocosmos.modules` (``Cosmos3NanoModule``,
+``Cosmos3EdgeModule``, ``Cosmos3SuperModule``, and the ``Joint*3DModule``
+recipes) run the same training / evaluation loop:
 
 * forward the volume through the wrapper (``self.model``)
 * apply the module's configured loss (``_loss_cls`` -- ``AffinityFGLoss`` for
@@ -142,7 +141,7 @@ class BaseCircuitModule(pl.LightningModule):
         # be stale in a saved checkpoint). Resuming a checkpoint therefore
         # requires the same offset count it was trained with. The shipped
         # last.ckpt used 30 offsets -> head_channels=32; keep loss(.seg).offsets
-        # at 30 entries to load it. See doc/CURRENT_STATE.md (checkpoint rules).
+        # at 30 entries to load it.
         _offsets = self._loss_offsets(loss_config)
         _n_aff = len(_offsets) if _offsets is not None else len(AFFINITY_OFFSETS)
         _head_channels = _n_aff + 2
@@ -190,8 +189,8 @@ class BaseCircuitModule(pl.LightningModule):
         """Instantiate the wrapper.
 
         Default: forward every ``model_config`` entry as kwargs to
-        :attr:`_model_cls`.  Cosmos overrides this to add freeze-schedule
-        + backbone bookkeeping; Vista keeps the default.
+        :attr:`_model_cls`.  Cosmos overrides this to add the freeze
+        schedule and backbone bookkeeping.
         """
         return self._model_cls(**model_config)
 

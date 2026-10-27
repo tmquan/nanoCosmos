@@ -5,9 +5,8 @@ with spatially-coloured (nanocosmos-style) instance segmentation targets.
 Provides:
 - MONAI-compatible dataset classes with a standardised interface
 - Preprocessors for common data formats (TIFF, HDF5, NRRD, NIfTI)
-- Cosmos model wrappers (DiT + VAE backbone) for volumetric
-  segmentation -- Cosmos-Predict 2.5 (2B) and Cosmos3-Nano (16B) are the
-  default backbones, with a Vista3D reference
+- Cosmos 3 model wrappers (DiT + VAE backbone) for volumetric
+  segmentation. Nano (16B), Edge (4B), and Super (64B) are the backbones.
 - An affinity + foreground head supervised by ``AffinityFGLoss`` and
   agglomerated into instances at eval/inference by the Mutex Watershed
   (``nanocosmos.inference.mutex_watershed``).
@@ -52,17 +51,16 @@ from nanocosmos.datamodules import (
 from nanocosmos.losses import AffinityFGLoss, HEAD_CHANNELS, HEAD_LAYOUT, slice_head
 from nanocosmos.models import (
     BaseModel,
+    Cosmos3EdgeWrapper,
     Cosmos3Nano3DWrapper,
-    CosmosPredict3DWrapper,
-    Vista3DWrapper,
+    Cosmos3SuperWrapper,
 )
 from nanocosmos.modules import (
     BaseCircuitModule,
     BaseCosmosModule,
-    BaseVistaModule,
+    Cosmos3EdgeModule,
     Cosmos3Nano3DModule,
-    CosmosPredict3DModule,
-    Vista3DModule,
+    Cosmos3SuperModule,
 )
 
 __all__ = [
@@ -95,13 +93,12 @@ __all__ = [
     # Models (backbone wrappers)
     "BaseModel",
     "Cosmos3Nano3DWrapper",
-    "CosmosPredict3DWrapper",
-    "Vista3DWrapper",
+    "Cosmos3EdgeWrapper",
+    "Cosmos3SuperWrapper",
     # Modules (Lightning)
     "BaseCircuitModule",
     "BaseCosmosModule",
     "Cosmos3Nano3DModule",
-    "CosmosPredict3DModule",
-    "BaseVistaModule",
-    "Vista3DModule",
+    "Cosmos3EdgeModule",
+    "Cosmos3SuperModule",
 ]

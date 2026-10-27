@@ -1,11 +1,8 @@
-"""Shared variant-config dataclass for the Cosmos 2.5 family.
+"""Shared variant-config dataclass for the Cosmos 3 wrappers.
 
-Each concrete backbone (Transfer / Predict) keeps its own
-``_VARIANT_CONFIGS`` registry under its package, but the row dataclass
-is defined here so the shared :class:`_BaseCosmos25Wrapper` can stay
-agnostic of which family it's serving.  Backbone-specific extensions
-(e.g. Transfer's ``hf_revision_controlnet``) extend this dataclass
-in their own ``variants.py``.
+Each tier (Nano, Edge, Super) keeps its own ``_VARIANT_CONFIGS``
+registry.  The row dataclass lives here so
+:class:`_BaseCosmos25Wrapper` stays agnostic of which tier it serves.
 """
 
 from dataclasses import dataclass
@@ -14,7 +11,7 @@ from typing import Optional
 
 @dataclass
 class _VariantConfigBase:
-    """Architecture and download metadata common to every Cosmos 2.5 variant."""
+    """Architecture and download metadata common to every Cosmos 3 tier."""
 
     hf_repo_id: Optional[str]
     hf_revision: Optional[str]

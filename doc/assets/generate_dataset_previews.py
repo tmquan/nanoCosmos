@@ -102,7 +102,7 @@ def _save_sft(em: np.ndarray, labels: np.ndarray, title: str, out: Path) -> None
 REPRESENTATIVE: Dict[Tuple[str, str, str, str], Tuple[str, str, Optional[str]]] = {
     # Baked to true 4 nm cubic (scripts/resample_cosem_isotropic.py) -- see
     # doc/DATASETS.md#cosem3d-baked-to-true-4-nm-cubic-jul-2026. Stems updated
-    # to match the files nanocosmos-2B.yaml / -4B.yaml now actually reference.
+    # to match the files nanocosmos-4B.yaml / nanocosmos-16B.yaml reference.
     ("COSEM3D", "jrc_hela-3", "SSL", "Train"): ("data/COSEM3D", "jrc_hela-3_4nm_x4096_y0_z2048", None),
     ("COSEM3D", "jrc_hela-3", "SSL", "Test"): ("data/COSEM3D", "jrc_hela-3_4nm_x6144_y0_z0", None),
     ("COSEM3D", "jrc_macrophage-2", "SSL", "Train"): ("data/COSEM3D", "jrc_macrophage-2_4nm_x4096_y0_z4096", None),

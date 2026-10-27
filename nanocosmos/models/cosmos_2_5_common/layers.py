@@ -1,9 +1,7 @@
-"""Shared primitive layers for the Cosmos 2.5 wrappers.
+"""Shared primitive layers for the Cosmos 3 wrappers.
 
-Used by :mod:`nanocosmos.models.cosmos_predict_2_5` (base DiT). Kept
-dependency-light so every other submodule in the package can import
-from here without pulling in the heavyweight diffusers / VAE classes
-required by the wrappers.
+Kept dependency-light so the rest of this package can import them
+without pulling in diffusers.
 """
 
 import torch

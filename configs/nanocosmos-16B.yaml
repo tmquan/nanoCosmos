@@ -5,7 +5,7 @@
 # but the backbone is Cosmos-3 Nano (variant Nano) instead of Cosmos3-Edge
 # (4B).  Memory knobs stay smaller than Edge (patch_size 200, batch_size 1).
 #
-# The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md + doc/JOINT_TRAINING.md):
+# The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md):
 # ONE Cosmos-3 Nano backbone predicts on a fixed FINE grid (4 nm) a
 # single head that is the reconstructed fine EM (raw) AND the fine-grid
 # segmentation (aff + sem).  EVERY supervision term pools the fine prediction
@@ -836,7 +836,7 @@ model:
   freeze_vae_decoder: true
   gradient_checkpointing: true
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
 
 optimizer:
   lr: 0.0002                # Cosmos 3 generator SFT base LR (2e-4)

@@ -48,12 +48,10 @@
 #     +ckpt_path=<run_dir>/checkpoints/last.ckpt
 #
 # Cross-architecture warm start.  When the saved ``last.ckpt`` was
-# trained with a different backbone (e.g. a Cosmos 2.5 Predict/Transfer
-# run, whose ``model.dit.*`` is a different transformer entirely, or a
-# Transfer run carrying a ``model.controlnet.*`` branch this wrapper
-# does not have), or when you want to wipe a co-adapted transformer and
-# fall back to the freshly-pulled HF base, add the skip list on the
-# CLI::
+# trained with a different backbone (``model.dit.*`` from another tier
+# or an older checkpoint), or when you want to wipe a co-adapted
+# transformer and fall back to the freshly-pulled HF base, add the
+# skip list on the CLI::
 #
 #   python scripts/train.py --config-name snemi3d \
 #     +ckpt_path=<run_dir>/checkpoints/last.ckpt \
@@ -83,23 +81,18 @@ output_dir: outputs
 # any key only present in the ckpt is logged as unexpected and
 # dropped.
 #
-# This default assumes a **same-architecture** warm start (current
-# Cosmos-Predict 2.5 wrapper on both sides), where the saved
-# ``model.dit.*`` has already been trained on this data by
-# ``freeze_dit_backbone: N`` (see ``model.freeze_dit_backbone`` below)
-# and is therefore *more* useful than the fresh HF base.
+# This default assumes a **same-architecture** warm start (the same
+# Cosmos 3 tier on both sides), where the saved ``model.dit.*`` has
+# already been trained on this data and is therefore *more* useful
+# than the fresh HF base.
 #
-# For a **cross-architecture** warm start (e.g. migrating from the
-# older Cosmos-Transfer wrapper, which carried a ``model.controlnet.*``
-# branch this Predict wrapper does not) or any other case where you
-# want the freshly-pulled HF base DiT to win over the ckpt's DiT,
+# For a **cross-architecture** warm start, or any case where you want
+# the freshly-pulled HF DiT to win over the checkpoint's DiT,
 # pass the skip list on the CLI::
 #
 #   +ckpt_path_skip_prefixes=[model.dit.]
 #
-# (The argument can list multiple prefixes; ControlNet migrations also
-# typically want ``model.controlnet.`` skipped if the source ckpt has
-# it.)
+# The argument can list multiple prefixes.
 # ---------------------------------------------------------------------
 ckpt_path_skip_prefixes: []
 
@@ -331,7 +324,7 @@ model:
   # the latent distribution -> fresh-run setting (old [0,1] checkpoints will
   # not resume cleanly with it on).
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode; see GOTCHAS #48
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
 
   # What to freeze.  Cosmos 3 has no ControlNet residual branch to
   # absorb the trainable load, so leaving the omni transformer
@@ -384,10 +377,8 @@ model:
   # hook-aware (recompute in backward is gated by ``_hooks_active``) and
   # is used *instead of* FSDP ``activation_checkpointing_policy`` to
   # avoid double-wrapping the same layers.
-  # Disabled for speed (saves the ~20-30% recompute tax).  The 2B
-  # Cosmos-Predict DiT fits comfortably under DDP at this batch size, so
-  # activation checkpointing is not needed here.  If you later OOM (e.g.
-  # bigger crops / batch), flip back to ``true`` or lower ``data.batch_size``.
+  # On for the 16B Nano DiT. If a smaller Edge run OOMs or is slow,
+  # this is the knob (or lower ``data.batch_size``).
   gradient_checkpointing: true
   dropout: 0.0
 
@@ -437,13 +428,11 @@ training:
   # decoder-layer class, keeps the small fp32-origin heads / VAE in the
   # unsharded root unit, and uses ``use_orig_params=True`` so the
   # ``model.dit.*`` vs heads optimiser split still works.
-  # DDP replicates the 2B Cosmos-Predict DiT per rank (~fits on 80 GB at
-  # this batch size); FSDP is only needed for the 16B Cosmos3 backbone.
+  # DDP replicates the Cosmos 3 Nano DiT on every rank. Switch to
+  # ``fsdp`` when that replication does not fit (see the note above).
   strategy: ddp
-  # ``bf16-true`` here: this recipe's Cosmos-3 Nano backbone is natively bf16,
-  # so full-bf16 params avoid the fp32 master-weight overhead (used under DDP
-  # here, or FSDP for the 16B).  ``bf16-mixed`` (fp32 params + an outer bf16
-  # autocast over the step) is the safer choice for the 2B Cosmos-Predict DiT.
+  # ``bf16-true``: Cosmos 3 Nano is natively bf16, so full-bf16 params
+  # avoid an fp32 master-weight copy.
   precision: bf16-true
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
@@ -474,16 +463,10 @@ training:
   # escape because the hook runs *inside* the captured graph.  Cudagraphs
   # are fundamentally incompatible with hook-based intermediate capture,
   # so use "default" if you want Inductor fusion (no cudagraphs), else
-  # false.  (The Cosmos-2.5 backbones tolerated "reduce-overhead" only
-  # because their captured tensors happened not to be cudagraph-managed.)
-  #
-  # Enabled for the Cosmos-Predict 2.5 (2B) backbone: as the note above
-  # records, the Cosmos-2.5 backbones tolerate "reduce-overhead"
-  # cudagraphs (their hook-captured tensors are not cudagraph-managed),
-  # unlike cosmos3nano3d which MUST stay false/"default".
+  # false.
   compile: false
   # compile_fullgraph=true forces a single monolithic Inductor compile
-  # of the 2B DiT (no graph breaks), which gives the best steady-state
+  # of the DiT (no graph breaks), which gives the best steady-state
   # runtime but pays for it with a multi-minute first-step stall.
   # Under DDP that stall is synchronous across ranks, and combined
   # with the cold-train-loader first batch it can overshoot

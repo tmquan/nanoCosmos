@@ -35,7 +35,6 @@ from einops import rearrange
 from nanocosmos.losses import SSL, Joint3DReconSegLoss
 from nanocosmos.models.cosmos_3_edge import Cosmos3EdgeWrapper
 from nanocosmos.models.cosmos_3_super import Cosmos3SuperWrapper
-from nanocosmos.models.cosmos_predict_2_5 import CosmosPredict3DWrapper
 from nanocosmos.modules.cosmos_3_nano.module import Cosmos3Nano3DModule
 
 
@@ -133,21 +132,6 @@ class Joint3DModule(Cosmos3Nano3DModule):
         self._accumulate_instance_metrics(pooled, targets, prefix, bs)
 
 
-class JointPredict3DModule(Joint3DModule):
-    """Cosmos-Predict 2.5 (**2B**) backbone trained with the joint recon + seg loss.
-
-    Identical recipe to :class:`Joint3DModule` -- the ssl + sft round-robin,
-    :class:`~nanocosmos.losses.Joint3DReconSegLoss`, and the small-voxel ->
-    native-grid pooling are all inherited verbatim.  The only difference is
-    the backbone: the 2B Cosmos-Predict DiT (8x spatial / 4x temporal VAE)
-    in place of the 16B Cosmos-3 Nano (16x spatial).  Both wrappers subclass
-    ``_BaseCosmos25Wrapper`` and run on the shared ``BaseCosmosModule``
-    training/eval loop, so swapping ``_model_cls`` is the only change needed.
-    """
-
-    _model_cls = CosmosPredict3DWrapper
-
-
 class JointEdge3DModule(Joint3DModule):
     """Cosmos3-**Edge** (4B) backbone trained with the joint recon + seg loss.
 
@@ -170,7 +154,6 @@ class JointSuper3DModule(Joint3DModule):
 
 __all__ = [
     "Joint3DModule",
-    "JointPredict3DModule",
     "JointEdge3DModule",
     "JointSuper3DModule",
 ]

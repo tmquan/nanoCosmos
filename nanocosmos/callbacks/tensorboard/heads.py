@@ -177,8 +177,7 @@ def _log_predictions(
     if wan_decoder_2d is not None:
         # Collapse the VAE reconstruction to a single grayscale channel
         # BEFORE normalising so the panel looks identical regardless of the
-        # backbone VAE's ``conv_out`` width (Cosmos-Predict decodes to
-        # 3-channel RGB, Cosmos-3's residual VAE to a different width).  EM
+        # backbone VAE's ``conv_out`` width.  EM
         # is grayscale, so the channel-mean is the faithful display and also
         # drops the misleading per-channel colour cast (the reddish tint the
         # 3-channel Wan decoder otherwise shows).  Repeat back to 3 channels
