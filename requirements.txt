@@ -3,7 +3,7 @@
 # Role of this file
 # -----------------
 # This is the *frozen* version of every package needed to reproduce the
-# CUDA-13.2 / Python-3.13 development environment.  It bundles together
+# CUDA-13.4 / Python-3.13 development environment.  It bundles together
 # the core runtime, the Cosmos backbone, the GPU (RAPIDS) extras, the
 # download-script helpers, the optional visualizer, AND the dev/test
 # tooling -- in other words, every ``[project.optional-dependencies]``
@@ -21,22 +21,19 @@
 # versions on top of that.
 
 # Core deep learning
-# Rubin (sm_107) / driver 620.53 / CUDA 13.2.  The stable cu132 torch 2.13
-# wheel has no sm_107 kernels (its arch list stops at sm_100 / sm_120) and
-# NVRTC rejects ``sm_107``.  This nightly is the build verified on this
-# node: BF16 GEMM and FlashAttention run.  Do not pin the
-# stable 2.13 wheel back in.  cuDNN / NCCL come from this torch build
-# (nvidia-cudnn-cu13==9.24.0.43, nvidia-nccl-cu13==2.30.7); do not bump
-# them independently.
---extra-index-url https://download.pytorch.org/whl/nightly/cu132
-torch==2.14.0.dev20260713+cu132
-torchvision==0.29.0.dev20260714+cu132
-pytorch-lightning==2.6.5
+# B300 (sm_103) / driver 595.71.05 / CUDA 13.4.  Newest matched cu134
+# nightly (2026-10-27): torch 2.16.0.dev and torchvision 0.30.0.dev.
+# cuDNN and NCCL come from this torch wheel; do not bump them
+# independently of the pin.
+--extra-index-url https://download.pytorch.org/whl/nightly/cu134
+torch==2.16.0.dev20261027+cu134
+torchvision==0.30.0.dev20261027+cu134
+pytorch-lightning==2.6.6
 # torchmetrics is not imported directly by nanocosmos, but it is a hard
 # transitive dependency of pytorch-lightning; pinned here so the frozen
 # lockfile reproduces the exact installed version.
 torchmetrics==1.9.0
-monai==1.6.0
+monai==1.6.1
 einops==0.8.2
 
 # GPU acceleration (CUDA 13 wheels on NVIDIA's index).
@@ -47,74 +44,72 @@ einops==0.8.2
 #   - cupy / cucim-backed EDT / Gaussian / connected components in
 #     ``nanocosmos.transforms`` (optional; scipy / skimage CPU fallback).
 # cupy-cuda13x works across the whole CUDA 13.x series (via cuda-pathfinder),
-# so the same wheel is valid on the 13.2 runtime.
+# so the same wheel is valid on the 13.4 runtime.
 #
 # NOTE: install with `pip`, not `uv pip`.  cupy-cuda13x pins
 # cuda-pathfinder which uv treats as a pre-release request and refuses by
 # default.  If you must use uv, pass
 # `--prerelease=allow --index-strategy unsafe-best-match`.
 --extra-index-url https://pypi.nvidia.com
-cupy-cuda13x==14.1.1
+cupy-cuda13x==14.2.0
 
 # Configuration
-hydra-core==1.3.4
+hydra-core==1.3.8
+# hydra-core 1.3.8 requires omegaconf<2.4.
 omegaconf==2.3.1
 
 # Data formats
 h5py==3.16.0
-tifffile==2026.7.14
+tifffile==2026.10.15
 pynrrd==1.1.3
 nibabel==5.4.2
-pillow==12.3.0
-cloud-volume==12.14.1
+pillow==13.0.0
+cloud-volume==12.15.2
 
 # Scientific computing
-numpy==2.5.1
-scipy==1.18.0
-scikit-learn==1.9.0
+numpy==2.5.4
+scipy==1.18.1
+scikit-learn==1.9.1
 scikit-image==0.26.0
 
 # Experiment tracking
-wandb==0.28.1
+wandb==0.31.0
 tensorboard==2.21.0
 
 # Visualization
-matplotlib==3.11.1
+matplotlib==3.11.2
 
 # Optional visualizer (``nanocosmos.visualizer``) -- FastAPI + WebGL QA
 # viewer, not on the training/inference path.
-fastapi==0.139.2
-uvicorn==0.51.0
-pydantic==2.14.0a1
+fastapi==0.162.0
+uvicorn==0.54.0
+pydantic==2.14.1
 
-# Cosmos backbones (Cosmos 2.5 Predict + Cosmos 3 Nano/Edge)
+# Cosmos 3 backbones (Nano 16B, Edge 4B, Super 64B).
 #
-# Pinned to the exact resolved diffusers commit (0.40.0.dev0).  This build
-# ships ``Cosmos3OmniTransformer`` AND reads Cosmos3-Edge's config flags
-# (``hidden_act: relu2`` / ``qk_norm_for_text: false``), so the released
-# ``nvidia/Cosmos3-Edge`` checkpoint now loads DIRECTLY with no missing keys
-# -- the Nano "fill_missing_from_parent" step becomes a no-op (see
-# nanocosmos/models/cosmos_3_edge/variants.py).  Changing the diffusers /
-# transformers / safetensors versions can change how HF weights deserialize
-# via ``from_pretrained``; re-verify pretrained-weight loading after any bump.
-# Re-pin to a tagged release once one exposes ``Cosmos3OmniTransformer``.
-diffusers @ git+https://github.com/huggingface/diffusers.git@9f6fc2c13610ead670cbac6dbf974b2a24a9e69b
+# diffusers 0.42.1 ships ``Cosmos3OmniTransformer`` and reads Cosmos3-Edge's
+# config flags (``hidden_act: relu2`` / ``qk_norm_for_text: false``), so the
+# released ``nvidia/Cosmos3-Edge`` checkpoint loads directly (see
+# nanocosmos/models/cosmos_3_edge/variants.py).  Changing diffusers /
+# transformers / safetensors can change how HF weights deserialize via
+# ``from_pretrained``; re-verify pretrained-weight loading after any bump.
+diffusers==0.42.1
 # Cosmos 3 is an omni model: the pipeline pulls a Qwen3-VL vision encoder +
 # Qwen2 tokenizer from transformers, so it is a hard dependency.
 # transformers and accelerate are NOT imported directly by the package; they
 # are pulled in transitively by diffusers.  Pinned to the resolved versions.
-transformers==5.14.1
-huggingface_hub==1.24.0
+transformers==5.21.0
+huggingface_hub==2.3.0
 safetensors==0.8.0
-accelerate==1.14.0
+accelerate==1.15.0
 
 # HTTP / networking
-charset-normalizer==3.4.9
-chardet==7.4.3
+charset-normalizer==3.5.2
+chardet==7.7.0
 
 # Utilities
 rich==15.0.0
-tqdm==4.69.0
+tqdm==4.70.1
 
 # Dev / testing
 pytest==9.1.1

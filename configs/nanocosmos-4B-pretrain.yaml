@@ -18,12 +18,13 @@
 # because no sft batch is ever drawn.  To turn segmentation back on, restore
 # the ``sft`` branch and labeled ``val_volumes`` from nanocosmos-4B.yaml.
 #
-# Runtime: 8x Rubin (sm_107), driver 620.53, CUDA 13.2.  Weights and the
-# Lightning precision are BF16 (``dtype: bf16``, ``precision: bf16-true``).
-# ``compile`` stays off (activation checkpointing).  Volume roots
-# are absolute under ``/home/nvidia/data``.  Library pin is
-# ``requirements.txt``: torch 2.14.0.dev20260713+cu132 and diffusers
-# @ 9f6fc2c (the build that reads Edge ``hidden_act: relu2``).
+# Runtime: 8x NVIDIA B300 SXM6 (sm_103), driver 595.71.05, CUDA 13.4.
+# Weights and the Lightning precision are BF16 (``dtype: bf16``,
+# ``precision: bf16-true``).  ``compile`` stays off (activation
+# checkpointing).  Volume roots resolve to ``$HOME/data`` and runs write
+# under ``$HOME/outputs``.  Library pin is ``requirements.txt``:
+# torch 2.16.0.dev20261027+cu134 and diffusers 0.42.1 (the release that
+# reads Edge ``hidden_act: relu2`` and ``qk_norm_for_text: false``).
 # =====================================================================
 
 experiment_name: nanocosmos-4B-pretrain
@@ -36,18 +37,23 @@ ckpt_path_only_prefixes: null
 
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
-  # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
-  # 400 x 256 x 256 @ 4 nm = 1.6 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
-  # super-resolution axis).  Cosmos3-Edge shares Nano's Wan2.2 VAE (4x in z, 16x
-  # in xy) plus the latent_patch_size 2->1 repatch, so the DiT token grid is the
-  # full latent grid (400/4, 256/16, 256/16) = (100, 16, 16) = 25,600 tokens --
-  # 2x the 16B recipe's z-depth (200 -> 50) because this patch is z=400 vs 200.
-  # Edge trims transformer depth/width (not the VAE/token grid) and has ~4x fewer
-  # params than Nano, which is why it can afford the deeper patch; but self-
-  # attention is quadratic in token count, so drop the patch (e.g. 200x256x256,
-  # matching 16B, or 160x256x256) if it OOMs.
-  patch_size: [400, 256, 256]
+  # Fixed FINE network grid: 4 nm cubic voxel.  patch_size is (z, y, x).
+  # 400^3 @ 4 nm is a 1.6 um cube.  Wan2.2 VAE is 4x in z and 16x in xy;
+  # latent_patch_size 2->1 leaves the DiT on the latent grid
+  # (100, 25, 25) = 62,500 tokens (Edge max_sequence_length 131072).
+  patch_size: [256, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
+  # Train-only random permutation of z, y, x.  The FOV is cubic, so each of
+  # the 6 axis orders (identity included) is a pure reorientation: the crop,
+  # the native voxel sizes, and the text prompt's z/y/x nm move together.
+  # The finest native axis -- the highest-resolution dimension (xy on
+  # anisotropic ssTEM / SBEM, any axis on isotropic FIB-SEM) -- therefore
+  # lands on network z, y, or x equally often.  Section degradation stays
+  # glued to the native section axis as that axis moves.  Validation stays
+  # in the stored axis order.  Anisotropic groups (CREMI, SNEMI3D, Mossy/Pyra)
+  # train at batch size 1, because a permutation changes the recon shape.
+  # Isotropic groups keep the branch batch size.
+  rand_transpose_zyx: true
   # No resolution jitter.  Each volume is resampled onto this 4 nm grid;
   # the raw head is pooled back to the recon target (max(native, 4 nm)).
   num_workers: 8
@@ -134,68 +140,68 @@ data:
       # FOV and skip the image resample -- these are genuinely-resampled files, so
       # native_resolution: [4,4,4] is now truthful, not a pseudo/declared value.
       - vol: jrc_hela-3_4nm_x4096_y0_z2048_volume   # autocorr 0.72
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x6144_y0_z2048_volume   # autocorr 0.63
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x4096_y0_z0_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x4096_y0_z4096_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x2048_y0_z4096_volume   # autocorr 0.75
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_macrophage-2_4nm_x4096_y0_z4096_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_jurkat-1_4nm_x4096_y0_z0_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_jurkat-1_4nm_x4096_y0_z4096_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
       # 4 train crops per source (1 more held out per source in val_volumes);
       # all verified non-empty (empty corner tiles dropped).
       - vol: flyem3d_8nm_ssl_x2700_y2700_z3500_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_8nm_ssl_x3000_y3000_z5000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # --- Hemibrain 8 nm neuropil, image-only ---
       - vol: flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x16000_y30000_z36000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x20000_y20000_z20000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x24000_y24000_z24000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # --- MaleCNS 8 nm neuropil, image-only ---
       - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # x20000_y20000_z20000 REMOVED: audited autocorr ~0.45 (borderline
@@ -203,15 +209,15 @@ data:
       # verified-structured tile (autocorr 0.94) found via
       # scripts/collect_meaningful_crops.py.
       - vol: flyem3d_malecns_8nm_ssl_x18000_y18000_z30000_volume   # autocorr 0.94
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # --- CREMI 40x4x4 PADDED test volumes, IMAGE-ONLY (no public labels) ---
@@ -223,20 +229,20 @@ data:
       # offset (z=37, y=911, x=911) inside the padded one, identically for all
       # three samples -- see doc/DATASETS.md#cremi-padded-vs-cropped-test-volumes.
       - vol: cremi3d_sample_A+_padded_volume
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
       - vol: cremi3d_sample_B+_padded_volume
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
       - vol: cremi3d_sample_C+_padded_volume
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
       # --- SNEMI3D test volume, IMAGE-ONLY (labels never publicly released) ---
       - vol: test_inputs
-        root: /home/nvidia/data/SNEMI3D
+        root: ${oc.env:HOME}/data/SNEMI3D
         native_resolution: [30, 6, 6]
         imaging: ssSEM
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
@@ -248,19 +254,19 @@ data:
       # 16 nm, NOT what convert_mitoem2.py would auto-derive from the header.
       # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
       - vol: mitoem2_beta_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_beta_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_beta_train03_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_beta_train04_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       # jurkat_train01 / macro_train01 RESTORED: an older doc note said these
@@ -268,11 +274,11 @@ data:
       # release they are genuine, good EM (autocorr 0.79 / 0.59) -- whatever
       # was wrong with them upstream previously appears to have been fixed.
       - vol: mitoem2_jurkat_train01_volume   # autocorr 0.79
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_macro_train01_volume   # autocorr 0.59
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       # mitoem2_jurkat_train02 / mitoem2_macro_train02 REMOVED: audited as pure
@@ -286,100 +292,100 @@ data:
       # fails ssl_min_autocorr (~0.0 vs ~0.6-0.9 for real EM); see
       # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
       - vol: mitoem2_podo_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_podo_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_sperm_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_sperm_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       # 8 nm xy / 30 nm z: Mossy/Pyra/Stem
       - vol: mitoem2_mossy_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_mossy_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_mossy_train03_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train03_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train04_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train05_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train06_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train07_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train08_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train09_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train10_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train11_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train12_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train13_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train14_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train15_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train16_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train17_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       # mitoem2_stem_train01 / mitoem2_stem_train02 REMOVED: audited as
@@ -396,7 +402,7 @@ data:
   # Validation: ssl holdouts only (image-only recon; no labeled sft).
   val_volumes:
   - vol: jrc_hela-3_4nm_x6144_y0_z0_volume   # autocorr 0.75
-    root: /home/nvidia/data/COSEM3D
+    root: ${oc.env:HOME}/data/COSEM3D
     task: ssl
     native_resolution: [4, 4, 4]
     imaging: FIB-SEM
@@ -404,79 +410,79 @@ data:
   # cached norm range (severe under-calibration on top of resin/noise).
   # Replaced with a verified-structured tile (autocorr 0.85).
   - vol: jrc_macrophage-2_4nm_x2048_y0_z4096_volume   # autocorr 0.85
-    root: /home/nvidia/data/COSEM3D
+    root: ${oc.env:HOME}/data/COSEM3D
     task: ssl
     native_resolution: [4, 4, 4]
     imaging: FIB-SEM
   - vol: jrc_jurkat-1_4nm_x0_y0_z2048_volume   # autocorr 0.84
-    root: /home/nvidia/data/COSEM3D
+    root: ${oc.env:HOME}/data/COSEM3D
     task: ssl
     native_resolution: [4, 4, 4]
     imaging: FIB-SEM
   # FLYEM3D: 1 ssl holdout per source (fib25-surround / hemibrain / malecns), non-empty.
   - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
-    root: /home/nvidia/data/FLYEM3D
+    root: ${oc.env:HOME}/data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
   - vol: flyem3d_hemibrain_8nm_ssl_x16000_y16000_z16000_volume
-    root: /home/nvidia/data/FLYEM3D
+    root: ${oc.env:HOME}/data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
   - vol: flyem3d_malecns_8nm_ssl_x16000_y20000_z24000_volume
-    root: /home/nvidia/data/FLYEM3D
+    root: ${oc.env:HOME}/data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
   # --- MitoEM2 imagesTs holdout (image-only recon validation) ---
   - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_beta_test02_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_beta_test03_volume   # NEW
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_jurkat_test01_volume   # NEW -- autocorr 0.79
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_macro_test01_volume   # NEW -- autocorr 0.72
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_podo_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_sperm_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_mossy_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
     imaging: FIB-SEM
   - vol: mitoem2_mossy_test02_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
     imaging: FIB-SEM
   - vol: mitoem2_pyra_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
     imaging: FIB-SEM
@@ -486,7 +492,7 @@ data:
   # replace it with, and no train counterpart left to pair it with anyway.
 
 model:
-  type: joint3d_edge     # -> JointEdge3DModule (Cosmos3-Edge ~4B backbone, direct-loaded + Nano-filled gaps, + Joint3DReconSegLoss)
+  type: joint3d_edge     # -> JointEdge3DModule (Cosmos3-Edge ~4B backbone, direct-loaded, + Joint3DReconSegLoss)
   variant: EDGE
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
@@ -494,41 +500,39 @@ model:
   dropout: 0.0                 # no dropout anywhere in the Cosmos3 model (matches 16B)
   pretrained: true
   dtype: bf16                  # weight dtype; paired with training.precision bf16-true
+  # VAE encoder stays frozen.  VAE decoder stays frozen except its last
+  # up-block and output norm (kept trainable by ``_freeze_body`` in
+  # ``nanocosmos/models/cosmos_2_5_common/decoder.py``).  The AR reasoner
+  # stays frozen (embed_tokens, AR MLP, AR norms, lm_head, and the AR half
+  # of packed attention).  ``freeze_dit_backbone: false`` trains the DiT
+  # generation half from epoch 0.  An integer N would freeze the whole DiT
+  # for epochs 0..N-1 and then thaw it, still holding the reasoner out.
+  # The EM feature projector and task head train at optimizer.lr.
   freeze_vae_encoder: true
-  # Cosmos 3 MoT warm-up.  ``freeze_dit_backbone`` freezes/thaws the WHOLE
-  # DiT on a schedule (independent of freeze_understanding_ffn below):
-  #   epochs 0..4 : the WHOLE DiT is frozen (cheap warm-up, as usual).
-  #   epoch 5+    : thaws the whole DiT (subject to the permanent
-  #                 understanding-FFN hold-out below).
-  #   false -> whole DiT trains from epoch 0 (no warm-up freeze at all).
-  #   true  -> whole DiT frozen for the entire run (no thaw).
-  freeze_dit_backbone: false
-  # Understanding (text) pathway hold-outs, INDEPENDENT of the
-  # freeze_dit_backbone schedule.  The Cosmos3 MoT has SEPARATE weights per
-  # stream and the text stream is causal + vision-independent, so freezing it
-  # does NOT touch the vision stream.
-  #   freeze_understanding_ffn:    freeze only mlp.* (~36% of the DiT).
-  #   freeze_understanding_stream: freeze the WHOLE text encoder -- embed_tokens
-  #                                + understanding attn (to_q/k/v/out, norm_q/k)
-  #                                + understanding norms + mlp.* (SUPERSET; when
-  #                                true the ffn flag is redundant).
-  # We freeze the whole stream: with a fixed tiny prompt vocabulary the prompt
-  # still conditions fully because the generation (vision) stream keeps training
-  # and learns to attend to the now-static text keys/values (a standard frozen
-  # text encoder).  This also reclaims the text encoder's optimizer/grad memory
-  # (notably the large embed_tokens table).  Flip both to false only for
-  # richer/free-form captions or when memory is ample.
-  freeze_understanding_ffn: false
-  freeze_understanding_stream: true
   freeze_vae_decoder: true
-  # BF16 keeps the full DiT activation in memory, so both the DiT and the
-  # per-frame Wan VAE decode are recomputed.  Checkpointing is incompatible
-  # with torch.compile tracing the checkpoint HOP.
+  freeze_dit_backbone: false
+  freeze_understanding_stream: true
+  # Redundant while freeze_understanding_stream is true (that freeze already
+  # covers mlp.*).  Left on so the AR MLP cannot train if the stream flag
+  # is turned off by itself.
+  freeze_understanding_ffn: true
+  # Packed attention (self_attn) is joint only in the softmax: DiT queries
+  # attend to cat(AR keys/values, DiT keys/values).  There is no shared
+  # projection.  The AR half (to_q/k/v/out, norm_q/k) stays frozen with the
+  # reasoner.  The DiT half (add_q/k/v_proj, to_add_out, norm_added_q/k)
+  # TRAINS.  That is the EM loss path, and proj_in was repatched from
+  # latent patch 2 to 1, so the video attention must adapt to the 4 nm grid.
+  # Freezing the DiT half would pin natural-video attention on EM tokens.
+  # Recompute the DiT and the Wan decoder body.  The body is on the loss
+  # path (DiT features -> to_latent -> decoder body -> task head).  The
+  # frozen original conv_out is only the TensorBoard pred/wan_decoder
+  # diagnostic.  Checkpointing is incompatible with torch.compile tracing
+  # the checkpoint HOP.
   gradient_checkpointing: 
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
+  vae_symmetrize_z: false  # non-causal z: avg(forward, z-flipped) encode and decoder body
 
 optimizer:
   lr: 0.0002
@@ -676,12 +680,15 @@ callbacks:
     enabled: true
     every_n_epochs: 1
     max_images: 8
+    # Joint logger: orthogonal mid-planes (xy, xz, yz) of the source and the
+    # recon target, on the 4 nm grid, including after sanity validation.
+    # A coarser target is upsampled.
   cuda_empty_cache_before_val: true
   memory_logger:
     enabled: true
     log_every_n_steps: null
 
-output_dir: outputs
+output_dir: ${oc.env:HOME}/outputs
 
 hydra:
   job:

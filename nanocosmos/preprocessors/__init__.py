@@ -26,9 +26,9 @@ Optional overrides
 
 Extending this module
 ---------------------
-Add a new ``<format>.py`` module that subclasses :class:`BasePreprocessor`,
-register it in ``__init__.py``, and update ``utils/io.py`` if you want
-:func:`nanocosmos.utils.load_volume` to dispatch to it by suffix.
+Add a new ``<format>.py`` module that subclasses :class:`BasePreprocessor`
+and register it in ``__init__.py``.  :func:`nanocosmos.utils.io.load_volume`
+is a separate suffix dispatch with its own handlers.
 """
 
 from nanocosmos.preprocessors.base import BasePreprocessor

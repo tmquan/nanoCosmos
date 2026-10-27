@@ -59,9 +59,10 @@ data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 200 x 256 x 256 @ 4 nm; z-heavy (super-resolution axis).  Cosmos-3 Wan VAE
-  # compresses 4x in z, 16x in xy -> DiT token grid (50, 16, 16) = 12,800 tokens
-  # (same grid as Edge/4B). Nano is memory-heavier: keep patch/batch smaller than
-  # nanocosmos-4B. Drop further (e.g. 160x256x256) if it OOMs.
+  # compresses 4x in z, 16x in xy -> DiT token grid (50, 16, 16) = 12,800 tokens.
+  # xy matches nanocosmos-4B (16 x 16); z is 50 because this patch is z=200
+  # (that recipe is z=400 -> 100). Nano is memory-heavier: keep patch/batch
+  # smaller than nanocosmos-4B. Drop further (e.g. 160x256x256) if it OOMs.
   patch_size: [200, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # No resolution jitter (clean recipe); the only resampling is the per-volume
@@ -836,7 +837,7 @@ model:
   freeze_vae_decoder: true
   gradient_checkpointing: true
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
 
 optimizer:
   lr: 0.0002                # Cosmos 3 generator SFT base LR (2e-4)
@@ -864,7 +865,7 @@ loss:
   weight_rec: 1.0
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency). The SSL recon
-  # branch is weighted 10x the SFT seg branch (matches the shipped checkpoint).
+  # branch is weighted 5x the SFT seg branch (weight_ssl / weight_sft).
   weight_ssl: 5.0
   weight_sft: 1.0
   seg:

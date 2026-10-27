@@ -14,6 +14,8 @@ needs, but a few connectomics-specific operations are not in MONAI:
   datasets in a multi-dataset run.
 * Random Y<->X transpose, completing the dihedral-8 symmetry group of
   the XY plane (combined with flips + 90 deg rotations).
+* Random Z/Y/X permutation, so the finest native axis (the highest-
+  resolution dimension) lands on any network axis.
 
 All transforms here are MONAI ``MapTransform`` (dict-in / dict-out)
 wrappers so they slot into the same :class:`monai.transforms.Compose`
@@ -25,6 +27,7 @@ Public surface
 * :class:`FindBoundariesd`              -- zero out instance boundaries.
 * :class:`RandSpatialCropForegroundd`   -- foreground-biased crop.
 * :class:`RandTransposeXYd`             -- random Y<->X transpose.
+* :class:`RandTransposeZYXd`            -- random Z/Y/X permutation.
 * :class:`RandResolutionZoomd`          -- random resolution zoom.
 * :class:`RandMissingSliced`            -- CREMI-style missing z-sections.
 * :class:`RandResolutionDegraded`       -- SSL large-voxel degradation.
@@ -45,6 +48,7 @@ from nanocosmos.transforms.label import Labeld
 from nanocosmos.transforms.find_boundaries import FindBoundariesd
 from nanocosmos.transforms.rand_crop_foreground import RandSpatialCropForegroundd
 from nanocosmos.transforms.rand_transpose_xy import RandTransposeXYd
+from nanocosmos.transforms.rand_transpose_zyx import RandTransposeZYXd
 from nanocosmos.transforms.resolution_zoom import RandResolutionZoomd
 from nanocosmos.transforms.missing_slice import RandMissingSliced
 from nanocosmos.transforms.degrade import RandResolutionDegraded
@@ -55,6 +59,7 @@ __all__ = [
     "FindBoundariesd",
     "RandSpatialCropForegroundd",
     "RandTransposeXYd",
+    "RandTransposeZYXd",
     "RandResolutionZoomd",
     "RandMissingSliced",
     "RandResolutionDegraded",

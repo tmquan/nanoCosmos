@@ -7,6 +7,8 @@ target), and (b) runs the *real* ``Joint3DModule`` loop over the datamodule via
 without the 16B backbone.
 """
 
+import re
+
 import numpy as np
 import pytest
 import torch
@@ -212,3 +214,107 @@ def test_joint_train_end_to_end(synth_root):
         enable_model_summary=False,
     )
     trainer.fit(module, dm)
+
+
+# ---------------------------------------------------------------------------
+# rand_transpose_zyx: cubic FOV, finest native axis moves
+# ---------------------------------------------------------------------------
+
+_PROMPT_ZYX = re.compile(r"z(\d+) y(\d+) x(\d+)")
+
+
+def _recon_for(fine: int, fine_nm: float, zyx):
+    return tuple(
+        max(1, int(round(fine * fine_nm / max(float(r), fine_nm)))) for r in zyx
+    )
+
+
+def test_rand_transpose_zyx_requires_cubic_fov():
+    with pytest.raises(ValueError, match="cubic patch_size"):
+        Joint3DDataModule(
+            patch_size=(32, 16, 16),
+            pixel_size=(4.0, 4.0, 4.0),
+            rand_transpose_zyx=True,
+        )
+    with pytest.raises(ValueError, match="cubic pixel_size"):
+        Joint3DDataModule(
+            patch_size=(32, 32, 32),
+            pixel_size=(4.0, 4.0, 8.0),
+            rand_transpose_zyx=True,
+        )
+
+
+def test_rand_transpose_zyx_uses_batch_size_1_for_anisotropic(synth_root):
+    dm = Joint3DDataModule(
+        data_root=synth_root,
+        patch_size=(32, 32, 32),
+        pixel_size=(4.0, 4.0, 4.0),
+        rand_transpose_zyx=True,
+        branches={
+            "ssl": {
+                "batch_size": 2,
+                "sample_weight": 1.0,
+                "volumes": [{
+                    "vol": "cosem_vol", "root": synth_root,
+                    "native_resolution": [16, 4, 4], "imaging": "ssTEM",
+                }],
+            },
+        },
+        num_workers=0,
+        persistent_workers=False,
+        num_samples=2,
+    )
+    dm.setup()
+    assert dm._train_groups[-1][2] == 1
+
+
+def test_rand_transpose_zyx_augments_finest_axis(synth_root):
+    """Train crops reorient zyx; the 4 nm axes move, val stays native."""
+    native = (16, 4, 4)
+    fine = 32
+    dm = Joint3DDataModule(
+        data_root=synth_root,
+        patch_size=(fine, fine, fine),
+        pixel_size=(4.0, 4.0, 4.0),
+        rand_transpose_zyx=True,
+        branches={
+            "ssl": {
+                "batch_size": 1,
+                "sample_weight": 1.0,
+                "volumes": [{
+                    "vol": "cosem_vol", "root": synth_root,
+                    "native_resolution": list(native), "imaging": "ssTEM",
+                }],
+            },
+        },
+        degrade={
+            "zf_range": [2.0, 2.0], "missing_prob": 0.0, "jitter_prob": 0.0,
+            "noise_prob": 0.0, "contrast_prob": 0.0,
+        },
+        val_volumes=[{
+            "vol": "cosem_vol", "root": synth_root, "task": "ssl",
+            "native_resolution": list(native), "imaging": "ssTEM",
+        }],
+        num_workers=0,
+        persistent_workers=False,
+        num_samples=36,
+        val_num_samples=4,
+        val_batch_size=1,
+    )
+    dm.setup()
+    finest_on_z = False
+    coarse_on_z = False
+    for batch in dm.train_dataloader():
+        assert tuple(batch["image"].shape) == (1, 1, fine, fine, fine)
+        prompt = batch["prompt"][0]
+        nums = tuple(int(v) for v in _PROMPT_ZYX.search(prompt).groups())
+        assert sorted(nums) == sorted(native)
+        assert tuple(batch["recon_image"].shape[-3:]) == _recon_for(fine, 4.0, nums)
+        finest_on_z = finest_on_z or nums[0] == 4
+        coarse_on_z = coarse_on_z or nums[0] == 16
+    assert finest_on_z and coarse_on_z
+
+    for batch in dm.val_dataloader():
+        assert batch["prompt"][0] == "ssTEM · z16 y4 x4 nm · ssl"
+        assert tuple(batch["image"].shape) == (1, 1, fine, fine, fine)
+        assert tuple(batch["recon_image"].shape[-3:]) == (8, 32, 32)

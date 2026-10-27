@@ -92,11 +92,16 @@ nanoCosmos/             repo root
 
 ## Install
 
+From the repo root. `requirements.txt` pins the stack (Python 3.13, CUDA 13.4, torch 2.16.0.dev20261027+cu134). `pip install -e . --no-deps` installs this package on that lockfile.
+
 ```bash
-pip install -e ".[cosmos,dev]"
+pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
 ## Train
+
+Run from the repo root.
 
 ```bash
 # Plain SNEMI3D run:
@@ -139,7 +144,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # 2.  Empty the cache around validation (callback already on by
 #     default in snemi3d.yaml; turn on for custom configs):
 #         callbacks.cuda_empty_cache_before_val: true
-#     This now empties on BOTH sides of validation so the val-time
+#     This empties on BOTH sides of validation so the val-time
 #     high-water mark does not stay reserved in the training pool.
 
 python scripts/train.py --config-name snemi3d

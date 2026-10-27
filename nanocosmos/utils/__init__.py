@@ -8,7 +8,9 @@ I/O (:mod:`nanocosmos.utils.io`)
     * :func:`find_folder` -- locate a volume file in a directory by
       base name (any of the supported extensions).
     * :func:`load_volume` / :func:`save_volume` -- format-agnostic
-      reader / writer dispatching to :mod:`nanocosmos.preprocessors`.
+      reader / writer.  The suffix selects an inline handler (HDF5, TIFF,
+      NRRD, NumPy).  This module does not call
+      :mod:`nanocosmos.preprocessors`.
 
 Extending this module: anything reused by **two or more** subpackages
 and with no better home belongs here.  Anything used by exactly one

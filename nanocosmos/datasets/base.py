@@ -28,12 +28,13 @@ class CircuitDataset(CacheDataset, Randomizable, ABC):
     - paper: Reference or citation metadata (string)
     - resolution: Voxel/spatial resolution specification (dict)
     - labels: List of segmentation class labels (list)
-    - data_files: Dictionary with 'vol' and 'seg' keys for data paths/arrays
+    - data_files: Dictionary with ``vol`` and ``seg`` keys for data paths/arrays
 
     Args:
         root_dir: Root directory containing the dataset files.
-        volumes: List of volume dicts, each with ``vol`` and ``seg`` keys.
-            When ``None``, the dataset falls back to its own defaults.
+        volumes: List of volume dicts, each with a ``vol`` key and an
+            optional ``seg`` key.  When ``None``, the dataset falls back
+            to its own defaults.
         transform: Optional transforms to apply to each sample.
         cache_rate: Fraction of data to cache in memory (0.0 to 1.0).
         num_workers: Number of workers for data loading.

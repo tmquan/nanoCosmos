@@ -12,9 +12,9 @@ Two dataset families live here, with **different** semantics:
   the MONAI transform pipeline.
   Best for small-to-medium datasets (single-machine, many epochs).
 * :class:`LazyVolDataset` -- a thin ``torch.utils.data.Dataset`` that
-  reads patches on demand from HDF5 with a thread-local file cache and
-  a normalisation-stats probe.  Best for very large volumes where eager
-  loading would OOM.
+  reads patches on demand from HDF5 or TIFF with a thread-local file
+  cache and a normalisation-stats probe.  Best for very large volumes
+  where eager loading would exhaust RAM.
 
 Required overrides for new ``CircuitDataset`` leaves
 ----------------------------------------------------
@@ -24,8 +24,10 @@ Required overrides for new ``CircuitDataset`` leaves
 * ``_prepare_data`` -- builds the list of MONAI ``data_dicts`` consumed
   by ``CacheDataset``.
 
-Datamodules in :mod:`nanocosmos.datamodules` choose between eager and
-lazy at runtime based on the ``use_lazy`` config flag.
+Datamodules in :mod:`nanocosmos.datamodules` use
+:class:`LazyVolDataset` when ``slice_mode`` is false and ``patch_size``
+is set (``_use_lazy``).  Otherwise they build the eager
+:class:`CircuitDataset`.
 
 """
 

@@ -103,27 +103,31 @@ class _DecoderAdapter3D(nn.Module):
     Replaces the decoder's final output convolution with the unified
     affinity + sem + raw task head while preserving all pretrained upsampling
     weights.  The pretrained ``conv_out`` itself is kept on the side as
-    :attr:`original_conv_out` (frozen) so the original Wan pixel
-    reconstruction can still be emitted for diagnostic visualisation
-    (see :meth:`wan_reconstruct` and the ``true/wan_decoder``
-    TensorBoard panel) -- otherwise the ``setattr(..., Identity())``
-    swap would garbage-collect the pretrained weights.
+    :attr:`original_conv_out` (frozen) so the diagnostic ``conv_out``
+    activation can still be emitted for visualisation
+    (see :meth:`wan_reconstruct`). Joint runs log it as
+    ``pred/wan_decoder``; the affinity ``ImageLogger`` logs it as
+    ``true/wan_decoder``. The ``setattr(..., Identity())`` swap would
+    otherwise drop the pretrained weights.
 
-    Freeze policy:
+    Freeze policy when ``freeze_vae_decoder`` is set:
       - Decoder body (early / mid blocks): frozen
       - Last up-block + output norm: trainable
-      - Task head: trainable (randomly initialised)
-      - Preserved ``original_conv_out``: frozen (pretrained weights only).
+      - ``to_latent`` and the task head: trainable
+      - Preserved ``original_conv_out``: frozen (diagnostic only)
+    The body stays in the autograd graph, so the loss reaches the DiT
+    through the decoder.
 
     CHECKPOINT INVARIANT: which submodules exist here is conditional. With a
     pretrained VAE (``pretrained=True``) this holds ``to_latent`` +
     ``original_conv_out`` and ``decoder_body`` is the Wan decoder; the
     standalone path (``pretrained=False``) drops ``to_latent`` and uses a
     ``_ProgressiveUpsampler3D`` body instead. ``highres_skip=True`` additionally
-    adds ``skip_stem.*`` keys AND widens the head's first conv. The shipped
-    last.ckpt is the (pretrained=True, highres_skip=False) combination
-    (head_in = hidden_ch = 96); changing either flag on resume adds/removes
-    keys and breaks the strict load.
+    adds ``skip_stem.*`` keys AND widens the head's first conv. With
+    ``highres_skip=False``, ``head_in`` equals the Wan pre-``conv_out`` width
+    (256 on the released Edge Wan2.2 config, ``decoder_base_dim=256``).
+    Changing either flag between train and resume adds or removes keys and
+    breaks a strict load.
     """
 
     def __init__(
@@ -145,11 +149,13 @@ class _DecoderAdapter3D(nn.Module):
         self._has_pretrained = vae_decoder is not None
         self.head_channels = int(head_channels)
         self.highres_skip = bool(highres_skip)
-        # Make the frozen, *causal* Wan decoder body non-causal along z by
-        # averaging the forward decode with a z-flipped decode (mirrors the
-        # encoder-side ``vae_symmetrize_z``).  Only the pretrained Wan body is
-        # causal; the random-init ``_ProgressiveUpsampler3D`` fallback is not,
-        # so this is a no-op there.  See :meth:`_decode_body`.
+        # Average the causal Wan decoder body with a z-flipped decode so EM
+        # depth is symmetric (same ``vae_symmetrize_z`` as the encoder).
+        # Early/mid blocks may be frozen; the last up-block and output norm
+        # stay trainable when ``freeze_vae_decoder`` is set, and gradients
+        # still flow through the body. The random-init
+        # ``_ProgressiveUpsampler3D`` fallback is not causal, so this is a
+        # no-op there. See :meth:`_decode_body`.
         self._symmetrize_z = bool(symmetrize_z)
 
         # Will be populated by ``_replace_conv_out`` when a pretrained
@@ -176,7 +182,7 @@ class _DecoderAdapter3D(nn.Module):
             self._hidden_ch = feature_size
 
         # High-resolution input skip.  The decoder features above are
-        # bandwidth-limited by the VAE's spatial_compression (e.g. 8x): they
+        # bandwidth-limited by the VAE's spatial_compression (16x on Wan2.2): they
         # carry semantics but not the 1-voxel membranes the affinity head
         # needs.  A thin full-resolution conv stem on the raw input routes
         # those sharp edges *around* the latent bottleneck and is fused with
@@ -233,13 +239,15 @@ class _DecoderAdapter3D(nn.Module):
                 logger.info(
                     "Replaced decoder.%s (hidden_ch=%d) with Identity; "
                     "preserved original conv_out as adapter.original_conv_out "
-                    "(frozen) for `true/wan_decoder` reconstruction.",
+                    "(frozen) for the diagnostic wan_decoder panel "
+                    "(joint: pred/wan_decoder; affinity ImageLogger: "
+                    "true/wan_decoder).",
                     attr, ch,
                 )
                 return ch
         logger.warning(
             "Could not find decoder final conv; using latent_channels as "
-            "hidden_ch.  `true/wan_decoder` panel will be unavailable."
+            "hidden_ch.  The diagnostic wan_decoder panel will be unavailable."
         )
         return self.to_latent.linear.out_features
 
@@ -310,10 +318,12 @@ class _DecoderAdapter3D(nn.Module):
         :meth:`wan_reconstruct` so both paths see identical body
         activations on the same call.
 
-        When ``symmetrize_z`` is set, the *frozen* Wan body is run twice --
-        forward and z-flipped -- and averaged, so the causal temporal decode is
-        symmetrised along the EM depth axis (the learned ``to_latent`` / head
-        run once each and are untouched).  Costs a second decode.
+        When ``symmetrize_z`` is set, the Wan body is run twice -- forward
+        and z-flipped -- and averaged, so the causal temporal decode is
+        symmetric along the EM depth axis. ``to_latent`` and the head run
+        once each. With ``freeze_vae_decoder``, early/mid blocks stay frozen
+        and the last up-block plus output norm still train, so this decode
+        stays on the loss path. Costs a second decode.
         """
         if self._has_pretrained:
             latent = self.to_latent(features)
@@ -338,23 +348,24 @@ class _DecoderAdapter3D(nn.Module):
     def wan_reconstruct(
         self, features: torch.Tensor, target_size: tuple,
     ) -> Optional[torch.Tensor]:
-        """Pretrained Wan-VAE pixel reconstruction from DiT features.
+        """Diagnostic Wan ``conv_out`` applied to the task-head features.
 
         Mirrors :meth:`forward`'s body pass and then applies the
         original Wan ``conv_out`` (preserved at construction in
         :attr:`original_conv_out` before the adapter swapped it for
         ``Identity``) instead of the unified task head.
 
-        Diagnostic only -- shows what the pretrained Wan decoder
-        believes the model's learned latent should decode to in pixel
-        space.  At epoch 0 this matches the input closely; as
-        ``decoder_body`` drifts under training the reconstruction
-        degrades, which is itself a useful "is the latent staying in
-        the VAE's prior?" signal.
+        Diagnostic only. The body features are already resized to
+        ``target_size``. On the released Edge Wan2.2 VAE, ``conv_out``
+        emits 12 channels (``out_channels``, ``patch_size=2``). The
+        official ``AutoencoderKLWan.decode`` unpatchifies that tensor to
+        3-channel RGB and clamps to ``[-1, 1]``. This path returns the
+        raw ``conv_out`` activation and does neither. ``to_latent`` is
+        randomly initialised, so step 0 is the pretrained decoder on a
+        random projection of the DiT features.
 
         Returns:
-            ``[B, 3, D, H, W]`` RGB reconstruction in roughly
-            ``[-1, 1]`` (Wan's tanh-equivalent output range), or
+            ``[B, C_out, D, H, W]`` at the input spatial size, or
             ``None`` if the wrapper was built without a pretrained VAE.
         """
         if not self._has_pretrained or self.original_conv_out is None:

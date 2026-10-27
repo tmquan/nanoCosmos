@@ -7,8 +7,9 @@ package holds everything that is tier-agnostic:
 * :class:`Cosmos3OmniWrapper` -- the volumetric-EM feature-extractor wrapper
   (omni forward, latent-patch repatch, feature hooks, residual-VAE decode).
 * :class:`_VariantConfig` -- the MoT / GQA variant-config dataclass.
-* :func:`reduce_omni_transformer` -- the Nano -> Edge structured-pruning
-  warm start used until the official Edge weights ship.
+* :func:`reduce_omni_transformer` -- legacy Nano -> Edge structured-pruning
+  warm start. The shipped Edge variant loads ``nvidia/Cosmos3-Edge`` directly
+  and leaves ``reduce_from_parent`` off.
 
 The concrete tiers live in sibling packages and are ~20-line subclasses:
 :mod:`nanocosmos.models.cosmos_3_edge`, :mod:`...cosmos_3_nano`,

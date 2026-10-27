@@ -23,13 +23,14 @@ All scalars live under ``{stage}/{mode}/...`` where ``stage`` is
 supported mode today — structured so ``"prompted"`` can slot in later)::
 
     {stage}/{mode}/loss                         # global weighted total
-    {stage}/{mode}/loss/{aff,sem,raw}           # per-field loss term
+    {stage}/{mode}/loss/{aff,sem,raw,recon}    # terms the loss actually emits
     {stage}/{mode}/sem/metric/{name}            # foreground (sem) metrics
     {stage}/{mode}/ins/metric/{name}            # instance (MWS) metrics
 
-This matches the image tags emitted by
-:class:`nanocosmos.callbacks.tensorboard.ImageLogger` so images and
-scalars for a given head collapse into the same TensorBoard group.
+Zero-weight terms are absent. The joint pretrain logs ``loss/recon``.
+Affinity ``ImageLogger`` image tags share this ``{stage}/{mode}`` prefix.
+``Joint3DImageLogger`` adds an ``{ssl,sft}`` segment and logs the
+diagnostic Wan ``conv_out`` as ``pred/wan_decoder``.
 """
 
 import warnings
@@ -139,9 +140,9 @@ class BaseCircuitModule(pl.LightningModule):
         # THIS derived width, i.e. by the loss offset set -- NOT by the
         # persisted ``model.head_channels`` (which is informational only and may
         # be stale in a saved checkpoint). Resuming a checkpoint therefore
-        # requires the same offset count it was trained with. The shipped
-        # last.ckpt used 30 offsets -> head_channels=32; keep loss(.seg).offsets
-        # at 30 entries to load it.
+        # requires the same offset count it was trained with. The joint
+        # configs use 30 offsets (head_channels=32); keep
+        # loss(.seg).offsets at 30 entries to load those checkpoints.
         _offsets = self._loss_offsets(loss_config)
         _n_aff = len(_offsets) if _offsets is not None else len(AFFINITY_OFFSETS)
         _head_channels = _n_aff + 2
@@ -298,7 +299,7 @@ class BaseCircuitModule(pl.LightningModule):
         # Finite-loss guard.  ``total_loss.isnan().any() or .isinf().any()``
         # would force a device→host sync **every step** (each ``.any()``
         # materialises a Python bool).  With ``gradient_clip_val=1.0`` and
-        # ``bf16-mixed`` already in place, the guard is belt-and-suspenders;
+        # ``bf16-true``, the guard is an extra finite check;
         # we run it on a configurable cadence instead.  Default cadence is
         # ``training.log_every_n_steps`` so it lines up with TB logging
         # already paying for a sync.

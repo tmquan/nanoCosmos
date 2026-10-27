@@ -43,6 +43,7 @@ import collections
 import datetime
 import inspect
 import os
+import sys
 import warnings
 
 # Single source of truth for the distributed collective timeout. Used both for
@@ -59,7 +60,7 @@ _COLLECTIVE_TIMEOUT_MIN = 30
 # Why these values:
 #   * TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC -- the watchdog's "is anyone alive?"
 #     check. Default 480s (8 min). The cold first training batch reads and
-#     normalises large lazy 3-D crops (up to 400x256x256) through the full
+#     normalises large lazy 3-D crops (up to 400x400x400) through the full
 #     MONAI augmentation pipeline (relabel, boundary erosion, resolution
 #     zoom/degrade) on freshly forkserver-spawned workers; before those
 #     caches warm up a rank can take several minutes to issue its first
@@ -104,17 +105,58 @@ os.environ.setdefault("NCCL_ALGO", "Ring")
 os.environ.setdefault("NCCL_PROTO", "Simple")
 
 # Disable torch._native Triton/CuteDSL JIT overrides BEFORE ``import torch``.
-# Nightly torch 2.14 routes some aten ops (notably outer-product ``bmm`` used
+# Nightly torch 2.16 routes some aten ops (notably outer-product ``bmm`` used
 # by Cosmos3 rotary emb) through Triton's ``bmm_outer_product`` kernel. On
-# this Rubin / sm_107 stack the bundled ``ptxas-blackwell`` rejects the arch
-# string ``sm_107a``:
-#   ptxas-blackwell fatal: Value 'sm_107a' is not defined for option 'gpu-name'
-# and training dies on the first sanity-check forward. Falling back to the
-# stock CUDA bmm is correct and cheap for these tiny rotary matmuls.
+# this B300 (sm_103, driver 595.71.05) stack the bundled ``ptxas-blackwell``
+# rejects the arch string that JIT emits, and training dies on the first
+# sanity-check forward. Falling back to the stock CUDA bmm is correct and
+# cheap for these tiny rotary matmuls.
 # Must be set before torch is imported -- registration happens at import time.
 os.environ.setdefault("TORCH_DISABLE_NATIVE_JIT", "1")
 
 from pathlib import Path
+
+
+def _prefer_bundled_cudnn() -> None:
+    """Load the cuDNN build shipped with this torch wheel.
+
+    ``/usr/local/cuda/lib64`` on ``LD_LIBRARY_PATH`` is cuDNN 9.27. The
+    wheel is cuDNN 9.26 and asks for
+    ``libcudnn_engines_runtime_compiled.so.9.26*``. The 9.27 tree shadows
+    that lookup, and the first Wan VAE ``conv3d`` dies with
+    ``CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED``. glibc reads
+    ``LD_LIBRARY_PATH`` once, at process start, so a corrected value has
+    to be in place before ``libcudnn`` is mapped. Re-exec does that.
+    Lightning workers inherit the corrected environment and do not
+    re-exec.
+    """
+    lib = (
+        Path(sys.prefix)
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+        / "nvidia"
+        / "cudnn"
+        / "lib"
+    )
+    if not (lib / "libcudnn_engines_runtime_compiled.so.9").is_file():
+        return
+    lib_s = str(lib)
+    parts = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(":") if p]
+    if parts and parts[0] == lib_s:
+        return
+    os.environ["LD_LIBRARY_PATH"] = ":".join([lib_s, *(p for p in parts if p != lib_s)])
+    print(
+        f"Restarting so cuDNN loads from {lib_s} "
+        "(the cuDNN on LD_LIBRARY_PATH does not match this torch wheel).",
+        file=sys.stderr,
+    )
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+if __name__ == "__main__":
+    _prefer_bundled_cudnn()
+
 from typing import Any, Dict, List, Optional
 
 import hydra
@@ -209,8 +251,7 @@ def _install_runtime_patches() -> None:
 
     torch.set_float32_matmul_precision("high")
 
-    # cuDNN Frontend SDPA is preferred by torch 2.13+ but fails on this
-    # sm_107 + cuDNN stack with:
+    # cuDNN Frontend SDPA fails on this B300 (sm_103) stack with:
     #   RuntimeError: cuDNN Frontend error: No valid execution plans built.
     # Diffusers' Cosmos DiT hits that on the first forward. FlashAttention
     # works; force it by turning cuDNN SDPA off.
@@ -311,6 +352,7 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             data_root=d.get("data_root", "data"),
             patch_size=tuple(d.get("patch_size", (320, 256, 256))),
             pixel_size=tuple(d.get("pixel_size", (4.0, 4.0, 4.0))),
+            rand_transpose_zyx=bool(d.get("rand_transpose_zyx", False)),
             branches=OmegaConf.to_container(d.get("branches", {}), resolve=True),
             degrade=OmegaConf.to_container(d.get("degrade", {}), resolve=True),
             val_volumes=OmegaConf.to_container(d.get("val_volumes"), resolve=True)

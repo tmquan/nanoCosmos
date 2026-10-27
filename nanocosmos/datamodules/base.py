@@ -136,11 +136,17 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
     Pipeline order (train)::
 
-        EnsureChannelFirst → [FindBoundaries]
-        → [Pad + Crop(safe_size)] → [ResolutionZoom] → [CenterCrop(patch_size)]
-        → spatial augmentations (flip/rot90/elastic)
-        → instance_transforms (CC-relabel) → intensity augmentations
-        → EnsureType
+        EnsureChannelFirst → [FindBoundaries on ``label`` when
+        ``boundary_target`` is ``both``]
+        → [Pad + Crop of the safe size or ``patch_size``, or Resize to
+        ``image_size``]
+        → [Labeld + ResolutionZoom]
+        → [CenterCrop(``patch_size``) when the safe crop was used]
+        → flips, 90° rotations, Y↔X transpose, [elastic]
+        → Labeld → intensity (contrast, noise)
+        → [missing z-sections on the image]
+        → [eroded ``sem_label`` when ``boundary_target`` is ``semantic``]
+        → EnsureTyped
 
     When resolution zoom can downsample (zoom < 1), an enlarged *safe*
     crop is taken first so the zoom's center-crop/pad never introduces
@@ -660,7 +666,8 @@ class CircuitDataModule(pl.LightningDataModule, ABC):
 
         Every lazy-mode datamodule (:class:`SNEMI3DDataModule`,
         :class:`MICRONSDataModule`, :class:`NeuronsDataModule`, and the
-        :class:`CREMI3DDataModule` / :class:`FLYEM3DDataModule` subclasses)
+        :class:`CREMI3DDataModule` / :class:`FLYEM3DDataModule` /
+        :class:`FLYWIREDataModule` subclasses)
         used to carry an identical ~30-line block per split; this helper is
         the single shared implementation.
         """

@@ -6,9 +6,10 @@ transform modules (:mod:`nanocosmos.transforms.label`,
 the cucim/cupy GPU path or the scipy/skimage CPU fallback.
 
 When cucim is installed and a CUDA device is functional, ``_use_gpu()`` returns
-True. In forked DataLoader workers the CPU path is used automatically since CUDA
-contexts do not survive ``fork()`` (the probe is cached per-PID so each worker
-re-checks exactly once). Set ``NANOCOSMOS_FORCE_CPU=1`` to force the CPU path.
+True.  The probe is cached per process id, so each worker checks once.
+DataLoaders in this package use the ``forkserver`` start method.  A CUDA
+context does not survive ``os.fork()``; if the probe fails, the CPU path is
+used.  Set ``NANOCOSMOS_FORCE_CPU=1`` to force the CPU path.
 """
 
 import os
@@ -33,10 +34,9 @@ def _cucim_available() -> bool:
 def _use_gpu() -> bool:
     """Return True when the GPU (cucim/cupy) code path should be used.
 
-    Checks cucim availability, the ``NANOCOSMOS_FORCE_CPU`` env var (the legacy
-    ``NEURONS_FORCE_CPU`` name is still honored for back-compat), and whether
-    CUDA is functional in the current process (handles fork). Result is cached
-    per-PID so forked workers re-probe once.
+    Checks cucim availability, the ``NANOCOSMOS_FORCE_CPU`` env var (the
+    ``NEURONS_FORCE_CPU`` name is still honored), and whether CUDA initializes
+    in this process.  The result is cached per PID.
     """
     if not _cucim_available():
         return False

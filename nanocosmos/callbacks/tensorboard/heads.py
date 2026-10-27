@@ -73,7 +73,7 @@ def _add_aff_panels(
     size: Optional[Sequence[int]] = None,
     frac: Optional[torch.Tensor] = None,
 ) -> None:
-    """Central-slice affinity panels (a curated channel subset).
+    """Affinity panels for one depth slice (a curated channel subset).
 
     When ``size=(H, W)`` is given, each panel (and the mask) is upsampled to
     that size so affinity panels match the finest panel on the TB grid.

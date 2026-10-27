@@ -5,16 +5,21 @@
 ``ssl`` batch AND the first ``sft`` batch and renders BOTH, each under a
 task-namespaced tag ``{stage}/{mode}/{task}/...``:
 
-* **both branches** -- reconstruction panels::
+* **both branches** -- reconstruction panels, each as the three orthogonal
+  mid-planes (``xy`` / ``xz`` / ``yz``) on the 4 nm grid.  A source or target
+  that is coarser than 4 nm is upsampled onto that grid before the plane is
+  drawn::
 
-      {stage}/automatic/{ssl,sft}/true/image         the (degraded, on ssl) input
-      {stage}/automatic/{ssl,sft}/pred/image         raw-head small-voxel recon
-      {stage}/automatic/{ssl,sft}/pred/wan_decoder   DiT features decoded through
-                                                     the frozen pretrained Wan
-                                                     conv_out (diagnostic; skipped
-                                                     when no pretrained VAE)
-      {stage}/automatic/ssl/true/target              clean EM target (recon_image)
-      # ssl only: on sft the target is a clone of true/image, so it is skipped
+      {stage}/automatic/{ssl,sft}/true/image/{xy,xz,yz}    source (degraded on ssl)
+      {stage}/automatic/{ssl,sft}/pred/image/{xy,xz,yz}    raw-head small-voxel recon
+      {stage}/automatic/{ssl,sft}/pred/wan_decoder/{xy,xz,yz}
+                                                     DiT latent through the frozen
+                                                     preserved original_conv_out
+                                                     (diagnostic; skipped when the
+                                                     wrapper has no pretrained VAE)
+      {stage}/automatic/ssl/true/target/{xy,xz,yz}   clean EM target (recon_image)
+      # ssl only.  sft also carries recon_image (native EM) but that panel
+      # is not logged.
       {stage}/automatic/{ssl,sft}/volume             text: source volume name(s)
 
 * **sft only** -- the fine head is pooled to the native label grid (matching
@@ -40,6 +45,7 @@ from nanocosmos.callbacks.tensorboard.tags import TagContext
 from nanocosmos.callbacks.tensorboard.viz import (
     _label_to_rgb,
     _normalise,
+    _orthogonal_midplanes,
     _resize_2d,
     _to_2d,
 )
@@ -53,6 +59,18 @@ def _gray3(panel_2d: torch.Tensor) -> torch.Tensor:
     return repeat(_normalise(panel_2d.float()), "b 1 h w -> b 3 h w")
 
 
+def _log_ortho_planes(tb, ctx, epoch: int, tag: str, vol: torch.Tensor, fine_size) -> None:
+    """Log the xy / xz / yz mid-planes of ``vol`` on the 4 nm ``fine_size`` grid.
+
+    ``vol`` is ``[B, C, D, H, W]``.  Multi-channel volumes (the Wan decoder's
+    RGB render) are averaged to one grayscale plane before the contrast stretch.
+    """
+    for name, plane in _orthogonal_midplanes(vol, fine_size).items():
+        if plane.shape[1] != 1:
+            plane = plane.mean(dim=1, keepdim=True)
+        tb.add_images(ctx.tag(f"{tag}/{name}"), _gray3(plane), global_step=epoch)
+
+
 class Joint3DImageLogger(ImageLogger):
     """Task-aware TensorBoard logger for :class:`Joint3DModule`.
 
@@ -60,6 +78,11 @@ class Joint3DImageLogger(ImageLogger):
     the first ``sft`` batch seen, and renders each under a task-namespaced tag
     (``{stage}/{mode}/{ssl|sft}/...``).  ``ssl`` shows reconstruction panels
     only; ``sft`` adds the pooled segmentation panels.
+
+    Panels are captured per task on every rank.  Rank 0 writes them from
+    ``on_train_epoch_end`` / ``on_validation_epoch_end``.  The validation hook
+    also runs at the end of Lightning's sanity check, so step-0 panels appear
+    after sanity validation.
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -101,7 +124,7 @@ class Joint3DImageLogger(ImageLogger):
         epoch = trainer.current_epoch
         if epoch % self.every_n_epochs != 0:
             return
-        tb = self._get_tb(trainer)  # real on rank 0, None elsewhere
+        tb = self._get_tb(trainer)  # SummaryWriter on rank 0; dummy elsewhere
         was_training = pl_module.training
         pl_module.eval()
         try:
@@ -132,11 +155,10 @@ class Joint3DImageLogger(ImageLogger):
                 [fwd_module(images[i:i + 1]) for i in range(n)], dim=0,
             ).float()
 
-            # Frozen Wan-decoder reconstruction of the DiT features: decode the
-            # model's learned latent through the pretrained ``conv_out``
-            # (preserved at build time) instead of the unified task head, so we
-            # can see what the Wan VAE believes the latent should render to in
-            # pixel space.  Diagnostic only -- ``conv_out`` is never optimised.
+            # Frozen Wan-decoder diagnostic: decode the model's latent through
+            # the preserved ``original_conv_out`` (the pretrained Wan conv,
+            # frozen; the decoder's live ``conv_out`` is ``Identity``).
+            # Diagnostic only -- ``original_conv_out`` is never optimised.
             # Run per-image on ALL ranks (collective-consistent with the head
             # forward above; ``wan_decoder_output`` is a ``@torch.no_grad``
             # method).  Returns ``None`` on wrappers without a pretrained VAE
@@ -149,7 +171,7 @@ class Joint3DImageLogger(ImageLogger):
                 if all(p is not None for p in wan_parts):
                     wan_rgb = torch.cat(wan_parts, dim=0).float()
 
-        if tb is None:  # non-rank-0: forward done (collective), no logging
+        if tb is None:  # no image logger: forward done, nothing to write
             return
 
         crit = pl_module.criterion
@@ -158,17 +180,17 @@ class Joint3DImageLogger(ImageLogger):
         ctx = TagContext(stage=stage, mode=self.mode, head=task)
         epoch = pl_module.current_epoch
 
-        # Per-sample display depth for the sft panels: the z-slice with the most
-        # semantic foreground (as a RELATIVE depth in [0, 1]).  The fixed central
-        # slice can be empty / fully eroded on sparse or thin-structure crops
-        # (e.g. MICrONS neurites, or a single near-solid instance) even when the
-        # 3-D target is non-empty, showing up as a misleading all-black true/sem
-        # panel.  _best_depth_frac falls back PER SAMPLE from sem_label to the
-        # pristine label whenever a given sample's sem_label is empty on every
-        # slice, rather than picking an arbitrary (usually also-empty) slice.
-        # A relative depth maps correctly onto BOTH the fine-grid recon panels
-        # and the coarser native-grid seg panels, so all panels display the
-        # same physical slice. ssl carries no seg target -> None (central slice).
+        # Per-sample display depth for the sft segmentation panels: the z-slice
+        # with the most semantic foreground (a RELATIVE depth in [0, 1]).  The
+        # fixed central slice can be empty / fully eroded on sparse or
+        # thin-structure crops (e.g. MICrONS neurites, or a single near-solid
+        # instance) even when the 3-D target is non-empty, showing up as a
+        # misleading all-black true/sem panel.  _best_depth_frac falls back PER
+        # SAMPLE from sem_label to the pristine label whenever a given sample's
+        # sem_label is empty on every slice.  A relative depth maps onto both
+        # the fine grid and the coarser native label grid.  Source and target
+        # EM panels are the orthogonal mid-planes, not this slice.  ssl carries
+        # no seg target -> None.
         frac_z = (
             self._best_depth_frac(batch, pl_module, n) if task == "sft" else None
         )
@@ -187,40 +209,34 @@ class Joint3DImageLogger(ImageLogger):
             uniq = list(dict.fromkeys(shown))
             tb.add_text(ctx.tag("volume"), ", ".join(uniq), global_step=epoch)
 
-        # All panels are upsampled to the FINEST in-plane size (the fine network
-        # grid, e.g. 256x256) so every TB image -- including the SFT seg panels
-        # that are pooled to a coarser native grid -- renders at the same size.
-        target_hw = tuple(_to_2d(images[:n]).shape[-2:])
+        # 4 nm field of view: the network input.  Source and target mid-planes
+        # are drawn on this grid; a coarser recon target is upsampled per plane.
+        # Seg panels still share the fine in-plane size so labels line up with xy.
+        fine_size = tuple(int(s) for s in images.shape[-3:])
+        target_hw = (fine_size[1], fine_size[2])
 
         # ---- reconstruction panels (both branches) ----
-        tb.add_images(ctx.tag("true/image"),
-                      _resize_2d(_gray3(_to_2d(images[:n], frac_z)), target_hw),
-                      global_step=epoch)
+        # Orthogonal mid-planes: xy (fixed z), xz (fixed y), yz (fixed x).
+        _log_ortho_planes(tb, ctx, epoch, "true/image", images[:n], fine_size)
         raw = head[:, crit.raw_slice][:n]               # [n,1,D,H,W] linear
-        tb.add_images(ctx.tag("pred/image"),
-                      _resize_2d(_gray3(_to_2d(raw, frac_z)), target_hw),
-                      global_step=epoch)
-        # Wan-decoder reconstruction of the DiT features (frozen conv_out).
-        # RGB [n,3,D,H,W] ~[-1,1]; the EM is a tiled grayscale so collapse the
-        # channel dim to a single panel before the shared grayscale renderer.
+        _log_ortho_planes(tb, ctx, epoch, "pred/image", raw, fine_size)
+        # Wan-decoder diagnostic (frozen ``original_conv_out``).
+        # RGB [n,3,D,H,W] ~[-1,1]; each plane is collapsed to grayscale.
         if wan_rgb is not None:
-            wan_gray = _to_2d(wan_rgb[:n], frac_z).mean(dim=1, keepdim=True)
-            tb.add_images(ctx.tag("pred/wan_decoder"),
-                          _resize_2d(_gray3(wan_gray), target_hw),
-                          global_step=epoch)
-        # The clean recon target only differs from true/image on the ssl branch
-        # (where the input was degraded).  On sft the recon target is a clone of
-        # the input, so logging it would just duplicate true/image -> skip it.
+            _log_ortho_planes(
+                tb, ctx, epoch, "pred/wan_decoder", wan_rgb[:n], fine_size,
+            )
+        # ssl only.  ``recon_image`` is the clean EM on its own grid, which is
+        # often coarser than the 4 nm source; ``_log_ortho_planes`` upsamples
+        # each plane onto that grid.  sft also stores ``recon_image`` (the
+        # native EM, captured before the input is resampled) and this logger
+        # does not draw it.
         recon_t = batch.get("recon_image")
         if recon_t is not None and task == "ssl":
             recon_t = recon_t.to(pl_module.device)
             if recon_t.dim() == self.spatial_dims + 1:
                 recon_t = rearrange(recon_t, "b ... -> b 1 ...")
-            tb.add_images(
-                ctx.tag("true/target"),
-                _resize_2d(_gray3(_to_2d(recon_t[:n])), target_hw),
-                global_step=epoch,
-            )
+            _log_ortho_planes(tb, ctx, epoch, "true/target", recon_t[:n], fine_size)
 
         # ---- segmentation panels (sft only) ----
         if task == "sft" and "label" in batch:
@@ -334,8 +350,7 @@ class Joint3DImageLogger(ImageLogger):
         aff = pooled[:, crit.aff_slice].sigmoid().float()
         names = offset_names(offsets, n_pull)
         mask_2d = torch.ones_like(_to_2d(aff[:, :1], frac_z))
-        # n_pull (=5) pull offsets + max_push evenly-spaced long-range push
-        # offsets = the affinity panels shown.  max_push=7 -> 5 + 7 = 12.
+        # Every pull offset, plus up to max_push=7 evenly spaced push offsets.
         _add_aff_panels(
             tb, ctx, aff, aff_panel_indices(len(offsets), n_pull, max_push=7),
             names=names, mask_2d=mask_2d, epoch=epoch, tag_prefix="aff/pred",

@@ -1,14 +1,16 @@
 """
 Shared helpers + canonical constants for the affinity + foreground head.
 
-The model emits a single ``[B, HEAD_CHANNELS, *spatial]`` tensor of
-**raw logits / linear values** (no activation in the forward pass)::
+The model emits a single ``[B, C, *spatial]`` tensor of **raw logits /
+linear values** (no activation in the forward pass), with
+``C = n_aff + 2``.  :data:`HEAD_CHANNELS` is that width for the default
+offset list (:data:`N_AFF` = 14, so 16 channels).  The training configs
+pass 30 offsets, so the joint head is 32 channels::
 
-    ch  0 .. N_AFF-1 : aff   (N_AFF)  logit, per-offset affinity
-    ch  N_AFF        : sem   (1)       logit, foreground / boundary
-    ch  N_AFF + 1    : raw   (1)       linear, L1 reconstruction of the
-                                        (normalised) input EM intensity in
-                                        ``[-1, 1]``
+    ch  0 .. n_aff-1 : aff   logit, per-offset affinity
+    ch  n_aff        : sem   (1)  logit, foreground / boundary
+    ch  n_aff + 1    : raw   (1)  linear reconstruction of the
+                                  (normalised) EM intensity in ``[-1, 1]``
 
 The head applies no activation: the loss consumes the ``aff`` / ``sem``
 logits directly (logit-stable BCE + sigmoid for the Dice / focal terms),
@@ -317,7 +319,7 @@ def affinity_target_from_offsets(
     n = len(offsets)
     out = labels.new_zeros((labels.shape[0], n, *labels.shape[1:]),
                            dtype=torch.uint8)
-    # Write each offset in place (no 14-element ``torch.stack`` peak).
+    # Write each offset in place (avoids stacking every offset channel).
     for c, offset in enumerate(offsets):
         out[:, c] = (labels == shift_nd(labels, offset)).to(torch.uint8)
     if background is not None:

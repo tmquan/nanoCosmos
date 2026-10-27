@@ -10,8 +10,9 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Files the wrappers do not read.  These wrappers feed null prompt
-# embeddings, so the upstream text encoder and tokenizer are skipped.
+# Snapshot files the wrappers do not read. Cosmos 3 loads
+# ``text_tokenizer/`` for metadata prompts (that directory is not in this
+# list). ``text_encoder/`` and ``tokenizer/`` are skipped.
 _DEFAULT_IGNORE_PATTERNS: List[str] = [
     "*.md",
     "*.txt",
@@ -22,8 +23,8 @@ _DEFAULT_IGNORE_PATTERNS: List[str] = [
 ]
 
 # Default cache subdirectory under ``~/.cache/nanocosmos/`` when the
-# caller does not pass ``cache_dir``.  The folder name is historical;
-# per-repo subdirectories separate Nano, Edge, and Super.
+# caller does not pass ``cache_dir``. Per-repo subdirectories separate
+# Nano, Edge, and Super.
 _DEFAULT_CACHE_SUBDIR = "cosmos25"
 
 
@@ -45,9 +46,9 @@ def _download_from_hf(
         cache_dir: Where to cache the snapshot
             (default: ``~/.cache/nanocosmos/cosmos25``).
         token: HF access token for gated repositories.
-        ignore_patterns: Override the default ignore list.  By default
-            the text encoder and tokenizer are skipped because the
-            wrappers feed a null prompt embedding and never load them.
+        ignore_patterns: Override the default ignore list. By default
+            ``text_encoder/`` and ``tokenizer/`` are skipped. Cosmos 3
+            still loads ``text_tokenizer/`` for metadata prompts.
     """
     try:
         from huggingface_hub import snapshot_download

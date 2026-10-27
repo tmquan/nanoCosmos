@@ -15,9 +15,16 @@ Public surface
 * :class:`CudaMemoryLoggerCallback` -- logs allocated / reserved /
   fragmentation gauges to TensorBoard under ``cuda_memory/*`` so you
   can tell a leak from a fragmentation drift at a glance.
-* :class:`ImageLogger` -- the heavy-lifter.  Renders per-head panels at
-  every epoch end into the canonical ``{stage}/{mode}/[{head}/]{panel}``
-  TB tag hierarchy (see :mod:`nanocosmos.callbacks.tensorboard.tags`).
+* :class:`ImageLogger` -- per-head panels for the affinity recipe, one z
+  slice per volume, under ``{stage}/{mode}/[{head}/]{panel}``
+  (see :mod:`nanocosmos.callbacks.tensorboard.tags`).
+* :class:`Joint3DImageLogger` -- joint-recipe logger.  Source, ssl recon
+  target, raw-head prediction, and the Wan-decoder diagnostic are
+  orthogonal mid-planes (``xy`` / ``xz`` / ``yz``) on the 4 nm grid.
+  sft segmentation panels use a foreground-content z slice.  Tags are
+  ``{stage}/automatic/{task}/...``.  Every rank captures batches; rank 0
+  writes at ``on_validation_epoch_end``, including Lightning's sanity
+  check (step-0 panels after sanity validation).
 
 Extending this module
 ---------------------

@@ -1,10 +1,12 @@
 """
 HDF5 preprocessor.
 
-Reads (and writes) ``.h5`` / ``.hdf5`` files.  Multiple datasets per
-file are supported; :meth:`HDF5Preprocessor.load` accepts either an
-explicit ``key=`` or a heuristic (the first dataset whose ``ndim``
-matches ``main`` / ``volume`` / ``raw`` / ``data``).
+Reads (and writes) ``.h5`` / ``.hdf5`` / ``.hdf`` / ``.he5`` files.
+Multiple datasets per file are supported.  :meth:`HDF5Preprocessor.load`
+uses an explicit ``key=`` when given, otherwise ``default_key`` if that
+name exists, otherwise the first of ``main`` / ``data`` / ``raw`` /
+``volume`` / ``image`` / ``label`` present in the file, otherwise the
+first dataset found.
 
 Used by every ``CircuitDataset`` leaf for both raw EM and segmentation
 volumes.  See :class:`nanocosmos.preprocessors.BasePreprocessor` for the
@@ -67,8 +69,10 @@ class HDF5Preprocessor(BasePreprocessor):
 
         Args:
             path: Path to HDF5 file.
-            key: Dataset key within the file. If None, uses default_key,
-                or tries common keys ('main', 'data', 'raw', 'volume').
+            key: Dataset key within the file. If None, uses ``default_key``
+                when that name exists, otherwise the first of ``main``,
+                ``data``, ``raw``, ``volume``, ``image``, ``label`` present
+                in the file, otherwise the first dataset found.
             slices: Optional tuple of slices for partial loading.
             **kwargs: Additional arguments (unused, for compatibility).
 

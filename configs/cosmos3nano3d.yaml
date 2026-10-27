@@ -7,8 +7,8 @@
 #   model.gradient_checkpointing = true   (16B activation memory)
 #   data.batch_size = 2, val_batch_size = 2
 #   training.limit_val_batches = 200
-#   training.compile = false, compile_fullgraph = false  (cudagraphs are
-#       incompatible with the Cosmos 3 forward-hook feature capture)
+#   training.compile = false  (checkpoint HOP and forward-hook capture)
+#   training.compile_fullgraph = true
 #
 # Cosmos 3 Nano's VAE uses 16x spatial compression, which blurs
 # membranes.  Pair it with a high-resolution input when
@@ -263,7 +263,7 @@ model:
   # shifts the latent distribution, so it is a fresh-run setting: a checkpoint
   # trained with the old [0,1] input will not resume cleanly with it on.
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
 
 optimizer:
   lr: 0.0002

@@ -6,26 +6,50 @@ Feeds :class:`~nanocosmos.modules.Joint3DModule` the batch contract it expects
 ``image``, the native-grid ``label`` (sft), and the ``recon_image`` target.
 
 Geometry (see doc/RESOLUTION_LADDER.md).  The network runs on a fixed fine
-grid (``patch_size`` @ ``pixel_size`` nm, e.g. [200, 256, 256] @ 4 nm).  Each
+grid (``patch_size`` @ ``pixel_size`` nm, e.g. [400, 400, 400] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
 the fine grid while the label stays native and the recon target sits on the
 coarser of native/fine.
 
+``rand_transpose_zyx`` (train only) then draws a uniform permutation of the
+three axes, after :class:`~nanocosmos.transforms.ToFineGridd` and
+:class:`~nanocosmos.transforms.RandResolutionDegraded`, so section degradation
+stays on the native section axis.  The fine FOV has to be cubic: ``patch_size``
+and ``pixel_size`` must both be cubic or ``__init__`` raises ``ValueError``.
+A permutation is then a pure reorientation: the recon grid and the text
+prompt's z/y/x nm move with the data.  The finest native axis -- the
+highest-resolution dimension -- therefore lands on network z, y, or x equally
+often.  Validation stays in the stored axis order.
+
 Branches & batching.  Volumes are bucketed into round-robin groups per the
-``balance`` policy -- ``"resolution"`` (one group per ``(task, native_resolution)``;
-legacy default), ``"subset"`` (one group per domain), or ``"volume"`` (one group
-per volume; each volume scheduled equally).  Every group is single-task and
-single-resolution, so a batch drawn from one group is always **task- and
-shape-homogeneous**, which is exactly what ``Joint3DReconSegLoss`` /
-``Joint3DModule`` require.  A round-robin batch sampler interleaves groups,
-weighted by each branch's ``sample_weight`` and (for subset/volume balance) by
+``balance`` policy -- ``"resolution"`` (one group per
+``(task, native_resolution, label_convention)``; the default), ``"subset"``
+(one group per ``(task, subset, native_resolution, label_convention)``), or
+``"volume"`` (one group per volume; each volume scheduled equally).  Every
+group is single-task, single-resolution, and a single ``label_convention``,
+so a batch drawn from one group is **task-homogeneous** and, with
+``rand_transpose_zyx`` off, **shape-homogeneous**.  That is what
+``Joint3DReconSegLoss`` / ``Joint3DModule`` require.  With the flag on, a
+zyx permutation changes the recon-grid shape, so a train group whose
+``native_resolution`` is anisotropic is trained at ``batch_size`` 1 (an INFO
+log records the configured size).  Isotropic groups keep the branch batch
+size.  A round-robin batch sampler draws one group per batch.  Its RNG is
+``seed + epoch`` with no rank offset, so every rank walks the same schedule.
+The loader passes that object as ``batch_sampler`` and uses the
+``forkserver`` context when ``num_workers > 0`` (Lightning
+``use_distributed_sampler`` stays false).  Groups are weighted by each
+branch's ``sample_weight`` and (for subset/volume balance) by
 ``subset_weights`` / per-volume ``sample_weight``.
 
 Config schema (``cfg.data``)::
 
-    patch_size: [200, 256, 256]      # fine grid (z, y, x)
+    patch_size: [400, 400, 400]      # fine grid (z, y, x); cubic if
+                                     #   rand_transpose_zyx is on
     pixel_size: [4, 4, 4]            # fine voxel size nm (cubic)
+    rand_transpose_zyx: true         # train-only random z/y/x permutation.
+                                     #   Anisotropic train groups run at
+                                     #   batch_size 1 (INFO log).
     degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (ssl)
     sft_min_foreground: 0.8          # sft gate: BOTH label fg AND image non-zero
     ssl_min_foreground: 0.8          # image non-zero gate (ssl volumes)
@@ -71,6 +95,7 @@ from nanocosmos.transforms import (
     FindBoundariesd,
     Labeld,
     RandResolutionDegraded,
+    RandTransposeZYXd,
     ToFineGridd,
 )
 
@@ -96,13 +121,15 @@ def _scaled(fine_patch: Sequence[int], fine_nm: float, res: Sequence[float]) -> 
 
 
 class _RoundRobinBatchSampler(Sampler):
-    """Yield task/shape-homogeneous batches, round-robin across groups.
+    """Yield one group per batch, round-robin across groups.
 
     Each group occupies a contiguous index range ``[offset, offset+length)`` in
     the parent :class:`ConcatDataset`.  A group contributes
     ``length // batch_size`` batches per epoch; the per-group batch counts are
     interleaved (shuffled on train, sequential on val).  ``sample_weight`` is
     folded into each group's ``length`` (= num_samples) by the datamodule.
+    The RNG is ``random.Random(seed + epoch)`` with no rank term, so every
+    rank walks the same group schedule and the same within-group indices.
     """
 
     def __init__(
@@ -154,6 +181,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         data_root: str = "data",
         patch_size: Sequence[int] = (320, 256, 256),
         pixel_size: Sequence[float] = (4.0, 4.0, 4.0),
+        rand_transpose_zyx: bool = False,
         branches: Optional[Dict[str, Any]] = None,
         degrade: Optional[Dict[str, Any]] = None,
         val_volumes: Optional[List[Dict[str, Any]]] = None,
@@ -180,8 +208,24 @@ class Joint3DDataModule(pl.LightningDataModule):
         super().__init__()
         self.data_root = data_root
         self.fine_patch = tuple(int(s) for s in patch_size)
+        pix = tuple(float(p) for p in pixel_size)
         # Cubic fine grid: use the z spacing as the (single) fine voxel size.
-        self.fine_nm = float(pixel_size[0])
+        self.fine_nm = float(pix[0])
+        # Train-only zyx permutation.  Requires a cubic FOV so each permutation
+        # preserves the physical extent on every axis.  See _group_transform.
+        self.rand_transpose_zyx = bool(rand_transpose_zyx)
+        if self.rand_transpose_zyx:
+            if len(self.fine_patch) != 3 or len(set(self.fine_patch)) != 1:
+                raise ValueError(
+                    "rand_transpose_zyx requires a cubic patch_size so a zyx "
+                    "permutation preserves the physical field of view; "
+                    f"got patch_size={list(self.fine_patch)}."
+                )
+            if len(pix) != 3 or len(set(pix)) != 1:
+                raise ValueError(
+                    "rand_transpose_zyx requires cubic pixel_size (nm); "
+                    f"got pixel_size={list(pix)}."
+                )
         self.branches = dict(branches or {})
         self.degrade = {k: v for k, v in dict(degrade or {}).items() if k in _DEGRADE_KEYS}
         self.val_volumes = val_volumes
@@ -211,11 +255,11 @@ class Joint3DDataModule(pl.LightningDataModule):
         # zero-padded crops (e.g. MitoEM2 nnU-Net irregular crops padded to a box,
         # empty COSEM/FLYEM regions) that would otherwise show as black panels.
         self.ssl_min_foreground = float(ssl_min_foreground)
-        # Contrast gate for the ssl branch: rejects flat, structureless crops
-        # (e.g. resin / embedding medium around a COSEM cell) whose normalised
-        # intensity std is below this value.  The non-zero gate cannot catch
-        # these because resin is a non-zero mid-grey; only a variance test does.
-        # 0 = disabled.
+        # SSL contrast gate: local-block std threshold on the per-volume [0, 1]
+        # scale (see ``LazyVolDataset._content_fraction``).  A crop passes when
+        # the fraction of blocks whose std exceeds this value is at least
+        # ``ssl_min_foreground`` (0.5 when that gate is off).  Flat resin fails
+        # the block test; a non-zero mid-grey mean does not.  0 = disabled.
         self.ssl_min_std = float(ssl_min_std)
         # Structure gate for the ssl branch: reject NOISE-dominated crops
         # (detector / resin grain) that pass the std/content gate because random
@@ -236,17 +280,18 @@ class Joint3DDataModule(pl.LightningDataModule):
                 f"boundary_target must be 'both' or 'semantic'; got {boundary_target!r}."
             )
         # How volumes are bucketed into round-robin groups (= the unit that is
-        # scheduled equally per epoch).  Each batch is drawn from ONE group, so
-        # every mode still yields task- and shape-homogeneous batches.
-        #   "resolution" -- one group per (task, native_resolution) [default,
-        #                   legacy].  Within a group, volumes are picked
-        #                   voxel-count-weighted, so big volumes dominate.
-        #   "subset"     -- one group per (task, subset); every subset is
-        #                   scheduled equally (x ``subset_weights``).  Balances
-        #                   domains regardless of size / crop count.
-        #   "volume"     -- one group per volume; every volume is scheduled
-        #                   equally (x its ``sample_weight``).  A batch is then
-        #                   always drawn from a single volume.
+        # scheduled equally per epoch).  Each batch is drawn from ONE group.
+        # ``label_convention`` is part of the key so gapped and filled volumes
+        # do not share a FindBoundariesd pipeline.
+        #   "resolution" -- one group per (task, native_resolution,
+        #                   label_convention) [default].  Within a group,
+        #                   volumes are picked voxel-count-weighted, so big
+        #                   volumes dominate.
+        #   "subset"     -- one group per (task, subset, native_resolution,
+        #                   label_convention), weighted by ``subset_weights``.
+        #   "volume"     -- one group per volume, weighted by that volume's
+        #                   ``sample_weight``.  A batch is drawn from a single
+        #                   volume.
         # ``subset_weights`` / per-volume ``sample_weight`` multiply a group's
         # schedule length, so a subset/volume can be deliberately over-sampled
         # (e.g. to overfit CREMI / SNEMI for a segmentation sanity check).
@@ -268,25 +313,44 @@ class Joint3DDataModule(pl.LightningDataModule):
     # Per-group transform pipelines
     # ------------------------------------------------------------------
 
+    def _append_axis_perm(
+        self, tf: List[Any], keys: Sequence[str], native_res: Sequence[float],
+    ) -> None:
+        """Permute z/y/x after the fine-grid resample (train only).
+
+        The network image is already cubic, so its shape is unchanged.  The
+        recon / label grids follow the same permutation, and the prompt's
+        z/y/x nm are rewritten to match.  That places the finest native axis
+        on a random network axis.
+        """
+        tf.append(RandTransposeZYXd(
+            keys=list(keys), native_resolution=native_res,
+        ))
+
     def _group_transform(
         self,
         task: str,
         native_res: Sequence[float],
         *,
         label_convention: Optional[str] = None,
+        augment: bool = False,
     ) -> Compose:
         recon_size = _scaled(self.fine_patch, self.fine_nm,
                              [max(float(r), self.fine_nm) for r in native_res])
         if task == "ssl":
-            return Compose([
+            ssl_keys = ["image", "recon_image"]
+            tf: List[Any] = [
                 EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
                 RandResolutionDegraded(keys=["image"], recon_key="recon_image", **self.degrade),
                 ToFineGridd(
                     image_size=self.fine_patch, recon_size=recon_size,
                     set_recon_from_image=False, task="ssl",
                 ),
-                EnsureTyped(keys=["image", "recon_image"]),
-            ])
+                EnsureTyped(keys=ssl_keys),
+            ]
+            if augment:
+                self._append_axis_perm(tf, ssl_keys, native_res)
+            return Compose(tf)
         # sft pipeline.  Optional boundary erosion makes the sem head target thin
         # membranes instead of near-degenerate full foreground.  Erosion runs on
         # the NATIVE label grid using this group's native resolution, so
@@ -322,6 +386,8 @@ class Joint3DDataModule(pl.LightningDataModule):
             ),
             EnsureTyped(keys=out_keys),
         ]
+        if augment:
+            self._append_axis_perm(sft_tf, out_keys, native_res)
         return Compose(sft_tf)
 
     def _build_group(
@@ -333,6 +399,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         deterministic: bool,
         *,
         label_convention: Optional[str] = None,
+        augment: bool = False,
     ) -> LazyVolDataset:
         native_patch = _scaled(self.fine_patch, self.fine_nm, native_res)
         # Attach fixed text-condition prompts (imaging · z/y/x nm · tail).
@@ -351,6 +418,7 @@ class Joint3DDataModule(pl.LightningDataModule):
             patch_size=native_patch,
             transform=self._group_transform(
                 task, native_res, label_convention=label_convention,
+                augment=augment,
             ),
             num_samples=num_samples,
             # sft: gate on BOTH label and image at sft_min_foreground.
@@ -514,10 +582,26 @@ class Joint3DDataModule(pl.LightningDataModule):
                 mean_mult = 1.0
             for desc, res, gvols, mult, conv in branch_groups:
                 n_group = max(bs, int(round(self.num_samples * weight * mult / mean_mult)))
+                group_bs = bs
+                # A zyx permutation moves the recon grid with the native axes,
+                # so two anisotropic samples in one batch can have different
+                # shapes and cannot be stacked. Isotropic groups keep ``bs``.
+                if (
+                    self.rand_transpose_zyx
+                    and group_bs > 1
+                    and len(set(float(r) for r in res)) > 1
+                ):
+                    logger.info(
+                        "rand_transpose_zyx: task=%s %s native_resolution=%s "
+                        "trains at batch_size 1 (configured %d)",
+                        task, desc, list(res), group_bs,
+                    )
+                    group_bs = 1
                 try:
                     ds = self._build_group(
                         task, res, gvols, n_group, deterministic=False,
                         label_convention=conv,
+                        augment=self.rand_transpose_zyx,
                     )
                 except ValueError:
                     # All volumes in the group were skipped (e.g. smaller than
@@ -529,12 +613,13 @@ class Joint3DDataModule(pl.LightningDataModule):
                     )
                     continue
                 datasets.append(ds)
-                group_specs.append((offset, len(ds), bs))
+                group_specs.append((offset, len(ds), group_bs))
                 offset += len(ds)
                 logger.info(
                     "Joint train group: task=%s %s vols=%d native_patch=%s "
-                    "len=%d bs=%d mult=%.2f", task, desc, len(gvols),
-                    _scaled(self.fine_patch, self.fine_nm, res), len(ds), bs, mult,
+                    "len=%d bs=%d mult=%.2f transpose_zyx=%s", task, desc,
+                    len(gvols), _scaled(self.fine_patch, self.fine_nm, res),
+                    len(ds), group_bs, mult, self.rand_transpose_zyx,
                 )
         if not datasets:
             raise ValueError("Joint3DDataModule: no train volumes configured under data.branches.")

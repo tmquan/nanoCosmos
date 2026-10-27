@@ -1,10 +1,12 @@
 """Lightning callback that drives TensorBoard visualisation.
 
 :class:`ImageLogger` caches the first batch of every training /
-validation epoch (on rank 0), runs an automatic-mode forward pass at
-epoch end, and hands the predictions off to
-:func:`_log_predictions` which emits the panels defined in
-:mod:`nanocosmos.callbacks.tensorboard.heads`.
+validation epoch on every rank, runs an automatic-mode forward at
+epoch end on every rank, and on rank 0 hands the predictions to
+:func:`_log_predictions`
+(:mod:`nanocosmos.callbacks.tensorboard.heads`).
+``on_validation_epoch_end`` also runs after Lightning's sanity-check
+validation, so step-0 panels are written then.
 """
 
 from typing import Any, Dict, Optional
@@ -54,9 +56,14 @@ class ImageLogger(pl.Callback):
         {stage}/automatic/aff/true/{offset}                     (3-D only)
         {stage}/automatic/aff/pred/{offset}
 
+    Writes happen in ``on_{train,validation}_epoch_end``.  The validation
+    hook also runs at the end of Lightning's sanity check, so step-0
+    panels appear after sanity validation.
+
     This matches the scalar hierarchy emitted by
     :class:`nanocosmos.modules.base.BaseCircuitModule`
-    (``{stage}/automatic/loss[/{aff,sem,recon}]`` and
+    (``{stage}/automatic/loss[/{aff,sem,raw}]`` for
+    :class:`~nanocosmos.losses.AffinityFGLoss`, and
     ``{stage}/automatic/sem/metric/<name>``) so the images and scalars
     collapse into the same TensorBoard group.
 
@@ -151,7 +158,13 @@ class ImageLogger(pl.Callback):
         return torch.bfloat16
 
     def _get_tb(self, trainer: pl.Trainer):
-        """Return TensorBoard SummaryWriter or None."""
+        """Return the TensorBoard writer, a rank>0 dummy experiment, or None.
+
+        ``None`` means the trainer has no logger, or ``experiment`` has no
+        ``add_images``.  Lightning's TensorBoard logger returns a
+        ``_DummyExperiment`` off rank 0; that object still exposes
+        ``add_images`` (a no-op), so this is not ``None`` there.
+        """
         logger = trainer.logger
         if logger is None:
             return None
@@ -168,11 +181,11 @@ class ImageLogger(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> None:
         # ALL ranks must run ``_run_visualization`` (its model forward does
-        # FSDP per-layer all-gathers -- collectives that need every rank);
-        # only rank 0 actually logs (``tb`` is None elsewhere, and the
-        # forward bails before the logging stage on non-rank-0).  Do NOT
-        # early-return on non-rank-0, or the collectives desync and hang.
-        # The epoch gate is rank-consistent (same ``current_epoch``).
+        # FSDP per-layer all-gathers -- collectives that need every rank).
+        # Do NOT early-return on non-rank-0, or the collectives desync and
+        # hang.  Rank 0 writes; other ranks hold a dummy experiment whose
+        # ``add_*`` calls do not write.  The epoch gate is rank-consistent
+        # (same ``current_epoch``).
         epoch = trainer.current_epoch
         if epoch % self.every_n_epochs != 0:
             self._train_batch = None
@@ -180,7 +193,7 @@ class ImageLogger(pl.Callback):
         if self._train_batch is None:
             return
 
-        tb = self._get_tb(trainer)  # real on rank 0, None elsewhere
+        tb = self._get_tb(trainer)  # SummaryWriter on rank 0; dummy elsewhere
         was_training = pl_module.training
         pl_module.eval()
         try:
@@ -196,8 +209,8 @@ class ImageLogger(pl.Callback):
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ) -> None:
-        # See on_train_epoch_end: ALL ranks run the forward (collective);
-        # only rank 0 logs.  No non-rank-0 early-return.
+        # See on_train_epoch_end: ALL ranks run the forward (collective).
+        # No non-rank-0 early-return.
         epoch = trainer.current_epoch
         if epoch % self.every_n_epochs != 0:
             self._val_batch = None
@@ -205,7 +218,7 @@ class ImageLogger(pl.Callback):
         if self._val_batch is None:
             return
 
-        tb = self._get_tb(trainer)  # real on rank 0, None elsewhere
+        tb = self._get_tb(trainer)  # SummaryWriter on rank 0; dummy elsewhere
         was_training = pl_module.training
         pl_module.eval()
         try:
@@ -292,11 +305,13 @@ class ImageLogger(pl.Callback):
         if wan_decoder_pred is not None:
             wan_decoder_pred = wan_decoder_pred.float()
 
-        # The forward above is the only collective part (FSDP per-layer
-        # all-gathers), and every rank has now run it.  Non-rank-0 ranks
-        # have no TensorBoard writer, so they bail here -- the remaining
-        # work (Mutex Watershed agglomeration, panel rendering, ``tb.add_*``)
-        # is purely local and only the master needs to do it.
+        # The forward above is the collective part (FSDP per-layer
+        # all-gathers), and every rank has now run it.  ``tb`` is None only
+        # when the trainer has no image logger.  A TensorBoard logger gives
+        # rank 0 the SummaryWriter and other ranks Lightning's
+        # ``_DummyExperiment`` (``hasattr(add_images)`` is true; ``add_*``
+        # is a no-op), so this return does not skip the local panel work
+        # on those ranks.
         if tb is None:
             return
 
@@ -341,7 +356,8 @@ class ImageLogger(pl.Callback):
 
         # Optional boundary-eroded foreground label (datamodule
         # ``boundary_target: semantic``) -- the actual sem-head target, shown
-        # as the ``true/sem`` panel.  Absent in the legacy / both modes.
+        # as the ``true/sem`` panel.  Absent when ``boundary_target`` is
+        # ``both`` (erosion is applied to ``label`` itself; no ``sem_label``).
         sem_label = batch.get("sem_label")
         sem_labels_2d = None
         if sem_label is not None:

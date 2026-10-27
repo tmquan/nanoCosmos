@@ -2,46 +2,44 @@
 Joint super-resolution-reconstruction + segmentation loss (the nanoCosmos recipe).
 
 The model is a **voxel-size super-resolver** (see doc/RESOLUTION_LADDER.md):
-one shared backbone emits a single head on the **fixed small-voxel network
-grid** (the finest voxel size, ``D == H == W``, e.g. ``160`` at 4 nm)::
+one shared backbone emits a single head on the fixed 4 nm network grid.
+The patch shape is the configured ``patch_size`` (pretrain
+``[400, 400, 400]``, joint 4B ``[400, 256, 256]``, 16B ``[200, 256, 256]``)::
 
-    head : [B, N_AFF + 2, D, H, W]      # aff (logits) | sem (logit) | raw (linear)
+    head : [B, n_aff + 2, D, H, W]      # aff (logits) | sem (logit) | raw (linear)
 
 (Voxel-size convention used throughout: *small voxel size* = fine / high
 detail, e.g. 4 nm; *large voxel size* = coarse, e.g. 30-40 nm.)
 
-The ``raw`` channel is the **reconstructed small-voxel EM** (not the input
-reconstruction it was in the plain affinity recipe); ``aff`` / ``sem`` are
-the **small-voxel segmentation**.  *Every supervision term pools the small-
-voxel prediction down to wherever its ground truth lives* -- the pool factor
-is read straight from the GT tensor's spatial shape, so it can never disagree
-with the target grid (factor 1 == the smallest-voxel rung).
+The ``raw`` channel is the reconstructed small-voxel EM.  ``aff`` / ``sem``
+are the small-voxel segmentation.  Every supervision term pools the
+small-voxel prediction down to the ground-truth tensor's spatial shape, so
+the pool factor follows that grid (factor 1 when the target is already on
+the small-voxel grid).
 
 Two branches, routed per **batch** by ``targets["task"]`` (batches must be
-task-homogeneous -- see the round-robin multi-task sampler in the datamodule;
-this also gives per-branch batch-size / weighting control).  The roles
-**stack** by dataset (a labeled small-voxel rung like FIB-25 is in *both*):
+task-homogeneous -- the datamodule's round-robin sampler, which also sets
+per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
+(8 nm) is one such rung.
 
-``ssl``  -- self-supervised reconstruction, gated by *voxel size*:
-    a degraded (large-voxel) input is reconstructed back to the clean small-
-    voxel EM, ``L1(pool(raw -> recon_image grid), recon_image)``.  Sources:
-    the smallest-voxel rung (COSEM 4 nm) and any other fine-enough volume,
-    **including UNLABELED FIB** (the vast unproofread FIB-25 volume -- domain-
-    matched neuropil SSL).  No segmentation supervision.
+``ssl``  -- self-supervised reconstruction, gated by voxel size:
+    a degraded input is matched to the clean EM,
+    ``L1(pool(raw -> recon_image grid), recon_image)``.  ``recon_image``
+    sits on the coarser of the native voxel size and the 4 nm grid (COSEM
+    ~4 nm lands on the fine grid; unlabeled FIB-25 and other 8 nm neuropil
+    stay on their native grid).  No segmentation supervision.
 
-``sft``  -- segmentation, gated by *labels*: any labeled rung.  The small-
-    voxel head is pooled to the **label grid** (``labels.shape[-3:]``) via
-    :func:`adaptive_avg_pool3d` -- the physically-faithful "a large voxel
-    averages the small sub-voxels" downsample on every axis (z *and* xy), the
-    anti-aliased counterpart of a single ``grid_sample`` tap, accepting any
-    (fractional) factor -- then :class:`~nanocosmos.losses.AffinityFGLoss`.
-    **Plus a data-consistency term on the ``raw`` head**: the unified head
-    (``N_AFF + 2`` channels) always carries ``raw``, so on sft batches we also pool the predicted
-    small-voxel ``raw`` down to the ORIGINAL large-voxel EM and match it
-    (``recon_image`` here is that large-voxel EM).  This keeps the raw head
-    trained on sft and enforces that the super-resolved reconstruction agrees
-    with the measured data when downsampled ("do no harm").  Optional
-    (skipped if no ``recon_image``).
+``sft``  -- segmentation, gated by labels: any labeled rung.  The
+    small-voxel head is pooled to the **label grid** (``labels.shape[-3:]``)
+    with :func:`adaptive_avg_pool3d` (each output voxel averages the small
+    voxels in its window, on z and on xy, including fractional factors),
+    then :class:`~nanocosmos.losses.AffinityFGLoss`.  The head is
+    ``n_aff + 2`` channels (30 affinity offsets + sem + raw = 32 in the
+    training configs) and always carries ``raw``.  On sft the predicted
+    ``raw`` is also pooled to ``recon_image``: the clean native EM captured
+    before the input is resampled onto the 4 nm grid, then placed on the
+    coarser of native and fine.  That term is skipped when ``recon_image``
+    is absent.
 
 All branches **backprop jointly** into the shared backbone (no detach): the
 segmentation gradient shapes the reconstruction and vice-versa.
@@ -68,9 +66,9 @@ from nanocosmos.losses._common import regression_loss_fn
 # Canonical branch names.  A batch carries exactly one of these in
 # ``targets["task"]`` (the datamodule's sampler yields task-homogeneous
 # batches).  See doc/RESOLUTION_LADDER.md:
-#   * SSL -- self-supervised reconstruction of the clean small-voxel EM from a
-#     degraded (large-voxel) input (gated by *voxel size*: any rung fine
-#     enough; labels optional).  Owns the ``raw`` reconstruction term.
+#   * SSL -- self-supervised reconstruction of the clean EM (on the coarser
+#     of native and the 4 nm grid) from a degraded input (gated by voxel
+#     size: any rung fine enough; labels optional).  Owns the ``raw`` term.
 #   * SFT  -- segmentation on any *labeled* rung (gated by *labels*): pool the
 #     small-voxel head down to the label grid, then the affinity + sem loss.  A
 #     rung with labels does SFT regardless of where it sits on the ladder; the
@@ -94,6 +92,12 @@ def _as_channeled(x: torch.Tensor, ndim: int) -> torch.Tensor:
 class Joint3DReconSegLoss(nn.Module):
     """Two-branch joint EM reconstruction + segmentation loss.
 
+    Training configs use a 32-channel head (30 affinity offsets + sem + raw)
+    and ``recon_loss="l1"``.  Pretrain
+    (``configs/nanocosmos-4B-pretrain.yaml``) sets ``weight_rec=1``,
+    ``weight_ssl=5``, ``weight_seg=0``, ``weight_sft=0``.  The constructor
+    defaults are the signature values.
+
     Args:
         seg: Either an already-built :class:`AffinityFGLoss` or a kwargs
             mapping forwarded to it.  ``weight_raw`` on the inner loss is
@@ -110,9 +114,12 @@ class Joint3DReconSegLoss(nn.Module):
             *total* (up/down-weight a whole branch independently of how often
             its batches are drawn).
         recon_image_key: Batch key holding the clean EM reconstruction target
-            (default ``"recon_image"``).  On ``ssl`` it is the clean small-
-            voxel EM (required); on ``sft`` it is the original large-voxel EM
-            for the raw data-consistency term (optional).
+            (default ``"recon_image"``).  On ``ssl`` it is required and lives
+            on the coarser of the native voxel size and the 4 nm grid.  On
+            ``sft`` it is the clean native EM captured before the input is
+            resampled to the fine grid, then placed on that same coarser
+            grid (optional; the data-consistency term is skipped when the
+            key is absent).
         task_key: Batch key holding the branch name (default ``"task"``).
 
     The pool factor is **derived from the ground-truth shape** -- the small-
@@ -179,10 +186,9 @@ class Joint3DReconSegLoss(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Build the cached affinity target at the **supervised grid**.
 
-        Delegates to :meth:`AffinityFGLoss.build_targets`.  ``labels`` is on
-        the rung's native grid (small-voxel for FIB/COSEM, large-voxel for
-        SNEMI3D / CREMI / MICrONS); the head is pooled to match in
-        :meth:`forward`, so the target is always built from the labels as-is.
+        Delegates to :meth:`AffinityFGLoss.build_targets`.  ``labels`` stays
+        on the rung's native grid; the head is pooled to that shape in
+        :meth:`forward`, so the target is built from the labels as-is.
         """
         return self.seg.build_targets(labels, batch)
 
@@ -242,9 +248,9 @@ class Joint3DReconSegLoss(nn.Module):
 
         The small-voxel ``raw`` channel is pooled to the reconstruction
         target's own grid (``recon_image.shape[-3:]``) before the regression,
-        so the term works whether the target sits on the small-voxel grid
-        (COSEM 4 nm; pool is a no-op) or a larger-voxel native grid (FIB 8 nm
-        SSL, or the original large-voxel EM in the sft data-consistency term).
+        so the term works when the target is already on the 4 nm grid (COSEM;
+        the pool is a no-op) and when it stays on a coarser native grid
+        (FIB 8 nm SSL, and the sft native-EM target).
         """
         target = _as_channeled(recon_image, head.dim()).to(torch.float32)
         raw = self._pool_to(head[:, self.raw_slice], target.shape[-3:])
@@ -308,17 +314,18 @@ class Joint3DReconSegLoss(nn.Module):
         """Route the (task-homogeneous) batch to its branch and aggregate.
 
         Args:
-            head: ``[B, N_AFF + 2, D, H, W]`` small-voxel head (aff/sem
-                logits, raw linear) on the fixed small-voxel network grid.
+            head: ``[B, n_aff + 2, D, H, W]`` small-voxel head (aff/sem
+                logits, raw linear) on the fixed 4 nm network grid.
             targets: Must carry ``task``.  ``ssl`` carries ``recon_image``
-                (the clean EM reconstruction target, on the small-voxel grid
-                for COSEM or a larger-voxel native grid for FIB SSL).  ``sft``
+                (the clean EM target, on the 4 nm grid for COSEM or on the
+                native grid when that is coarser, e.g. FIB 8 nm).  ``sft``
                 carries ``labels`` at the native grid -- the pool factor is
                 read from the label shape, so no voxel-count key is needed --
-                and optionally ``recon_image`` (the original large-voxel EM)
-                for the ``raw`` data-consistency term, and optionally
-                ``sem_label`` (boundary-eroded foreground on the label grid;
-                supervises the sem head only -- ``boundary_target: semantic``).
+                and optionally ``recon_image`` (clean native EM on the coarser
+                of native and fine) for the ``raw`` data-consistency term, and
+                optionally ``sem_label`` (boundary-eroded foreground on the
+                label grid; supervises the sem head only --
+                ``boundary_target: semantic``).
                 ``_cached_targets`` (from :meth:`build_targets`) is used when
                 present.
 
@@ -329,7 +336,7 @@ class Joint3DReconSegLoss(nn.Module):
         if head.shape[1] != self.head_channels:
             raise ValueError(
                 f"Joint3DReconSegLoss expects a {self.head_channels}-channel "
-                f"head (N_AFF + 2); got {head.shape[1]}."
+                f"head (n_aff + 2); got {head.shape[1]}."
             )
         task = self._resolve_task(targets[self.task_key])
         cached: Optional[Dict[str, torch.Tensor]] = targets.get("_cached_targets")
@@ -340,9 +347,9 @@ class Joint3DReconSegLoss(nn.Module):
 
         if task == SSL:
             # ---- self-supervised reconstruction of the clean EM ----
-            # The whole branch: reconstruct the clean (small-voxel) EM from a
-            # degraded (large-voxel) input.  ``recon_image`` is REQUIRED (it is
-            # the only supervision on this label-free branch).
+            # Match ``raw`` (pooled to the recon grid) to ``recon_image``.
+            # ``recon_image`` is REQUIRED (it is the only supervision on this
+            # label-free branch).
             if recon_image is None:
                 raise KeyError(
                     f"Joint3DReconSegLoss[ssl] needs targets"
@@ -366,13 +373,11 @@ class Joint3DReconSegLoss(nn.Module):
                     out[k] = v
                     total = total + self.weight_seg * v
             # Data-consistency on the ``raw`` head (the unified head always
-            # carries it).  Without this the raw channel is UNTRAINED on sft
-            # batches.  Pool the predicted small-voxel ``raw`` down to the
-            # ORIGINAL large-voxel EM and match it: the super-resolved
-            # reconstruction must agree with what was actually measured when
-            # downsampled ("do no harm" / SR data-consistency).  ``recon_image``
-            # here is the original large-voxel EM; optional (skipped if the
-            # datamodule omits it).
+            # carries it).  Pool the predicted small-voxel ``raw`` to
+            # ``recon_image`` (clean native EM on the coarser of native and
+            # fine) and match it, so the super-resolved volume agrees with
+            # the measured data after that downsample.  Optional (skipped
+            # when the datamodule omits ``recon_image``).
             if recon_image is not None and self.weight_rec > 0:
                 l_recon = self._recon_term(head, recon_image)
                 out["loss/recon"] = l_recon

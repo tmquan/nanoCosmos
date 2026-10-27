@@ -1,11 +1,13 @@
 """
 Affinity + foreground loss for the Mutex Watershed head.
 
-The model emits a single ``[B, HEAD_CHANNELS, D, H, W]`` head of raw
-logits / linear values (no activation in the forward pass): the per-offset
-affinities :data:`nanocosmos.losses._common.AFF_SLICE` and the scalar
-foreground :data:`nanocosmos.losses._common.SEM_SLICE` are logits; the
-``raw`` channel is linear.  This loss supervises all three:
+The model emits a single ``[B, C, D, H, W]`` head of raw logits / linear
+values (no activation in the forward pass), ``C = n_aff + 2``.
+:data:`~nanocosmos.losses._common.HEAD_CHANNELS` is the default-offset
+width (14 + sem + raw = 16).  Training configs pass 30 offsets, so
+``C`` is 32.  Affinities occupy the leading channels and the scalar
+foreground the next one (logits); the ``raw`` channel is linear.  This
+loss supervises all three:
 
 * **aff** -- per-voxel affinity logit ``z[o, v]`` for
   ``aff[o, v] = P(label[v] == label[v+o])`` against the binary target from
@@ -498,8 +500,9 @@ class AffinityFGLoss(nn.Module):
         """Run the affinity + foreground sub-losses and aggregate.
 
         Args:
-            head: ``[B, HEAD_CHANNELS, D, H, W]`` raw-logit head (aff / sem
-                are logits; raw is linear).
+            head: ``[B, head_channels, D, H, W]`` raw-logit head
+                (``head_channels = n_aff + 2``; aff / sem are logits, raw
+                is linear).
             targets: Dict with ``labels`` ``[B, D, H, W]`` integer ids and
                 (optionally) a ``_cached_targets`` dict from
                 :meth:`build_targets`.  An optional ``sem_label`` (same shape

@@ -3,14 +3,22 @@
 The public loss surface is intentionally small:
 
 * :class:`AffinityFGLoss` consumes the model's single
-  ``[B, HEAD_CHANNELS, *spatial]`` head tensor and supervises the
+  ``[B, n_aff + 2, *spatial]`` head tensor and supervises the
   per-offset affinities and the scalar foreground probability.  At
   evaluation the affinities are agglomerated into instances by the
   Mutex Watershed (:mod:`nanocosmos.inference.mutex_watershed`).
+  :data:`HEAD_CHANNELS` is the default-offset width (16).
 * :class:`DiceBCEFocalLoss` is the composite Dice + BCE + Focal
   supervisor used by :class:`AffinityFGLoss` for the foreground head --
   exposed here so external consumers can instantiate it directly with
   the same numerics.
+* :class:`Joint3DReconSegLoss` is the joint reconstruction + segmentation
+  loss (tasks ``ssl`` and ``sft``) on that same head.  Training configs
+  use 30 affinity offsets, so the head is 32 channels (affinities + sem
+  + raw).  Pretrain (``configs/nanocosmos-4B-pretrain.yaml``) sets
+  ``recon_loss="l1"``, ``weight_rec=1``, ``weight_ssl=5``,
+  ``weight_seg=0``, ``weight_sft=0``.  :data:`HEAD_CHANNELS` remains the
+  default-offset width (14 affinities + sem + raw = 16).
 * :mod:`nanocosmos.losses._common` owns the canonical channel layout
   (:data:`AFFINITY_OFFSETS`, :data:`AFF_SLICE`, :data:`SEM_SLICE`,
   :data:`RAW_SLICE`), the

@@ -46,7 +46,7 @@ ckpt_path_only_prefixes: null
 
 # Data configuration
 data:
-  dataset: snemi3d  # Options: snemi3d, microns, neurons
+  dataset: snemi3d  # Options: snemi3d, microns, neurons, flyem3d, cremi3d, joint3d
   data_root: data
   batch_size: 4
   num_workers: 16
@@ -87,7 +87,7 @@ model:
   head_channels: 16
   feature_size: 64
   dropout: 0.2
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
   # If true, the wrapper will auto-pull pretrained weights from HuggingFace
   # on first instantiation:
   #   cosmos3nano3d    -> nvidia/Cosmos3-Nano   (16B omni MoT; BF16)
@@ -95,8 +95,8 @@ model:
   #   cosmos3super3d   -> nvidia/Cosmos3-Super  (64B)
   # Downloads are cached under ~/.cache/nanocosmos/.  Set to false to
   # train from scratch.
-  # NOTE: cosmos3nano3d needs a bleeding-edge ``diffusers`` (>= 0.37,
-  # currently git main) that exposes ``Cosmos3OmniTransformer``.
+  # NOTE: cosmos3nano3d needs diffusers 0.42.1 (pinned in
+  # requirements.txt), which exposes ``Cosmos3OmniTransformer``.
   pretrained: true
 
 # Optimizer configuration

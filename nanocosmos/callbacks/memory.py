@@ -12,7 +12,7 @@ Two callbacks live here:
 Diagnosis cheat-sheet for ``cuda_memory/*`` curves:
 
 - ``allocated_gb`` flat, ``reserved_gb`` rising → fragmentation;
-  re-launch with ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True``.
+  re-launch with ``PYTORCH_ALLOC_CONF=expandable_segments:True``.
 - both rising → real tensor leak; chase callback / image-logger refs.
 - sawtooth tied to val epochs → val peak polluting train pool; enable
   ``callbacks.cuda_empty_cache_before_val`` (which now empties on both
@@ -26,9 +26,10 @@ import pytorch_lightning as pl
 class CudaEmptyCacheCallback(pl.Callback):
     """Clear the CUDA allocator cache around each validation epoch.
 
-    Validation runs a different memory profile from training (sliding-window
-    inference, full-resolution decode, image-logger snapshots), so its
-    peak otherwise ends up reserved in the same allocator pool as training.
+    Validation runs a different memory profile from training (the patch
+    forward plus Mutex Watershed agglomeration, metric tables, and
+    image-logger snapshots), so its peak otherwise ends up reserved in
+    the same allocator pool as training.
     Emptying on *both* sides of validation stops the val high-water mark
     from contaminating train memory across epochs.
     """

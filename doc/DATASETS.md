@@ -799,8 +799,7 @@ on disk with its shape / resolution / dtype / seg-fg%.
    `flyem3d`, `cremi3d`, `minnie65`, `neurons`, `AC`). It is consumed
    only by the `resolution_zoom` augmentation.
 4. **Resolution policy** (`cosmos3nano3d.yaml`):
-   `resolution_zoom_mode: union` with `resolution_zoom_prob` **0.9** (nano) /
-   **0.5** (predict) — the fraction of training patches that are jittered
+   `resolution_zoom_mode: union` with `resolution_zoom_prob` **0.9** — the fraction of training patches that are jittered
    (the rest are fed at native scale). Each anisotropic patch is resampled to
    a **random target inside the shared union envelope** `z ∈ [30,40]`,
    `xy ∈ [4,8]` nm (the union of all native resolutions); the `z` and `xy`

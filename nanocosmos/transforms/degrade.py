@@ -13,13 +13,18 @@ SSL signal that unlocks petascale unlabeled EM.
 (Voxel-size convention: *small voxel size* = fine, e.g. 4 nm; *large voxel
 size* = coarse, e.g. 30-40 nm.)
 
-:class:`RandResolutionDegraded` maps a single small-voxel image patch
-``[C, D, H, W]`` (on the fixed small-voxel network grid) to:
+:class:`RandResolutionDegraded` maps one image patch ``[C, D, H, W]`` at the
+spatial size it is given.  In the joint pipeline that size is the
+**native-resolution crop**, before
+:class:`~nanocosmos.transforms.fine_grid.ToFineGridd`:
 
-* ``image``        -- the **degraded** volume, back on the *same* small-voxel
-  grid (so it is a drop-in network input), blurry / aliased in ``z``;
+* ``image``        -- the **degraded** volume, upsampled back to that same
+  spatial size, blurry / aliased in ``z``;
 * ``recon_image``  -- a pristine copy of the input (the L1 reconstruction
-  target).
+  target), still at the input resolution.
+
+:class:`~nanocosmos.transforms.fine_grid.ToFineGridd` then places ``image``
+on the fine grid and ``recon_image`` on the coarser of native and fine.
 
 The degradation composes the dominant real ssTEM / SBEM defects, each
 independently probability-gated, so the reconstruction does not overfit
@@ -36,20 +41,21 @@ clean ``z``-decimation (the make-or-break sim-to-real concern):
    sections (acquisition dropouts; cf. :class:`RandMissingSliced`).
 4. **section-dependent noise + contrast** -- per-section Gaussian noise
    and gamma jitter (staining / detector variation).
-5. **``z`` up-sampling back to ``D``** -- nearest by default (physically
-   faithful: a coarse section is a single integrated measurement with no
-   information about anything smoother than the jump to the next section,
-   so nearest reproduces the genuine sharp step-transitions of a real
-   thick-section stack placed on a finer canvas; trilinear is available for
-   a softer look but invents a linear blend between sections that has no
-   physical basis and can mask the very artifact the model must invert).
-   The model sees the large-voxel content on the small-voxel canvas and its
-   job is to restore the lost ``z`` detail. NOTE: this must stay consistent
-   with :class:`nanocosmos.transforms.fine_grid.ToFineGridd`'s ``image_mode``
-   (also nearest by default), which performs the analogous native-coarse ->
-   fine-grid upsample for REAL coarse volumes on the ``sft`` branch and at
-   inference -- a mismatch here would train SSL on a different degradation
-   shape than the model actually sees downstream.
+5. **``z`` up-sampling back to the input depth ``D``** -- nearest by default
+   (physically faithful: a coarse section is a single integrated measurement
+   with no information about anything smoother than the jump to the next
+   section, so nearest reproduces the genuine sharp step-transitions of a
+   real thick-section stack placed on the input canvas; trilinear is
+   available for a softer look but invents a linear blend between sections
+   that has no physical basis and can mask the very artifact the model must
+   invert).  The degraded stack is back on the input canvas; in the joint
+   pipeline :class:`nanocosmos.transforms.fine_grid.ToFineGridd` then
+   resamples ``image`` onto the fine grid.  ``up_mode`` must stay consistent
+   with that transform's ``image_mode`` (also nearest by default): this
+   transform is the synthetic coarse-to-fine step on SSL, and
+   ``ToFineGridd`` is the native-coarse -> fine-grid step for real coarse
+   volumes on the ``sft`` branch and at inference.  A mismatch trains SSL
+   on a different degradation shape than those real coarse volumes.
 
 Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
@@ -77,11 +83,12 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         keys: Image key(s) to degrade.  Default ``("image",)``.
         recon_key: Key under which the pristine small-voxel copy (the
             reconstruction target) is stored.  Default ``"recon_image"``.
-        zf_range: ``(min, max)`` voxel-size factor; the sampled ``zf`` sets
-            the number of retained sections ``d = round(D / zf)``.  E.g.
-            ``(2, 10)`` spans 8 nm (FIB) to 40 nm (CREMI / MICrONS) sections
-            on a 4 nm grid.  ``zf`` is sampled log-uniformly so scales are
-            symmetric.
+        zf_range: ``(min, max)`` factor on the **input** z voxel size; the
+            sampled ``zf`` sets the number of retained sections
+            ``d = round(D / zf)``.  On a 4 nm crop, ``(2, 10)`` spans 8 nm
+            (FIB) to 40 nm (CREMI / MICrONS) sections.  On a coarser native
+            crop the same factor is relative to that crop's voxel size.
+            ``zf`` is sampled log-uniformly so scales are symmetric.
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
             exists).

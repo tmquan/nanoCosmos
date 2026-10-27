@@ -3,7 +3,7 @@
 
 # This script automates the setup of a GPU development environment on Ubuntu.
 # It automatically detects the user who ran the script and their home directory.
-# Usage: sudo ./setup_gpu_machine.sh
+# Usage: sudo ./setup.sh
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
@@ -66,9 +66,10 @@ apt install -y infiniband-diags ibutils libibverbs1 librdmacm1
 apt install -y nvitop
 
 # --- 4. Install NVIDIA Driver & CUDA Toolkit ---
-echo "--- Installing NVIDIA Driver and CUDA Toolkit ---"
+echo "--- Installing CUDA Toolkit ---"
 wget -q --show-progress -O cuda_linux.run "$CUDA_URL"
-# --silent: no UI; --driver: install driver; --toolkit: install toolkit
+# --silent: no UI; --samples: CUDA samples; --toolkit: CUDA toolkit.
+# The driver flag is not passed.
 sh cuda_linux.run --silent --samples --toolkit #--driver
 rm cuda_linux.run
 

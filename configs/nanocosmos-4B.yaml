@@ -5,15 +5,15 @@
 # but the backbone is Cosmos3-Edge (variant EDGE) instead of the full
 # Cosmos-3 Nano (16B).  Edge usually allows a larger patch/batch than Nano.
 # Edge is loaded DIRECTLY from its own released checkpoint
-# (nvidia/Cosmos3-Edge).  That load is correct only on the diffusers commit
-# pinned in requirements.txt (9f6fc2c), which honors Edge's
+# (nvidia/Cosmos3-Edge).  That load is correct on diffusers 0.42.1
+# (pinned in requirements.txt), which honors Edge's
 # ``hidden_act: relu2`` and ``qk_norm_for_text: false``.  Older diffusers
 # (0.39) builds a gated-SiLU MLP the checkpoint does not contain.
 # Runtime matches the pretrain config: BF16, volume roots under
-# ``/home/nvidia/data``, ``hydra.job.chdir: false``.  Edge shares
-# Nano's Wan2.2-TI2V VAE (same 16x-xy / 4x-z compression, same DiT token
-# grid) but ~4x fewer transformer params, so it usually fits with a
-# comparable or larger batch than the 16B recipe.
+# ``${oc.env:HOME}/data``, ``hydra.job.chdir: false``.  Edge shares
+# Nano's Wan2.2-TI2V VAE (16x-xy / 4x-z) and has ~4x fewer transformer
+# params, so it usually fits with a comparable or larger batch than the
+# 16B recipe.
 #
 # The nanoCosmos recipe (see doc/RESOLUTION_LADDER.md):
 # ONE Cosmos3-Edge (4B) backbone predicts on a fixed FINE grid (4 nm, 400x256x256) a
@@ -182,68 +182,68 @@ data:
       # FOV and skip the image resample -- these are genuinely-resampled files, so
       # native_resolution: [4,4,4] is now truthful, not a pseudo/declared value.
       - vol: jrc_hela-3_4nm_x4096_y0_z2048_volume   # autocorr 0.72
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x6144_y0_z2048_volume   # autocorr 0.63
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x4096_y0_z0_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x4096_y0_z4096_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_hela-3_4nm_x2048_y0_z4096_volume   # autocorr 0.75
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_macrophage-2_4nm_x4096_y0_z4096_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_jurkat-1_4nm_x4096_y0_z0_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       - vol: jrc_jurkat-1_4nm_x4096_y0_z4096_volume
-        root: /home/nvidia/data/COSEM3D
+        root: ${oc.env:HOME}/data/COSEM3D
         native_resolution: [4, 4, 4]
         imaging: FIB-SEM
       # --- FLYEM3D 8 nm neuropil, IMAGE-ONLY (FIB-25 out-of-core surround) ---
       # 4 train crops per source (1 more held out per source in val_volumes);
       # all verified non-empty (empty corner tiles dropped).
       - vol: flyem3d_8nm_ssl_x2700_y2700_z3500_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_8nm_ssl_x3000_y3000_z5000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # --- Hemibrain 8 nm neuropil, image-only ---
       - vol: flyem3d_hemibrain_8nm_ssl_x12000_y12000_z12000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x16000_y30000_z36000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x20000_y20000_z20000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_hemibrain_8nm_ssl_x24000_y24000_z24000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # --- MaleCNS 8 nm neuropil, image-only ---
       - vol: flyem3d_malecns_8nm_ssl_x16000_y30000_z36000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # x20000_y20000_z20000 REMOVED: audited autocorr ~0.45 (borderline
@@ -251,15 +251,15 @@ data:
       # verified-structured tile (autocorr 0.94) found via
       # scripts/collect_meaningful_crops.py.
       - vol: flyem3d_malecns_8nm_ssl_x18000_y18000_z30000_volume   # autocorr 0.94
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_malecns_8nm_ssl_x28000_y24000_z30000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       - vol: flyem3d_malecns_8nm_ssl_x24000_y24000_z24000_volume
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
       # --- CREMI 40x4x4 PADDED test volumes, IMAGE-ONLY (no public labels) ---
@@ -271,20 +271,20 @@ data:
       # offset (z=37, y=911, x=911) inside the padded one, identically for all
       # three samples -- see doc/DATASETS.md#cremi-padded-vs-cropped-test-volumes.
       - vol: cremi3d_sample_A+_padded_volume
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
       - vol: cremi3d_sample_B+_padded_volume
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
       - vol: cremi3d_sample_C+_padded_volume
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
       # --- SNEMI3D test volume, IMAGE-ONLY (labels never publicly released) ---
       - vol: test_inputs
-        root: /home/nvidia/data/SNEMI3D
+        root: ${oc.env:HOME}/data/SNEMI3D
         native_resolution: [30, 6, 6]
         imaging: ssSEM
       # --- MitoEM2 mitochondria EM, IMAGE-ONLY (nnU-Net .nii.gz -> *_volume.h5) ---
@@ -296,19 +296,19 @@ data:
       # 16 nm, NOT what convert_mitoem2.py would auto-derive from the header.
       # 16 nm iso: Beta/Jurkat/Macro/Podo/Sperm
       - vol: mitoem2_beta_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_beta_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_beta_train03_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_beta_train04_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       # jurkat_train01 / macro_train01 RESTORED: an older doc note said these
@@ -316,11 +316,11 @@ data:
       # release they are genuine, good EM (autocorr 0.79 / 0.59) -- whatever
       # was wrong with them upstream previously appears to have been fixed.
       - vol: mitoem2_jurkat_train01_volume   # autocorr 0.79
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_macro_train01_volume   # autocorr 0.59
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       # mitoem2_jurkat_train02 / mitoem2_macro_train02 REMOVED: audited as pure
@@ -334,100 +334,100 @@ data:
       # fails ssl_min_autocorr (~0.0 vs ~0.6-0.9 for real EM); see
       # doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
       - vol: mitoem2_podo_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_podo_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_sperm_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       - vol: mitoem2_sperm_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [16, 16, 16]
         imaging: FIB-SEM
       # 8 nm xy / 30 nm z: Mossy/Pyra/Stem
       - vol: mitoem2_mossy_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_mossy_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_mossy_train03_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train01_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train02_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train03_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train04_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train05_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train06_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train07_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train08_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train09_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train10_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train11_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train12_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train13_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train14_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train15_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train16_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       - vol: mitoem2_pyra_train17_volume
-        root: /home/nvidia/data/MitoEM2
+        root: ${oc.env:HOME}/data/MitoEM2
         native_resolution: [30, 8, 8]
         imaging: FIB-SEM
       # mitoem2_stem_train01 / mitoem2_stem_train02 REMOVED: audited as
@@ -449,92 +449,92 @@ data:
       volumes:
       - vol: flyem3d_8nm_x2304_y2048_z6144_volume          # FIB-25 8 nm, labeled
         seg: flyem3d_8nm_x2304_y2048_z6144_segmentation
-        root: /home/nvidia/data/FLYEM3D
+        root: ${oc.env:HOME}/data/FLYEM3D
         native_resolution: [8, 8, 8]
         imaging: FIB-SEM
         label_convention: filled
       - vol: neurons_5000x2900x300_x3000_y7200_z950_volume # SNEMI3D 30x6x6
         seg: neurons_5000x2900x300_x3000_y7200_z950_segmentation
-        root: /home/nvidia/data/SNEMI3D
+        root: ${oc.env:HOME}/data/SNEMI3D
         native_resolution: [30, 6, 6]
         imaging: ssSEM
         label_convention: gapped
       - vol: cremi3d_sample_A_volume                       # CREMI 40x4x4
         seg: cremi3d_sample_A_segmentation
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
         label_convention: filled
       - vol: cremi3d_sample_B_volume
         seg: cremi3d_sample_B_segmentation
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
         label_convention: filled
       - vol: cremi3d_sample_C_volume
         seg: cremi3d_sample_C_segmentation
-        root: /home/nvidia/data/CREMI3D
+        root: ${oc.env:HOME}/data/CREMI3D
         native_resolution: [40, 4, 4]
         imaging: ssTEM
         label_convention: filled
       # --- FlyWire FAFB v783 40x8x8 (8 nm EM, upsampled m783 seg), 10 train ---
       - vol: flywire_mip1_1024x1024x256_x28000_y32000_z3000_volume        # train01
         seg: flywire_mip1_1024x1024x256_x28000_y32000_z3000_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x32000_y40000_z3500_volume        # train02
         seg: flywire_mip1_1024x1024x256_x32000_y40000_z3500_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x64000_y28000_z1500_volume        # train03
         seg: flywire_mip1_1024x1024x256_x64000_y28000_z1500_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x72000_y36000_z2800_volume        # train04
         seg: flywire_mip1_1024x1024x256_x72000_y36000_z2800_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x88000_y20000_z3600_volume        # train05 (richest)
         seg: flywire_mip1_1024x1024x256_x88000_y20000_z3600_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x96000_y44000_z4000_volume        # train06
         seg: flywire_mip1_1024x1024x256_x96000_y44000_z4000_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x52000_y32000_z2800_volume        # train07
         seg: flywire_mip1_1024x1024x256_x52000_y32000_z2800_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x60000_y44000_z3200_volume        # train08
         seg: flywire_mip1_1024x1024x256_x60000_y44000_z3200_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x68000_y16000_z2800_volume        # train09
         seg: flywire_mip1_1024x1024x256_x68000_y16000_z2800_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: flywire_mip1_1024x1024x256_x44000_y24000_z2400_volume        # train10
         seg: flywire_mip1_1024x1024x256_x44000_y24000_z2400_m783_segmentation
-        root: /home/nvidia/data/FLYWIRE
+        root: ${oc.env:HOME}/data/FLYWIRE
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
@@ -544,61 +544,61 @@ data:
       # z=2000 windows).  gapped convention (matches Neurons/SNEMI).
       - vol: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_volume         # train01
         seg: h01cell_mip0_1024x1024x5000_x320000_y320000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_volume         # train02
         seg: h01cell_mip0_1024x1024x5000_x360000_y440000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_volume         # train03
         seg: h01cell_mip0_1024x1024x5000_x400000_y320000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_volume         # train04
         seg: h01cell_mip0_1024x1024x5000_x480000_y200000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_volume         # train05
         seg: h01cell_mip0_1024x1024x5000_x480000_y320000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_volume         # train06
         seg: h01cell_mip0_1024x1024x5000_x480000_y440000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_volume         # train07
         seg: h01cell_mip0_1024x1024x5000_x520000_y160000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_volume         # train08
         seg: h01cell_mip0_1024x1024x5000_x560000_y200000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_volume         # train09
         seg: h01cell_mip0_1024x1024x5000_x560000_y320000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
       - vol: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_volume         # train10
         seg: h01cell_mip0_1024x1024x5000_x600000_y160000_z0_c3_segmentation
-        root: /home/nvidia/data/H01Cell
+        root: ${oc.env:HOME}/data/H01Cell
         native_resolution: [33, 4, 4]
         imaging: ssTEM
         label_convention: gapped
@@ -609,61 +609,61 @@ data:
       # tail + transform grouping isolate the convention.
       - vol: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_volume
         seg: minnie65_mip0_4096x4096x800_x50000_y60000_z16000_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_volume
         seg: minnie65_mip0_4096x4096x800_x45000_y75000_z16500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_volume
         seg: minnie65_mip0_4096x4096x800_x60000_y50000_z17500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_volume
         seg: minnie65_mip0_4096x4096x800_x80000_y70000_z16500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_volume
         seg: minnie65_mip0_4096x4096x800_x90000_y85000_z18500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_volume
         seg: minnie65_mip0_4096x4096x800_x95000_y50000_z18500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_volume
         seg: minnie65_mip0_4096x4096x800_x110000_y60000_z18000_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_volume
         seg: minnie65_mip0_4096x4096x800_x125000_y70000_z16500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_volume
         seg: minnie65_mip0_4096x4096x800_x130000_y50000_z17000_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
       - vol: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_volume
         seg: minnie65_mip0_4096x4096x800_x140000_y80000_z17500_v1300_segmentation
-        root: /home/nvidia/data/MICRONS
+        root: ${oc.env:HOME}/data/MICRONS
         native_resolution: [40, 8, 8]
         imaging: ssTEM
         label_convention: filled
@@ -677,7 +677,7 @@ data:
   # SNEMI3D train (labeled holdout).
   - vol: train_inputs
     seg: train_labels
-    root: /home/nvidia/data/SNEMI3D
+    root: ${oc.env:HOME}/data/SNEMI3D
     task: sft
     native_resolution: [30, 6, 6]
     imaging: ssSEM
@@ -690,7 +690,7 @@ data:
   # Baked to true 4 nm cubic via scripts/resample_cosem_isotropic.py (see the
   # matching note in the ssl branch above).
   - vol: jrc_hela-3_4nm_x6144_y0_z0_volume   # autocorr 0.75
-    root: /home/nvidia/data/COSEM3D
+    root: ${oc.env:HOME}/data/COSEM3D
     task: ssl
     native_resolution: [4, 4, 4]
     imaging: FIB-SEM
@@ -698,28 +698,28 @@ data:
   # cached norm range (severe under-calibration on top of resin/noise).
   # Replaced with a verified-structured tile (autocorr 0.85).
   - vol: jrc_macrophage-2_4nm_x2048_y0_z4096_volume   # autocorr 0.85
-    root: /home/nvidia/data/COSEM3D
+    root: ${oc.env:HOME}/data/COSEM3D
     task: ssl
     native_resolution: [4, 4, 4]
     imaging: FIB-SEM
   - vol: jrc_jurkat-1_4nm_x0_y0_z2048_volume   # autocorr 0.84
-    root: /home/nvidia/data/COSEM3D
+    root: ${oc.env:HOME}/data/COSEM3D
     task: ssl
     native_resolution: [4, 4, 4]
     imaging: FIB-SEM
   # FLYEM3D: 1 ssl holdout per source (fib25-surround / hemibrain / malecns), non-empty.
   - vol: flyem3d_8nm_ssl_x4096_y4096_z1024_volume
-    root: /home/nvidia/data/FLYEM3D
+    root: ${oc.env:HOME}/data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
   - vol: flyem3d_hemibrain_8nm_ssl_x16000_y16000_z16000_volume
-    root: /home/nvidia/data/FLYEM3D
+    root: ${oc.env:HOME}/data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
   - vol: flyem3d_malecns_8nm_ssl_x16000_y20000_z24000_volume
-    root: /home/nvidia/data/FLYEM3D
+    root: ${oc.env:HOME}/data/FLYEM3D
     task: ssl
     native_resolution: [8, 8, 8]
     imaging: FIB-SEM
@@ -727,14 +727,14 @@ data:
   # filled auto-seg (same convention as train).
   - vol: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_volume
     seg: minnie65_mip0_4096x4096x800_x105000_y80000_z16500_v1300_segmentation
-    root: /home/nvidia/data/MICRONS
+    root: ${oc.env:HOME}/data/MICRONS
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
     label_convention: filled
   - vol: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_volume
     seg: minnie65_mip0_4096x4096x800_x70000_y90000_z17000_v1300_segmentation
-    root: /home/nvidia/data/MICRONS
+    root: ${oc.env:HOME}/data/MICRONS
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
@@ -742,14 +742,14 @@ data:
   # FlyWire FAFB: 2 of 12 labeled crops (sft instance-metric validation).
   - vol: flywire_mip1_1024x1024x256_x80000_y16000_z4500_volume        # test01
     seg: flywire_mip1_1024x1024x256_x80000_y16000_z4500_m783_segmentation
-    root: /home/nvidia/data/FLYWIRE
+    root: ${oc.env:HOME}/data/FLYWIRE
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
     label_convention: filled
   - vol: flywire_mip1_1024x1024x256_x104000_y24000_z5000_volume       # test02
     seg: flywire_mip1_1024x1024x256_x104000_y24000_z5000_m783_segmentation
-    root: /home/nvidia/data/FLYWIRE
+    root: ${oc.env:HOME}/data/FLYWIRE
     task: sft
     native_resolution: [40, 8, 8]
     imaging: ssTEM
@@ -757,14 +757,14 @@ data:
   # H01 cell: 2 of 12 labeled mip0 crops (sft instance-metric validation).
   - vol: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_volume        # test01
     seg: h01cell_mip0_1024x1024x5000_x680000_y160000_z0_c3_segmentation
-    root: /home/nvidia/data/H01Cell
+    root: ${oc.env:HOME}/data/H01Cell
     task: sft
     native_resolution: [33, 4, 4]
     imaging: ssTEM
     label_convention: gapped
   - vol: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_volume        # test02
     seg: h01cell_mip0_1024x1024x5000_x760000_y160000_z0_c3_segmentation
-    root: /home/nvidia/data/H01Cell
+    root: ${oc.env:HOME}/data/H01Cell
     task: sft
     native_resolution: [33, 4, 4]
     imaging: ssTEM
@@ -772,52 +772,52 @@ data:
   # --- MitoEM2 imagesTs holdout (image-only -> ssl recon validation) ---
   # Refreshed Jul 2026 from MitoEM 2.0 v6 (Zenodo 10.5281/zenodo.20417683).
   - vol: mitoem2_beta_test01_volume   # NEW (v6 adds test01/03; only test02 existed before)
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_beta_test02_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_beta_test03_volume   # NEW
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_jurkat_test01_volume   # NEW -- autocorr 0.79
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_macro_test01_volume   # NEW -- autocorr 0.72
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_podo_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_sperm_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [16, 16, 16]
     imaging: FIB-SEM
   - vol: mitoem2_mossy_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
     imaging: FIB-SEM
   - vol: mitoem2_mossy_test02_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
     imaging: FIB-SEM
   - vol: mitoem2_pyra_test01_volume
-    root: /home/nvidia/data/MitoEM2
+    root: ${oc.env:HOME}/data/MitoEM2
     task: ssl
     native_resolution: [30, 8, 8]
     imaging: FIB-SEM
@@ -827,7 +827,7 @@ data:
   # replace it with, and no train counterpart left to pair it with anyway.
 
 model:
-  type: joint3d_edge     # -> JointEdge3DModule (Cosmos3-Edge ~4B backbone, direct-loaded + Nano-filled gaps, + Joint3DReconSegLoss)
+  type: joint3d_edge     # -> JointEdge3DModule (Cosmos3-Edge ~4B backbone, direct-loaded, + Joint3DReconSegLoss)
   variant: EDGE
   in_channels: 1
   head_channels: 32            # len(loss.seg.offsets)=30 + sem + raw
@@ -836,13 +836,9 @@ model:
   pretrained: true
   dtype: bf16                  # weight dtype; paired with training.precision bf16-true
   freeze_vae_encoder: true
-  # Cosmos 3 MoT warm-up.  ``freeze_dit_backbone`` freezes/thaws the WHOLE
-  # DiT on a schedule (independent of freeze_understanding_ffn below):
-  #   epochs 0..4 : the WHOLE DiT is frozen (cheap warm-up, as usual).
-  #   epoch 5+    : thaws the whole DiT (subject to the permanent
-  #                 understanding-FFN hold-out below).
-  #   false -> whole DiT trains from epoch 0 (no warm-up freeze at all).
-  #   true  -> whole DiT frozen for the entire run (no thaw).
+  # ``false`` trains the whole DiT from epoch 0.  An integer N freezes it
+  # for epochs 0..N-1, then thaws it.  ``true`` keeps it frozen for the
+  # run.  The understanding-stream hold-out below is independent of this.
   freeze_dit_backbone: false
   # Understanding (text) pathway hold-outs, INDEPENDENT of the
   # freeze_dit_backbone schedule.  The Cosmos3 MoT has SEPARATE weights per
@@ -862,14 +858,16 @@ model:
   freeze_understanding_ffn: false
   freeze_understanding_stream: true
   freeze_vae_decoder: true
-  # BF16 keeps the full DiT activation in memory, so both the DiT and the
-  # per-frame Wan VAE decode are recomputed.  Checkpointing is incompatible
-  # with torch.compile tracing the checkpoint HOP.
+  # Recompute the DiT and the Wan decoder body.  The body is on the loss
+  # path (DiT features -> to_latent -> decoder body -> task head).  The
+  # frozen original conv_out is only the TensorBoard pred/wan_decoder
+  # diagnostic.  Checkpointing is incompatible with torch.compile tracing
+  # the checkpoint HOP.
   gradient_checkpointing: 
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
 
 optimizer:
   lr: 0.0002
@@ -892,7 +890,7 @@ loss:
   weight_rec: 1.0
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency). The SSL recon
-  # branch is weighted 10x the SFT seg branch (matches the shipped checkpoint).
+  # branch is weighted 5x the SFT seg branch (weight_ssl / weight_sft).
   weight_ssl: 5.0
   weight_sft: 1.0
   seg:

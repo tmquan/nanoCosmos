@@ -5,16 +5,17 @@ Endpoints:
   /api/volumes          POST  – register raw + seg volumes
   /api/volumes/{id}/meta       – shape, spacing, dtype, label count
   /api/volumes/{id}/slice/…    – PNG slice with optional seg overlay
-  /api/volumes/{id}/chunk      – downsampled uint8 raw for 3-D textures
-  /api/volumes/{id}/seg_chunk  – RGBA palette-coloured seg for 3-D textures
+  /api/volumes/{id}/chunk      – downsampled uint8 raw (2-D slices and 3-D)
+  /api/volumes/{id}/seg_chunk  – RGBA palette-coloured seg volume
   /api/volumes/{id}/seg_id_chunk – uint8 seg IDs (mod 256) for selection
   /api/volumes/{id}/labels     – unique label list + palette
 
-Note: the shipped WebGL frontend drives the 3-D texture path (``/chunk``,
-``/seg_chunk``, ``/seg_id_chunk``, ``/meta``).  The server-side PNG-slice and
+Note: the shipped frontend loads ``/chunk``, ``/seg_chunk``,
+``/seg_id_chunk``, and ``/meta``, then slices those arrays in the browser
+for the 2-D canvases and the 3-D splat panel.  The PNG-slice and
 label-query endpoints (``POST /api/volumes``, ``/slice``, ``/labels``,
-``get_label_at``) are a still-supported HTTP API not used by the current UI --
-kept intentionally, not dead code.
+``get_label_at``) are a still-supported HTTP API the current UI does not
+call.
 """
 
 from __future__ import annotations
@@ -239,7 +240,7 @@ def get_chunk(
     vid: str,
     downsample: int = Query(4, ge=1, le=16),
 ):
-    """Return downsampled uint8 raw volume for the 3-D renderer."""
+    """Return a downsampled uint8 raw volume for the browser panels."""
     e = _store.get(vid)
     if e is None:
         raise HTTPException(404, "Volume not found")
@@ -308,7 +309,7 @@ def get_seg_id_chunk(
     vid: str,
     downsample: int = Query(4, ge=1, le=16),
 ):
-    """Return downsampled seg IDs as uint8 (mod 256) for shader selection lookup."""
+    """Return downsampled seg IDs as uint8 (mod 256) for click and shader lookup."""
     e = _store.get(vid)
     if e is None:
         raise HTTPException(404, "Volume not found")

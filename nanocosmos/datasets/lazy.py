@@ -245,12 +245,14 @@ class LazyVolDataset(Dataset):
 
     Args:
         root_dir: Root directory containing data files.
-        volumes: List of ``{vol, seg}`` dicts specifying volume names.
+        volumes: List of volume dicts.  ``vol`` is required; ``seg``,
+            ``root``, and ``prompt`` are optional.
         patch_size: Spatial crop size ``(D, H, W)`` for random patches.
         transform: MONAI transform pipeline to apply to each patch.
         num_samples: Virtual epoch length (random patches per epoch).
         normalize: Whether to normalize images to [0, 1] using per-volume
-            min/max (pre-computed from metadata, not full load).
+            min/max from a few centred probes, cached in a ``.norm.json``
+            sidecar.
         deterministic: When True, seed per-sample RNG by index so crops /
             volume picks are reproducible (used for validation groups).
         min_foreground: Minimum fraction of non-zero voxels in the label
@@ -263,15 +265,21 @@ class LazyVolDataset(Dataset):
             applied on top of ``min_foreground`` (the crop must pass both),
             so zero-padded EM is rejected alongside background-heavy labels.
             When > 0, failing crops are re-sampled.
-        image_min_std: Minimum normalised intensity standard deviation of the
-            *image* patch, measured as ``std / (vmax - vmin)`` on the per-volume
-            [0, 1] scale.  Rejects flat, structureless crops (e.g. resin /
-            embedding medium) that pass the non-zero gate because background EM
-            is a non-zero mid-grey.  Applies to label-less (e.g. SSL) volumes.
-            When > 0, failing crops are re-sampled (best-seen = highest std).
+        image_min_std: Local-block standard-deviation threshold on the
+            per-volume [0, 1] crop (label-less volumes).  A crop passes when
+            the fraction of ``(4, 16, 16)`` blocks whose std exceeds this
+            value is at least ``image_min_foreground``, or 0.5 when that
+            gate is off.  0 disables the block test.
+        image_min_autocorr: Minimum lag-1 in-plane autocorrelation of the
+            [0, 1] crop (label-less volumes).  Rejects noise-dominated
+            crops that clear the block-std gate.  0 disables it.
+        min_instances: Minimum number of distinct nonzero instance ids in
+            a labeled crop.  0 disables the gate.
+        max_inst_frac: Maximum fraction of the labeled foreground that the
+            single largest instance may occupy.  0 disables the gate.
         max_foreground_retries: Maximum re-sampling attempts before
-            falling back to the best-seen crop (highest foreground fraction
-            across the attempts).
+            falling back to the best-seen crop (highest gate score across
+            the attempts).
     """
 
     def __init__(
@@ -300,13 +308,11 @@ class LazyVolDataset(Dataset):
         self.normalize = normalize
         self.min_foreground = float(min_foreground)
         self.image_min_foreground = float(image_min_foreground)
-        # Contrast gate: reject low-variance crops (flat resin / empty
-        # embedding medium) whose normalised intensity std is below this
-        # threshold.  The non-zero gate alone passes such crops because EM
-        # background is a non-zero mid-grey; only a contrast/variance test
-        # rejects structureless regions.  Measured on the per-volume
-        # normalised [0, 1] scale (std_raw / (vmax - vmin)) so the threshold
-        # is volume-independent.  0 = disabled (default; no behaviour change).
+        # Local-block contrast gate (label-less volumes).  ``image_min_std``
+        # is the std threshold on the per-volume [0, 1] crop.  A crop passes
+        # when the fraction of (4, 16, 16) blocks above that threshold is at
+        # least ``image_min_foreground`` (0.5 when that gate is off).
+        # 0 = disabled.
         self.image_min_std = float(image_min_std)
         # Structure gate: reject NOISE-dominated crops (detector / resin grain)
         # that pass the std/content gate because random noise has high local
@@ -619,8 +625,8 @@ class LazyVolDataset(Dataset):
         Returns ``(ok, label, image, frac)``.  The decoded ``label`` /
         ``image`` is returned alongside the boolean so ``__getitem__`` can
         reuse the I/O it just paid for instead of decoding the same chunk
-        twice, and ``frac`` (the measured foreground fraction) lets the
-        caller keep the best-seen crop when all retries are exhausted.
+        twice, and ``frac`` (the limiting gate score) lets the caller keep
+        the best-seen crop when all retries are exhausted.
 
         * **Labeled volumes** are gated on the *label* non-zero fraction
           (``min_foreground``) AND, when ``image_min_foreground`` > 0, the
@@ -630,11 +636,13 @@ class LazyVolDataset(Dataset):
           AND crops filled by a single giant instance that would give
           AffinityFGLoss no inter-instance "push" signal to learn from).
         * **Label-less volumes** (e.g. SSL) are gated on the *image*
-          non-zero fraction (``image_min_foreground``) so mostly-empty /
-          zero-padded crops are rejected; ``label`` is returned as ``None``.
+          non-zero fraction (``image_min_foreground``) and, when set, on
+          the local-block std gate (``image_min_std``) and lag-1
+          autocorrelation (``image_min_autocorr``).  ``label`` is ``None``.
 
-        ``frac`` is the limiting (minimum) measured fraction across the
-        active gates, so the best-seen fallback keeps the densest crop.
+        ``frac`` is the limiting score across the active gates (foreground
+        fraction, block-content fraction, autocorrelation, or instance
+        score).  The best-seen fallback keeps the highest score.
         When no gate is active ``frac`` is ``1.0`` and no extra I/O is done.
         """
         if handle.label_path is not None:
@@ -712,7 +720,7 @@ class LazyVolDataset(Dataset):
                 ok = ok and ac >= self.image_min_autocorr
                 score = min(score, ac)
             return ok, None, image, score
-        # Contrast gate disabled: plain non-zero fraction gate (legacy).
+        # Block-std and autocorrelation gates off: non-zero fraction only.
         nz_frac = float(np.count_nonzero(image)) / image.size
         return nz_frac >= self.image_min_foreground, None, image, nz_frac
 
@@ -728,13 +736,13 @@ class LazyVolDataset(Dataset):
         else:
             full_slices = crop_slices
 
-        # Re-sample crops until the patch passes the foreground gate
-        # (labeled volumes: label fg, plus image non-zero when
-        # ``image_min_foreground`` > 0 -- both required; label-less / SSL
-        # volumes: image non-zero fraction).  Carry the successful
+        # Re-sample crops until the patch passes every enabled gate
+        # (labeled: label foreground, image non-zero, instance diversity;
+        # label-less: image non-zero, block-std content, autocorrelation).
+        # Carry the successful
         # read forward so we don't decode the same chunk again below.  If
         # every retry fails, fall back to the *best-seen* crop (highest
-        # foreground) rather than whatever was drawn last, and restore its
+        # gate score) and restore its
         # slices so image/label stay consistent.
         cached_label: Optional[np.ndarray] = None
         cached_image: Optional[np.ndarray] = None

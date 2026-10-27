@@ -43,9 +43,9 @@ class Labeld(MapTransform):
 
     After cropping (and optionally elastic deformation), a single instance
     can become split into disconnected parts that share the same label
-    value.  This transform runs connected-component analysis to assign
-    each disconnected part a unique label, removes fragments smaller than
-    ``min_voxels``, then renumbers sequentially.
+    value.  Connected-component analysis emits sequential ids, then
+    components smaller than ``min_voxels`` are set to background.  The
+    surviving ids keep the values assigned by that labeling.
 
     Uses ``cucim.skimage.measure.label`` (GPU) or
     ``skimage.measure.label`` (CPU) which treats two pixels as connected

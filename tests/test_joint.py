@@ -10,7 +10,7 @@ import torch
 
 from nanocosmos.losses import Joint3DReconSegLoss, HEAD_CHANNELS, N_AFF
 from nanocosmos.losses.joint3d import SSL, SFT
-from nanocosmos.transforms import RandResolutionDegraded
+from nanocosmos.transforms import RandResolutionDegraded, RandTransposeZYXd
 
 
 # Spatial dims must exceed the default long-range affinity offsets
@@ -171,6 +171,75 @@ def test_degrade_passthrough_still_writes_target():
     out = t({"image": img})
     assert "recon_image" in out
     assert torch.allclose(out["image"].float(), img)
+
+
+def _axis_markers(shape):
+    """``[1, D, H, W]`` with a 1 / 2 / 3 on the +z / +y / +x neighbour of the origin."""
+    img = torch.zeros(1, *shape)
+    img[0, 1, 0, 0] = 1.0
+    img[0, 0, 1, 0] = 2.0
+    img[0, 0, 0, 1] = 3.0
+    return img
+
+
+def _perm_from_markers(out: torch.Tensor):
+    """Recover the spatial perm from :func:`_axis_markers` (``perm[dst] = src``)."""
+    perm = [0, 0, 0]
+    for dst in range(3):
+        idx = [0, 0, 0]
+        idx[dst] = 1
+        perm[dst] = int(out[0, idx[0], idx[1], idx[2]].item()) - 1
+    return tuple(perm)
+
+
+def test_rand_transpose_zyx_moves_finest_axis_with_prompt():
+    """A zyx perm reorients arrays and the prompt together.
+
+    Native sizes are all distinct so the finest axis (4 nm, stored on x) is
+    visible in the prompt.  Across draws it must occupy z, y, and x.
+    """
+    res = (40, 8, 4)
+    t = RandTransposeZYXd(
+        keys=["image", "recon_image"], native_resolution=res,
+    )
+    t.set_random_state(0)
+    base = _axis_markers((6, 5, 4))
+    recon = _axis_markers((6, 5, 4)) + 10.0
+    prompt0 = "ssTEM · z40 y8 x4 nm · ssl"
+    finest_on = set()
+    seen_perms = set()
+    for _ in range(80):
+        out = t({
+            "image": base.clone(),
+            "recon_image": recon.clone(),
+            "prompt": prompt0,
+        })
+        perm = _perm_from_markers(out["image"])
+        seen_perms.add(perm)
+        assert _perm_from_markers(out["recon_image"] - 10.0) == perm
+        assert torch.equal(
+            out["image"],
+            base.permute(0, *(1 + p for p in perm)),
+        )
+        vals = [res[i] for i in perm]
+        assert out["prompt"] == f"ssTEM · z{vals[0]} y{vals[1]} x{vals[2]} nm · ssl"
+        finest_on.add(vals.index(4))
+    assert seen_perms == {
+        (0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0),
+    }
+    # Finest native axis (4 nm) landed on every network axis.
+    assert finest_on == {0, 1, 2}
+
+
+def test_rand_transpose_zyx_identity_keeps_prompt():
+    t = RandTransposeZYXd(keys=["image"], native_resolution=(8, 8, 8))
+    t.randomize = lambda data=None: None
+    t._perm = (0, 1, 2)
+    img = torch.arange(8, dtype=torch.float32).reshape(1, 2, 2, 2)
+    prompt = "FIB-SEM · z8 y8 x8 nm · ssl"
+    out = t({"image": img, "prompt": prompt})
+    assert torch.equal(out["image"], img)
+    assert out["prompt"] == prompt
 
 
 def test_degrade_zf_controls_section_count():

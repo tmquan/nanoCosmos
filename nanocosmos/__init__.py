@@ -1,6 +1,7 @@
 """
-Nanocosmos: a PyTorch Lightning infrastructure for connectomics research
-with spatially-coloured (nanocosmos-style) instance segmentation targets.
+Nanocosmos: a PyTorch Lightning infrastructure for connectomics
+segmentation.  The model emits an affinity + foreground head; instances
+are agglomerated at eval and inference by the Mutex Watershed.
 
 Provides:
 - MONAI-compatible dataset classes with a standardised interface

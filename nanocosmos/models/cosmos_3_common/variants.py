@@ -2,11 +2,13 @@
 
 Cosmos 3 (NVIDIA's omnimodal world-model family, released 2026-05-31) is a
 dual-tower **Mixture-of-Transformers** (``Cosmos3OmniTransformer``): an
-autoregressive *reasoner* tower and a diffusion *generator* tower that share a
-joint attention operator and a unified 3D mRoPE.  For volumetric EM
-segmentation we drive only the generator (video) tower as a feature extractor
-and feed null conditioning for every other modality, so a tier is fully
-described by its generator-tower geometry.
+autoregressive *reasoner* tower and a diffusion *generator* tower with
+per-stream projections, a generation softmax over concatenated keys/values,
+and a unified 3D mRoPE.  For volumetric EM segmentation we drive only the
+generator (video) tower as a feature extractor. Image, audio, and action
+conditioning stay null. Text is a metadata prompt when the batch supplies
+one, otherwise a single null token. A tier is fully described by its
+generator-tower geometry.
 
 All three tiers share the SAME architecture and differ only in scale; the
 numbers below are mirrored verbatim from the published HuggingFace
@@ -15,15 +17,18 @@ numbers below are mirrored verbatim from the published HuggingFace
 ================  ======  ======  =====  ===  ========  ============  ========
 tier              hidden  layers  heads  kv   head_dim  intermediate  init
 ================  ======  ======  =====  ===  ========  ============  ========
-Edge (4B)           2048      28     16    8       128          6144  scratch
+Edge (4B)           2048      28     16    8       128          9216  scratch
 Nano (16B)          4096      36     32    8       128         12288  Qwen3-VL 8B
 Super (64B)         5120      64     64    8       128         25600  Qwen3-VL 32B
 ================  ======  ======  =====  ===  ========  ============  ========
 
 Every tier shares the Wan2.2-TI2V VAE (``AutoencoderKLWan``: ``z_dim=48``,
-16x spatial / 4x temporal), ``latent_patch_size=2``, ``head_dim=128``,
-``num_key_value_heads=8`` (GQA), ``rope_theta=5e6``, mRoPE section
-``[24, 20, 20]`` and ``use_moe=true``.
+16x spatial / 4x temporal), published ``latent_patch_size=2`` (nanoCosmos
+repatches this to 1 after load), ``head_dim=128``,
+``num_key_value_heads=8`` (GQA), and mRoPE section ``[24, 20, 20]``.
+The released Edge ``transformer/config.json`` sets ``rope_theta`` to ``1e8``.
+``_VariantConfig.use_moe`` is local metadata. The tower keeps separate
+``mlp`` and ``mlp_moe_gen`` modules.
 
 :class:`_VariantConfigBase` carries the download and shape metadata
 common to the tiers.  This subclass adds the MoT / GQA fields so the
@@ -66,13 +71,11 @@ class _VariantConfig(_VariantConfigBase):
     # :func:`nanocosmos.models.cosmos_3_common.reduce.reduce_omni_transformer`.
     reduce_from_parent: bool = False
     # When ``hf_repo_id`` is this variant's OWN native checkpoint (the normal
-    # case), some released checkpoints are missing a handful of parameters
-    # the installed diffusers class always instantiates (a checkpoint /
-    # library architecture gap -- see Edge's variants.py docstring).  If set,
-    # any such ``missing_keys`` reported by the direct load are filled by
-    # truncation-copying the depth-remapped tensor from THIS parent tier's
-    # checkpoint, instead of being left at fresh init.  ``None`` disables
-    # this fill (missing keys stay at fresh init).  See
+    # case) and a load still reports ``missing_keys``, those parameters are
+    # filled by truncation-copying the depth-remapped tensor from this parent
+    # tier. diffusers 0.42.1 matches the Edge checkpoint (``hidden_act: relu2``,
+    # ``qk_norm_for_text: false``), so the shipped EDGE variant leaves this
+    # unset and missing keys stay at fresh init. See
     # :func:`nanocosmos.models.cosmos_3_common.reduce.fill_missing_from_parent`.
     fill_missing_parent_repo_id: Optional[str] = None
     fill_missing_parent_revision: str = "main"

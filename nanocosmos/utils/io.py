@@ -1,10 +1,10 @@
 """
 Volume I/O utilities.
 
-Standalone volume reader/writer with suffix-based dispatch to **inline**
-format handlers (h5py / tifffile / nrrd / numpy).  This is independent of
-the :mod:`nanocosmos.preprocessors` package (whose unified dispatch is a
-separate, in-progress path).
+Standalone volume reader/writer.  The file suffix selects an inline
+handler (h5py / tifffile / nrrd / numpy).  This module does not call
+:mod:`nanocosmos.preprocessors`; the visualizer and datasets use that
+package on their own.
 
 Public surface
 --------------
@@ -90,7 +90,9 @@ def load_volume(
 
     Args:
         path: Path to volume file.
-        format: File format ('h5', 'tiff', 'nrrd'). Auto-detected if None.
+        format: File format (``h5`` / ``hdf5`` / ``hdf``, ``tiff`` / ``tif``,
+            ``nrrd`` / ``nhdr``, ``npy``, ``npz``).  Auto-detected from the
+            suffix when ``None``.
         key: Dataset key for HDF5 files.
 
     Returns:
@@ -160,9 +162,11 @@ def save_volume(
     Args:
         data: Volume data as numpy array or torch tensor.
         path: Output file path.
-        format: File format ('h5', 'tiff', 'nrrd'). Auto-detected if None.
+        format: File format (``h5`` / ``hdf5`` / ``hdf``, ``tiff`` / ``tif``,
+            ``nrrd`` / ``nhdr``, ``npy``, ``npz``).  Auto-detected from the
+            suffix when ``None``.
         key: Dataset key for HDF5 files.
-        compression: Compression for HDF5 files.
+        compression: Compression for HDF5 files (default ``"gzip"``).
     """
     path = Path(path)
     ensure_data(path.parent)

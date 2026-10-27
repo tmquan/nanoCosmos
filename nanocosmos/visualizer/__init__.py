@@ -5,9 +5,12 @@ Why this package exists
 -----------------------
 TensorBoard images are great for **per-step debugging** but a full
 volume in 3-D is much easier to skim in an interactive viewer.  The
-visualizer is a small FastAPI server that streams chunks of an HDF5 /
-NRRD / TIFF / NIfTI volume into a WebGL raymarcher in the browser.  Use
-it to QA datasets and predictions; do not depend on it from training.
+visualizer is a small FastAPI server.  The browser downloads a
+downsampled HDF5 / NRRD / TIFF / NIfTI / NumPy volume, draws three
+orthogonal slice panels on 2-D canvases, and renders selected segments
+in the fourth panel as a WebGL Gaussian-splat point cloud plus three
+slice planes.  Use it to QA datasets and predictions; do not depend on
+it from training.
 
 Public surface
 --------------

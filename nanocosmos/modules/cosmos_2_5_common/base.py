@@ -7,9 +7,14 @@ for the Cosmos 3 backbones (Nano, Edge, Super).  The base
 this module adds:
 
 * HuggingFace token handling (kept out of ``save_hyperparameters``)
-* static freeze of the VAE encoder, DiT backbone and VAE decoder
-  applied once at construction via the model wrapper's ``freeze_*``
-  kwargs
+* freeze flags forwarded to the wrapper at construction
+  (``freeze_vae_encoder``, ``freeze_vae_decoder``,
+  ``freeze_dit_backbone``, ``freeze_understanding_stream``,
+  ``freeze_understanding_ffn``). An integer
+  ``freeze_dit_backbone`` is a warm-up thawed in
+  :meth:`on_train_epoch_start`. ``freeze_vae_decoder`` leaves the
+  decoder's last up-block and output norm trainable, and the decode
+  stays on the loss path into the DiT
 * fused-norm NaN/Inf gradient guard (one device->host sync per step
   via :func:`torch._foreach_norm` rather than one per parameter --
   see :meth:`BaseCosmosModule.configure_gradient_clipping`)
@@ -39,9 +44,9 @@ logger = logging.getLogger(__name__)
 
 # Log level for the per-step non-finite-gradient guard in
 # ``BaseCosmosModule.configure_gradient_clipping``.  Default DEBUG keeps
-# it silent under the usual INFO/WARNING root logger -- bf16-mixed +
-# ``gradient_clip_val=1.0`` triggers a handful of harmless guard fires
-# per run, each previously duplicated across DDP ranks.  Override via
+# it silent under the usual INFO/WARNING root logger. bf16-true with
+# ``gradient_clip_val=1.0`` can still trip the guard, and a raised level
+# emits one line per DDP rank. Override via
 # ``NANOCOSMOS_GRAD_GUARD_LOG=warning`` (or ``info`` / ``error``) when
 # investigating loss spikes.
 _GRAD_GUARD_LOG_FN = getattr(
@@ -194,7 +199,7 @@ class BaseCosmosModule(BaseCircuitModule):
         Hot-path version of the previous per-parameter scan (which
         called ``p.grad.isnan().any()`` and ``.isinf().any()`` on every
         parameter and forced one device->host sync per call -- O(P) in
-        the 2 B-param DiT, ~thousands of syncs per step).  The new path
+        the DiT, ~thousands of syncs per step).  This path
         builds the gradient list once, computes a fused stack of
         per-tensor L2 norms with ``torch._foreach_norm`` (single fused
         kernel over all tensors), and bails out only when
@@ -212,9 +217,8 @@ class BaseCosmosModule(BaseCircuitModule):
         weights.
 
         Non-finite-batch events are emitted at DEBUG level (silent by
-        default) -- the bf16-mixed + ``gradient_clip_val=1.0`` stack
-        triggers a handful per run that are otherwise harmless, and
-        each event was being duplicated per DDP rank.  Raise the
+        default). bf16-true with ``gradient_clip_val=1.0`` can still trip
+        the guard, and the log line is emitted on every DDP rank. Raise the
         ``nanocosmos.modules.cosmos_2_5_common.base`` logger to DEBUG
         (or set ``NANOCOSMOS_GRAD_GUARD_LOG=warning`` -- see
         :data:`_GRAD_GUARD_LOG_FN`) to surface them again.

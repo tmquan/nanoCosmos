@@ -25,15 +25,18 @@ class SNEMI3DDataset(CircuitDataset):
         - ``root``: override ``root_dir`` for this volume.
         - ``find_boundaries``: when > 0, boundary pixels between adjacent
           labels are zeroed out at load time via
-          ``skimage.segmentation.find_boundaries``.
+          :func:`nanocosmos.transforms.find_boundaries.find_boundaries`
+          (cucim when the GPU probe succeeds, otherwise skimage).
 
     Args:
         root_dir: Path to directory containing SNEMI3D data files.
         volumes: List of {vol, seg} dicts. Defaults to SNEMI3D train volume.
         transform: Optional MONAI transforms to apply.
         cache_rate: Fraction of data to cache in memory (default: 1.0).
-        slice_mode: If True, return individual 2D slices; if False, return
-            3D volume patches (default: True).
+        slice_mode: If True (default), return individual 2D slices.  If
+            False, return each volume as one 3D array.  Patch sampling is
+            done by :class:`~nanocosmos.datasets.lazy.LazyVolDataset` in
+            the datamodule.
         num_samples: Number of samples per epoch.
     """
 

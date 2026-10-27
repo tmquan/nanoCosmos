@@ -3,8 +3,9 @@
 Cosmos 3 is NVIDIA's omnimodal world model.  Its generator is a
 Mixture-of-Transformers (``Cosmos3OmniTransformer``) that jointly models
 text / image / video / audio / action; for volumetric EM segmentation we
-drive only its diffusion (video) tower as a feature extractor and feed null
-conditioning for every other modality.
+drive only its diffusion (video) tower as a feature extractor. Image, audio,
+and action conditioning stay null; text is a metadata prompt when the batch
+supplies one, otherwise a single null token.
 
 This wrapper is **tier-agnostic**: the Edge (4B) / Nano (16B) / Super (64B)
 tiers share one architecture and differ only in scale, so each concrete tier
@@ -32,13 +33,13 @@ param-group split, the
 ``ckpt_path_skip_prefixes=[model.dit.]`` warm-start filter.
 
 References:
-    - HuggingFace: nvidia/Cosmos3-Nano, nvidia/Cosmos3-Super
+    - HuggingFace: nvidia/Cosmos3-Edge, nvidia/Cosmos3-Nano, nvidia/Cosmos3-Super
     - https://github.com/nvidia/cosmos
 """
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -168,9 +169,10 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         # modules and mutates the DiT config, so it MUST run pre-FSDP
         # (construction is always pre-wrap).
         self._repatch_to_unit_latent_patch()
-        # Cosmos 3 ships the residual Wan2.2-TI2V VAE, whose decoder the
-        # shared decode path can only drive frame-by-frame; patch *this*
-        # model's decoder forward accordingly (no-op for non-residual VAEs).
+        # Cosmos 3 ships the residual Wan2.2-TI2V VAE. The shared adapter calls
+        # the decoder once with no causal-conv cache, which that VAE cannot
+        # upsample through. Patch this model's decoder forward to a chunked
+        # cached decode (no-op for non-residual VAEs).
         self._maybe_wrap_residual_vae_decoder()
         # Keep the fp32 ``Timesteps`` embedding compatible with whatever
         # dtype ``time_embedder`` ends up at (bf16 after the base load, or
@@ -184,17 +186,21 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
     # Freeze / unfreeze  (warm-up on the WHOLE DiT, INDEPENDENT permanent
     # hold-out on the understanding FFN)
     # ------------------------------------------------------------------
-    # Cosmos 3 is a Mixture-of-Transformers: per layer the FFN branches by
-    # modality -- ``mlp.*`` (understanding, ~36% of DiT params) vs
-    # ``mlp_moe_gen.*`` (generation, ~36%) -- while the attention operator
-    # (``self_attn.*``, ~16%) is fully SHARED between both streams.
-    # nanoCosmos always feeds null text/image/audio conditioning, so by
-    # default the understanding FFN only ever processes a constant null
-    # input and never gets a useful training signal -- it should stay frozen
-    # for good.  This is controlled by ``freeze_understanding_ffn`` (default
-    # ``True``), which is DELIBERATELY INDEPENDENT of ``freeze_dit_backbone``:
-    # flip it to ``False`` if you decide to feed real text/metadata
-    # conditioning and want the understanding branch to actually train.
+    # Cosmos 3 is a Mixture-of-Transformers.  Per layer the FFN branches by
+    # modality -- ``mlp.*`` (understanding / autoregressive reasoner) vs
+    # ``mlp_moe_gen.*`` (generation / DiT).  ``self_attn`` is one packed
+    # module with per-stream projections:
+    #   * AR half: ``to_q/k/v/out``, ``norm_q/k`` (causal; does not see vision)
+    #   * DiT half: ``add_q/k/v_proj``, ``to_add_out``, ``norm_added_q/k``
+    # Only the generation softmax concatenates AR and DiT keys/values.
+    # ``freeze_understanding_stream`` (the pretrain setting) freezes the AR
+    # half with the reasoner and trains the DiT half, including ``proj_in``
+    # after the latent-patch 2 -> 1 repatch, so vision tokens attend to EM
+    # and to the frozen text keys.
+    # ``freeze_understanding_ffn`` (default ``True``) is the narrower hold-out
+    # used when the stream flag is off, and is independent of
+    # ``freeze_dit_backbone``.  The table below is that narrower flag.
+    # Set the FFN flag false only when the understanding MLP should train.
     #
     #                        | freeze_understanding_ffn=True (default) | =False
     # -----------------------|------------------------------------------|--------
@@ -218,8 +224,19 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
 
     # Understanding-FFN marker.  Matched by the ``.mlp.`` name segment, which
     # (by construction) excludes the generation branch ``.mlp_moe_gen.`` and the
-    # shared attention ``.self_attn.``.
+    # packed attention ``.self_attn.``.
     _UNDERSTANDING_FFN_MARKER = ".mlp."
+
+    # Packed-attention leaves.  ``to_out`` must not be matched as a prefix of
+    # ``to_add_out``; compare the submodule name after ``.self_attn.``.
+    _AR_ATTN_LEAVES = frozenset({
+        "to_q", "to_k", "to_v", "to_out", "norm_q", "norm_k",
+        "k_norm_und_for_gen",
+    })
+    _GEN_ATTN_LEAVES = frozenset({
+        "add_q_proj", "add_k_proj", "add_v_proj", "to_add_out",
+        "norm_added_q", "norm_added_k",
+    })
 
     # Full understanding (text) stream = a frozen text encoder when held out.
     # Matched by EXACT dotted-name SEGMENTS so the understanding modules are
@@ -228,8 +245,8 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
     # understanding attention projections ``to_q/to_k/to_v/to_out`` +
     # ``norm_q/norm_k`` vs the generation ``add_q_proj/.../to_add_out`` +
     # ``norm_added_q/norm_added_k``).  ``embed_tokens`` is the text input
-    # embedding.  The generation (vision) stream is deliberately EXCLUDED so it
-    # keeps training and can still attend to the (now-static) text keys/values.
+    # embedding.  The generation stream is omitted from this set so it can
+    # train and its softmax can attend to the frozen text keys/values.
     # ``norm`` is the FINAL understanding-stream RMSNorm (its generation twin is
     # ``norm_moe_gen``); ``lm_head`` is the text-prediction head.  Both are
     # understanding-tower and are UNUSED in the feature-extraction forward (we
@@ -293,15 +310,15 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         return bool(params)
 
     def _post_init_freezes(self) -> None:
-        """Enforce the permanent understanding-FFN hold-out at construction.
+        """Enforce the understanding-stream or understanding-FFN hold-out.
 
         Runs after the base ``__init__``'s ``if initial_frozen:
-        freeze_dit_backbone() else: self.dit.train()`` branch, so it covers
-        BOTH cases -- including ``freeze_dit_backbone: false``, which would
-        otherwise leave ``mlp.*`` trainable from step 0.  A no-op once the
-        thaw schedule later calls :meth:`unfreeze_dit_backbone` (which
-        re-applies the same hold-out) or if ``freeze_understanding_ffn`` is
-        ``False``.
+        freeze_dit_backbone() else: self.dit.train()`` branch.
+        ``freeze_understanding_stream`` freezes the whole text encoder.
+        Otherwise ``freeze_understanding_ffn`` freezes ``mlp.*``, including
+        when ``freeze_dit_backbone`` is false. A later thaw re-applies the
+        same hold-out in :meth:`unfreeze_dit_backbone`. With both flags false
+        this method only logs the packed-attention policy.
         """
         if self._freeze_understanding_stream:
             n = len(self._understanding_stream_params())
@@ -318,6 +335,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
                 "Cosmos3 understanding FFN (mlp.*, %d params) held permanently "
                 "frozen (freeze_understanding_ffn=True).", n,
             )
+        self._log_packed_attention_policy()
 
     def freeze_dit_backbone(self) -> None:
         """Freeze the WHOLE DiT (warm-up phase; identical to the base class)."""
@@ -357,6 +375,88 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
             "Cosmos3 DiT backbone thawed%s; DiT trainable params now %s.",
             held, f"{self.get_num_parameters(True):,}",
         )
+        self._log_packed_attention_policy()
+
+    @classmethod
+    def _packed_attn_role(cls, name: str) -> Optional[str]:
+        """``"ar"`` / ``"gen"`` for a packed-attention parameter, else ``None``."""
+        marker = ".self_attn."
+        if marker not in name:
+            return None
+        leaf = name.split(marker, 1)[1].split(".", 1)[0]
+        if leaf in cls._AR_ATTN_LEAVES:
+            return "ar"
+        if leaf in cls._GEN_ATTN_LEAVES:
+            return "gen"
+        return None
+
+    def _log_packed_attention_policy(self) -> None:
+        """Record which half of the packed attention is trainable.
+
+        Projections are per-stream. Only the generation softmax concatenates
+        AR and DiT keys/values. With ``freeze_understanding_stream`` the AR
+        projections stay frozen and the DiT projections train unless the
+        whole backbone is frozen.
+        """
+        buckets: Dict[str, List[nn.Parameter]] = {"ar": [], "gen": []}
+        unknown: List[str] = []
+        for name, param in self.dit.named_parameters():
+            role = self._packed_attn_role(name)
+            if role is None:
+                if ".self_attn." in name:
+                    unknown.append(name)
+                continue
+            buckets[role].append(param)
+        if unknown:
+            logger.warning(
+                "Cosmos3 packed attention has unclassified parameters %s; "
+                "the AR/DiT freeze split did not cover them.",
+                unknown,
+            )
+
+        def _count(params: List[nn.Parameter]) -> tuple:
+            numel = sum(p.numel() for p in params)
+            trainable = sum(p.numel() for p in params if p.requires_grad)
+            return len(params), numel, trainable
+
+        ar_n, ar_numel, ar_train = _count(buckets["ar"])
+        gen_n, gen_numel, gen_train = _count(buckets["gen"])
+        if self._freeze_dit_backbone:
+            decision = "both halves frozen with the DiT backbone"
+        elif self._freeze_understanding_stream:
+            decision = (
+                "AR half frozen with the reasoner; DiT half "
+                "(add_q/k/v_proj, to_add_out) trains"
+            )
+        elif self._freeze_understanding_ffn:
+            decision = (
+                "AR MLP frozen; both attention halves train with the DiT"
+            )
+        else:
+            decision = "both halves train with the DiT"
+        logger.info(
+            "Cosmos3 packed attention: generation softmax concatenates AR and "
+            "DiT keys/values; projections are per-stream.  %s.  "
+            "AR %d tensors / %s params (trainable %s); "
+            "DiT %d tensors / %s params (trainable %s).",
+            decision, ar_n, f"{ar_numel:,}", f"{ar_train:,}",
+            gen_n, f"{gen_numel:,}", f"{gen_train:,}",
+        )
+        if not self._freeze_dit_backbone and self._freeze_understanding_stream:
+            if ar_train:
+                logger.warning(
+                    "Cosmos3 AR attention still has %s trainable params while "
+                    "freeze_understanding_stream is set.",
+                    f"{ar_train:,}",
+                )
+            if gen_n and gen_train != gen_numel:
+                logger.warning(
+                    "Cosmos3 DiT attention is only partly trainable "
+                    "(%s / %s) while the generator tower is thawed.  The EM "
+                    "loss flows through add_q/k/v_proj and to_add_out; those "
+                    "should train.",
+                    f"{gen_train:,}", f"{gen_numel:,}",
+                )
 
     # ------------------------------------------------------------------
     # Backbone selection
@@ -373,9 +473,9 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         return "AutoencoderKLWan"
 
     def _hf_ignore_patterns(self) -> Optional[List[str]]:
-        # We only load ``transformer/`` + ``vae/`` and feed null
-        # conditioning for text / image / audio, so skip the heavy omni
-        # sub-towers and tokenizers (saves tens of GB per snapshot).
+        # Load ``transformer/``, ``vae/``, and ``text_tokenizer/``. Skip the
+        # vision encoder and sound tokenizer. Image and audio conditioning
+        # stay null; text is the metadata prompt when one is supplied.
         from nanocosmos.models.cosmos_2_5_common.hf_loader import (
             _DEFAULT_IGNORE_PATTERNS,
         )
@@ -686,16 +786,17 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         """Build ``[3, und_len + grid_t*grid_h*grid_w]`` unified-3D-mRoPE ids.
 
         Mirrors the diffusers ``Cosmos3OmniPipeline`` position-id
-        construction for the null-conditioning case (integer positions,
-        no FPS modulation):
+        construction (integer positions, no FPS modulation) for a text
+        prefix of length ``und_len`` (1 when the prompt is null):
 
         * text tokens share one monotonically-increasing id across all
           three (T, H, W) axes;
         * VAE vision tokens get a ``(t, h, w)`` grid, the temporal axis
           offset past the text prefix by
           ``unified_3d_mrope_temporal_modality_margin`` so text and vision
-          never collide in rotary phase.  Spatial ids reset to 0 when
-          ``unified_3d_mrope_reset_spatial_ids`` is set (it is for Nano).
+          stay in distinct rotary phases.  Spatial ids reset to 0 when
+          ``unified_3d_mrope_reset_spatial_ids`` is set (true on the
+          released Edge config; the getattr default is True).
         """
         cfg = self.dit.config
         reset_spatial = bool(
@@ -880,10 +981,10 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         while 0 < len(collected) < num_layers:
             collected.append(collected[-1])
 
-        # Match the projector's *runtime* parameter dtype rather than forcing
-        # fp32: the projector is fp32 in the eager / DDP-bf16-mixed path but
-        # bf16 under FSDP ``MixedPrecision`` (bf16-true), so a hard ``.float()``
-        # would mismatch the sharded bf16 projector weights.
+        # Match the projector's runtime parameter dtype. It is constructed
+        # fp32; Lightning ``precision: bf16-true`` (DDP or FSDP) and FSDP
+        # ``MixedPrecision`` cast it to bf16, so a hard ``.float()`` here
+        # would disagree with those weights.
         proj_param = next(self.feature_projector.parameters(), None)
         proj_dtype = proj_param.dtype if proj_param is not None else torch.float32
         collected = [f.to(proj_dtype) for f in collected]
@@ -900,22 +1001,21 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         Differs from the shared base forward in two Cosmos-3-only ways,
         both confined to this override (shared code is untouched):
 
-        1. **Autocast is disabled for the whole wrapper forward.**  The
-           Cosmos 3 graph is a *deliberately* mixed-dtype stack -- bf16
-           omni DiT + bf16 Wan VAE, fp32 feature projector / ``to_latent``
-           / task head, and an fp32-pinned ``time_embedder`` -- whose
-           dtype boundaries we manage explicitly with casts.  Under an
-           *outer* bf16 autocast the autocast "promote" ops hit
-           ``at::autocast::prioritize`` -> *"Unexpected floating
-           ScalarType"*.  The backbone is already natively bf16, so the
-           outer autocast is redundant; disabling it makes the autocast
-           path run byte-for-byte like the verified eager path.
+        1. **Autocast is disabled for the whole wrapper forward.**  The DiT
+           and Wan VAE load in the configured dtype (bf16). The feature
+           projector, ``to_latent``, and the task head are constructed in
+           fp32; Lightning ``precision: bf16-true`` casts the module to
+           bf16 before training. ``time_embedder`` lives on the DiT, so
+           its weights follow that dtype. diffusers' ``Timesteps``
+           activation is fp32 and is cast to the weight dtype by
+           :meth:`_install_time_embedder_dtype_guard`. An outer bf16
+           autocast hits ``at::autocast::prioritize`` (*"Unexpected
+           floating ScalarType"*). ``bf16-true`` already runs without
+           that outer autocast; disabling it here covers every caller.
 
-        2. **fp32 head dtype shim.**  The projector / ``to_latent`` / head
-           run in fp32, but the shared ``_encode_and_extract`` casts the
-           features back to the *input* dtype; a bf16 input would feed
-           bf16 activations into the fp32 head.  We upcast the features to
-           the head dtype (a no-op for the usual fp32-input path).
+        2. **Head dtype shim.**  ``_encode_and_extract`` casts features
+           back to the input dtype. The shim then matches the task head's
+           runtime dtype (fp32 at construction, bf16 after ``bf16-true``).
         """
         with torch.autocast(device_type=x.device.type, enabled=False):
             features, target_size = self._encode_and_extract(x, prompts=prompts)
@@ -977,8 +1077,9 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         ``2t`` size mismatch (e.g. ``4`` vs ``8``).
 
         Rather than touch the shared adapter, we wrap *this* model's
-        decoder ``forward`` so an un-cached call internally performs the
-        VAE's own frame-by-frame cached decode.  The wrap is gated on
+        decoder ``forward`` so an un-cached call runs a chunked cached
+        decode (the first chunk is one latent frame; later chunks are
+        ``decode_chunk`` frames).  The wrap is gated on
         ``is_residual`` and a diffusers backend, so a non-residual VAE
         is left untouched.
         """
@@ -999,7 +1100,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
 
         # Block-level decoder-body checkpointing (set up by the base
         # ``enable_gradient_checkpointing``) is INCOMPATIBLE with the residual
-        # VAE's stateful frame-by-frame cached decode below -- recompute would
+        # VAE's stateful chunked cached decode below -- recompute would
         # desync the causal-conv cache / ``feat_idx`` counter.  Opt out of it
         # and undo any wrappers already applied; this path checkpoints per
         # frame instead (see ``_cached_chunked_forward``).
@@ -1096,7 +1197,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         decoder.forward = _cached_chunked_forward
         self._c3_residual_decode_wrapped = True
         logger.info(
-            "Cosmos 3: wrapped residual Wan2.2 VAE decoder with frame-by-frame "
+            "Cosmos 3: wrapped residual Wan2.2 VAE decoder with chunked "
             "cached decode (%d causal convs) for the feature-extraction "
             "decode path.",
             num_causal_convs,

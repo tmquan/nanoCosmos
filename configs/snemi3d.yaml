@@ -282,8 +282,8 @@ data:
 # ``nanocosmos/models/cosmos_3_nano/`` for the wrapper and
 # ``nanocosmos/models/cosmos_2_5_common/`` for the shared scaffolding.
 #
-# Requires a bleeding-edge ``diffusers`` (>= 0.37, currently git main)
-# that exposes ``Cosmos3OmniTransformer``; Cosmos 3 is BF16-only.
+# Requires diffusers 0.42.1 (the PyPI release pinned in requirements.txt),
+# which exposes ``Cosmos3OmniTransformer``.  Cosmos 3 is BF16-only.
 # ---------------------------------------------------------------------
 model:
   type: cosmos3nano3d
@@ -303,15 +303,15 @@ model:
   feature_size: 64
 
   # --- Effective latent resolution (membrane sharpness) ---
-  # The pretrained Cosmos VAE has a FIXED 8x in-plane spatial compression,
-  # so a 1-voxel membrane lands inside one latent cell and the decode is
-  # blurry -> soft affinities -> Mutex Watershed under-segmentation.
+  # The pretrained Wan VAE has a fixed 16x in-plane spatial compression
+  # (4x in z), so a 1-voxel membrane lands inside one latent cell and the
+  # decode is blurry -> soft affinities -> Mutex Watershed under-segmentation.
   # ``input_supersample`` upsamples the EM in-plane *before* the VAE, so
-  # the latent grid is ``input/8`` of a larger image: at 2 the latent is
-  # H/4, W/4 of the original (vs H/8, W/8 at 1) -- 2x finer per membrane.
+  # the latent grid is ``input/16`` of a larger image: at 2 the latent is
+  # H/8, W/8 of the original (H/16, W/16 at 1) -- 2x finer per membrane.
   # Cost: ~factor^2 more DiT tokens + VAE work (Z is left alone, matching
   # anisotropy), so cut ``data.batch_size`` to fit.  ``1`` disables.
-  input_supersample: 1            # 2 -> latent H/4, W/4 (was H/8, W/8)
+  input_supersample: 1            # 2 -> latent H/8, W/8 (H/16, W/16 at 1)
   # Full-resolution input skip into the head: routes the raw EM's sharp
   # edges *around* the VAE bottleneck and fuses them before the head.
   # Independent of input_supersample; can be combined.  Disabled here so
@@ -324,7 +324,7 @@ model:
   # the latent distribution -> fresh-run setting (old [0,1] checkpoints will
   # not resume cleanly with it on).
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
 
   # What to freeze.  Cosmos 3 has no ControlNet residual branch to
   # absorb the trainable load, so leaving the omni transformer
@@ -348,30 +348,15 @@ model:
   #            on_train_epoch_start``.  Negative ints or non-bool /
   #            non-int values raise at construction.
   freeze_vae_encoder: true
-  # Current value: heads-only warm-up for 2 epochs, then a fine-tune of
-  # the 16B omni transformer from epoch 2 onwards.  WARNING: end-to-end
-  # fine-tuning a 16B backbone is very memory-heavy -- prefer ``true``
-  # (heads-only) unless you have the budget, and turn on
-  # ``gradient_checkpointing`` below if you thaw it.  The 2-epoch
-  # warm-up also shrinks the cold first multi-GPU all-reduce from ~16B
-  # params to the head group, giving the NCCL fabric a small warm-up
-  # collective before the big reductions start (the failure mode that
-  # motivated the NCCL env block at the top of ``scripts/train.py``).
-  # Lines up with ``optimizer.scheduler.warmup_epochs: 2`` so the
-  # transformer unfreezes exactly when the head LR finishes its linear
-  # warm-up.  Flip to ``true`` for a heads-only run.
-  #
-  # ``false`` = end-to-end training of the 15.2B omni transformer.  This
-  # only fits with FSDP FULL_SHARD (``training.strategy: fsdp`` below),
-  # which shards weights/grads/optimizer ~8x across ranks (~17 GB/rank).
-  # Under plain DDP this OOMs (~265 GB/rank, replicated) -- switch to
-  # ``true`` (heads-only) if you ever run on DDP.
+  # ``false`` trains the omni transformer from step 0.  ``true`` keeps it
+  # frozen (heads + last VAE-decoder up-block).  An integer N freezes it
+  # for epochs 0..N-1 and thaws it at epoch N.
+  # ``optimizer.scheduler.warmup_epochs: 2`` is the LR warm-up; it does
+  # not freeze the transformer.
   freeze_dit_backbone: false
   freeze_vae_decoder: true
 
-  # End-to-end training of the 15.2B omni transformer is only feasible
-  # with FSDP FULL_SHARD (``training.strategy: fsdp`` below) AND
-  # activation checkpointing.  ``true`` here enables the wrapper's
+  # ``true`` enables the wrapper's
   # diffusers-native gradient checkpointing on the 36 decoder layers
   # (trades ~20-30% step time for ~40% less activation memory).  It is
   # hook-aware (recompute in backward is gated by ``_hooks_active``) and
@@ -413,23 +398,10 @@ training:
   max_epochs: 101
   accelerator: auto
   devices: auto
-  # FSDP FULL_SHARD so the 15.2B omni DiT shards weights/grads/optimizer
-  # across the 8 ranks (DDP replicates it -> ~265 GB/rank OOM).  The
-  # FSDPStrategy (see ``scripts/train.py::setup_strategy``) wraps only the
-  # Cosmos3 decoder-layer class, keeps the small fp32-origin heads / VAE in
-  # the unsharded root unit, and uses ``use_orig_params=True`` so the
-  # ``model.dit.*`` vs heads optimiser split still works.  Switch back to
-  # ``ddp`` for heads-only (``freeze_dit_backbone: true``) runs.
-  #
-  # FSDP FULL_SHARD: shards the 15.2B omni DiT's weights/grads/optimizer
-  # across the 8 ranks (~17 GB/rank) so end-to-end training fits; DDP
-  # would replicate it -> ~265 GB/rank OOM.  The FSDPStrategy (see
-  # ``scripts/train.py::setup_strategy``) wraps only the Cosmos3
-  # decoder-layer class, keeps the small fp32-origin heads / VAE in the
-  # unsharded root unit, and uses ``use_orig_params=True`` so the
-  # ``model.dit.*`` vs heads optimiser split still works.
   # DDP replicates the Cosmos 3 Nano DiT on every rank. Switch to
-  # ``fsdp`` when that replication does not fit (see the note above).
+  # ``fsdp`` when that replication does not fit.  ``setup_strategy`` in
+  # ``scripts/train.py`` then wraps the Cosmos3 decoder-layer class and
+  # keeps ``use_orig_params=True`` so the ``model.dit.*`` split still works.
   strategy: ddp
   # ``bf16-true``: Cosmos 3 Nano is natively bf16, so full-bf16 params
   # avoid an fp32 master-weight copy.

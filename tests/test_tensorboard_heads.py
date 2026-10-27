@@ -14,7 +14,9 @@ import pytest
 import torch
 
 from nanocosmos.callbacks.tensorboard.heads import _log_predictions, aff_panel_indices
+from nanocosmos.callbacks.tensorboard.joint3d_logger import _gray3, _log_ortho_planes
 from nanocosmos.callbacks.tensorboard.tags import TagContext
+from nanocosmos.callbacks.tensorboard.viz import _orthogonal_midplanes
 from nanocosmos.losses import AFF_NAMES, HEAD_CHANNELS, N_AFF, N_PULL
 
 
@@ -142,3 +144,47 @@ class TestLogPredictions:
             "train/automatic/pred/label/pre",
         ):
             assert tb.payloads[tag].shape[1] == 3, f"{tag} should be RGB"
+
+
+class TestOrthogonalMidplanes:
+    def test_fine_grid_midplanes_are_exact(self) -> None:
+        vol = torch.arange(8 * 8 * 8, dtype=torch.float32).reshape(1, 1, 8, 8, 8)
+        planes = _orthogonal_midplanes(vol, (8, 8, 8))
+        assert torch.equal(planes["xy"], vol[:, :, 4])
+        assert torch.equal(planes["xz"], vol[:, :, :, 4, :])
+        assert torch.equal(planes["yz"], vol[:, :, :, :, 4])
+
+    def test_coarser_target_is_upsampled_to_4nm_grid(self) -> None:
+        # Native target is short along z (40 nm sections on a 4 nm grid).
+        vol = torch.full((2, 1, 4, 6, 8), 0.4)
+        planes = _orthogonal_midplanes(vol, (16, 12, 16))
+        assert tuple(planes["xy"].shape) == (2, 1, 12, 16)
+        assert tuple(planes["xz"].shape) == (2, 1, 16, 16)
+        assert tuple(planes["yz"].shape) == (2, 1, 16, 12)
+        for plane in planes.values():
+            assert torch.allclose(plane, torch.full_like(plane, 0.4))
+
+    def test_logger_emits_source_and_target_planes(self) -> None:
+        tb = _RecordingTB()
+        ctx = TagContext(stage="val", mode="automatic", head="ssl")
+        source = torch.zeros(1, 1, 8, 8, 8)
+        source[:, :, 4] = 1.0
+        # Coarser z: mid xz/yz must land on the 8^3 fine grid.
+        target = torch.full((1, 1, 4, 8, 8), 0.5)
+        fine = (8, 8, 8)
+        _log_ortho_planes(tb, ctx, 3, "true/image", source, fine)
+        _log_ortho_planes(tb, ctx, 3, "true/target", target, fine)
+        for kind in ("true/image", "true/target"):
+            for plane in ("xy", "xz", "yz"):
+                tag = f"val/automatic/ssl/{kind}/{plane}"
+                assert tag in tb.payloads, tag
+                panel = tb.payloads[tag]
+                assert tuple(panel.shape) == (1, 3, 8, 8), tag
+        assert torch.equal(
+            tb.payloads["val/automatic/ssl/true/image/xy"],
+            _gray3(source[:, :, 4]),
+        )
+        assert torch.equal(
+            tb.payloads["val/automatic/ssl/true/image/xz"],
+            _gray3(source[:, :, :, 4, :]),
+        )

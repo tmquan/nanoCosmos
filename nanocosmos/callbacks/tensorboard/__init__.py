@@ -1,73 +1,56 @@
 """
 TensorBoard image logger package.
 
-All tags emitted by this subpackage follow a single hierarchy so that
-images and scalars cluster together in the TensorBoard UI::
+Tags are assembled by :class:`~nanocosmos.callbacks.tensorboard.tags.TagContext`::
 
-    {stage}/{mode}/{panel}
+    {stage}/{mode}/[{head}/]{panel}
 
-where
+* ``stage`` -- ``"train"`` | ``"val"``
+* ``mode``  -- ``"automatic"`` (the mode the training script passes)
+* ``head``  -- omitted by :class:`ImageLogger`.  :class:`Joint3DImageLogger`
+  sets it to the task name (``ssl`` or ``sft``).
+* ``panel`` -- field path, plus ``/{xy,xz,yz}`` on the joint EM panels.
 
-* ``stage``  -- ``"train"`` | ``"val"``
-* ``mode``   -- ``"automatic"`` (single mode today; structured so
-  additional modes such as ``"prompted"`` can slot in later)
-* ``panel``  -- e.g. ``true/image``, ``true/label``, ``true/sem``,
-  ``true/wan_decoder``, ``pred/sem``, ``pred/raw``,
-  ``pred/label/{pre,mul}`` (the Mutex Watershed instances).  All affinity
-  panels live under a single ``aff/`` group -- ``aff/true/*`` and
-  ``aff/pred/*`` -- so the core panels above stay clustered together
-  instead of being split apart by the (config-driven, possibly many)
-  offsets.  Affinity panels are named by their offset
-  (``nanocosmos.losses.offset_names``, e.g. ``01_pull_z-1`` /
-  ``21_push_y-2x-2``) with a 1-based numeric prefix so the alphabetical
-  TB sort keeps them in offset order.
+:class:`ImageLogger` (affinity recipe) takes one z slice per volume via
+:func:`~nanocosmos.callbacks.tensorboard.viz._to_2d` (the central slice
+when no relative depth is passed): ``true/image``, ``true/label``,
+``true/sem``, ``true/wan_decoder``, ``pred/sem``, ``pred/raw``,
+``pred/label/{pre,mul}``, ``aff/{true,pred}/{offset}``.
 
-The scalar logs emitted by
-:class:`nanocosmos.modules.base.BaseCircuitModule` use the same
-``{stage}/{mode}/loss/...`` root for both training and validation, so
-each predicted field's images sit near its loss scalars.
+:class:`Joint3DImageLogger` logs the EM source (``true/image``), the ssl
+recon target (``true/target``), the raw-head prediction (``pred/image``),
+and the Wan-decoder diagnostic (``pred/wan_decoder``) as orthogonal
+mid-planes ``xy`` (mid-z), ``xz`` (mid-y), and ``yz`` (mid-x) on the 4 nm
+source grid.  A coarser plane is bilinear-upsampled onto that grid
+(:func:`~nanocosmos.callbacks.tensorboard.viz._resize_2d`).  sft
+segmentation panels still pick one z slice with ``_best_depth_frac``.
+Tags look like ``{stage}/automatic/{task}/{kind}/{xy|xz|yz}``.
+
+Affinity names come from :func:`nanocosmos.losses.offset_names`
+(for example ``01_pull_z-1``), with a 1-based prefix so alphabetical
+TensorBoard order follows offset order.  They live under ``aff/`` so the
+image / label / sem panels stay grouped.
+
+Scalar logs from :class:`nanocosmos.modules.base.BaseCircuitModule` use
+``{stage}/{mode}/loss/...``, so each field's images sit near its scalars.
 
 Module layout::
 
-    tags.py           -- TagContext (tag assembly; single source of
-                         truth for the ``{stage}/{mode}/`` hierarchy)
-    viz.py            -- low-level image utilities (central-slice,
-                         per-image min-max normalise, label HSV palette)
-    heads.py          -- affinity + sem + raw panel logger (incl. the
-                         Mutex Watershed ``pred/label`` instances)
-    image_logger.py   -- Lightning callback ``ImageLogger`` (cache first
-                         batch of each epoch, forward under eval +
-                         autocast, dispatch)
+    tags.py            -- TagContext (``{stage}/{mode}/[{head}/]{panel}``)
+    viz.py             -- orthogonal mid-planes, 2-D resize, depth-slice
+                          extraction, per-image min-max, label HSV palette
+    heads.py           -- ImageLogger affinity + sem + raw panels, including
+                          Mutex Watershed ``pred/label``
+    image_logger.py    -- ``ImageLogger``
+    joint3d_logger.py  -- ``Joint3DImageLogger``
 
-End-to-end flow (rank-0 only, once per ``every_n_epochs``)::
-
-        ┌────────────────────────┐
-        │ DataLoader batch       │  images, labels
-        │ (PL Trainer)           │
-        └──────────┬─────────────┘
-                   ▼
-        ┌────────────────────────┐   cache first batch of the epoch on
-        │ ImageLogger            │   CPU and release when the epoch
-        │ .on_*_batch_end        │   ends (see _detach_batch)
-        └──────────┬─────────────┘
-                   ▼
-        ┌────────────────────────┐   move batch back to device, run a
-        │ ImageLogger            │   per-image eval-mode forward under
-        │ ._run_visualization    │   autocast, cast preds back to fp32
-        └──────────┬─────────────┘
-                   ▼
-        ┌────────────────────────┐   affinity + sem + raw head panels
-        │ heads._log_predictions │   (pred/sem, pred/raw, aff/{true,pred}/*,
-        │                        │   Mutex Watershed pred/label/*)
-        └──────────┬─────────────┘
-                   ▼
-        ┌────────────────────────┐
-        │ SummaryWriter          │
-        │ .add_images(...)       │
-        └────────────────────────┘
-
-Works for both 2-D slices and 3-D volumes (takes a central slice
-through ``nanocosmos.callbacks.tensorboard.viz._to_2d``).
+Every rank caches its batches and runs the epoch-end forward (the model
+forward is collective under FSDP).  Rank 0 writes.  With a TensorBoard
+logger the other ranks receive Lightning's dummy experiment, whose
+``add_*`` methods do not write.  Images go out from
+``on_{train,validation}_epoch_end``.  ``on_validation_epoch_end`` also
+runs at the end of Lightning's sanity-check validation, so step-0 panels
+appear after that pass.  2-D batches are logged as-is.
 """
 
 from nanocosmos.callbacks.tensorboard.image_logger import ImageLogger

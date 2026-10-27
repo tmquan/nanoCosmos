@@ -2,7 +2,7 @@
 Resample a native-resolution patch onto the fixed fine (small-voxel) grid.
 
 The joint recipe (doc/RESOLUTION_LADDER.md) runs the network on a fixed fine
-grid (e.g. 4 nm, [200, 256, 256]).  Each source volume is read at its **native**
+grid (pretrain config: 4 nm, ``[400, 400, 400]``).  Each source volume is read at its **native**
 voxel size and brought onto that grid by :class:`ToFineGridd`:
 
 * ``image``       -> resampled (``image_mode``, ``"nearest"`` by default) to

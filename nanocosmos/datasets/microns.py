@@ -29,7 +29,8 @@ class MICRONSDataset(CircuitDataset):
         - ``root``: override ``root_dir`` for this volume.
         - ``find_boundaries``: when > 0, boundary pixels between adjacent
           labels are zeroed out at load time via
-          ``skimage.segmentation.find_boundaries``.
+          :func:`nanocosmos.transforms.find_boundaries.find_boundaries`
+          (cucim when the GPU probe succeeds, otherwise skimage).
 
     Args:
         root_dir: Path to directory containing MICRONS data files.

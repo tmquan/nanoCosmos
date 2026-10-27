@@ -1,7 +1,7 @@
 """Shared backbone wrapper for the Cosmos 3 tiers.
 
 :class:`_BaseCosmos25Wrapper` is the scaffold Nano, Edge, and Super
-share. The module name is historical. It factors out:
+share. The module path is ``cosmos_2_5_common``. It factors out:
 
 * HuggingFace snapshot download + diffusers-class instantiation (base
   DiT + Wan-style VAE)
@@ -15,9 +15,11 @@ share. The module name is historical. It factors out:
 
 Subclasses extend it via the hooks (:meth:`_init_arch_state`,
 :meth:`_post_load_diffusers`, :meth:`_run_dit_forward`, ...). The
-Cosmos 3 omni family overrides :meth:`_post_load_diffusers` to
-repatch and reduce the DiT, and overrides :meth:`_run_dit_forward`
-for the omni token stream.
+Cosmos 3 omni family overrides :meth:`_post_load_diffusers` to load
+the text tokenizer (Edge may also reduce or fill), overrides
+:meth:`_run_dit_forward` for the omni token stream, and repatches
+``latent_patch_size`` from 2 to 1 in ``Cosmos3OmniWrapper.__init__``
+after the backbone load.
 """
 
 import logging
@@ -162,16 +164,16 @@ class _BaseCosmos25Wrapper(nn.Module):
         # Treat the EM depth (z) axis as NON-causal.  The Wan VAE is a *causal*
         # video tokenizer (causal temporal padding in ``WanCausalConv3d``), but
         # EM z-sections have no past->future direction.  When True, symmetrise
-        # the frozen Wan VAE over z -- on BOTH sides -- by averaging the forward
-        # pass with a z-flipped pass: the encoder latent (see
-        # :meth:`_encode_to_latent`) and the frozen decoder body (see
-        # ``_DecoderAdapter3D._decode_body``).  Cancels the directional bias
-        # WITHOUT retraining (frozen-VAE safe); costs one extra encode + one
-        # extra decode.  This shifts the latent distribution, so it is a
-        # fresh-run setting.  The dependence is BIDIRECTIONAL: it adds no
-        # state_dict keys, but a checkpoint trained with it OFF will not resume
-        # cleanly with it ON, and one trained ON (like the shipped last.ckpt,
-        # vae_symmetrize_z=True) must resume with it ON.
+        # the Wan VAE over z -- encoder and decoder body -- by averaging the
+        # forward pass with a z-flipped pass (see :meth:`_encode_to_latent`
+        # and ``_DecoderAdapter3D._decode_body``). The encoder stays frozen.
+        # With ``freeze_vae_decoder`` the last up-block and output norm stay
+        # trainable, and gradients still flow through the body into the DiT.
+        # Costs one extra encode and one extra decode. This shifts the latent
+        # distribution and adds no state_dict keys. A checkpoint trained with
+        # the flag off must resume with it off, and one trained with it on
+        # (the pretrain config sets ``vae_symmetrize_z: true``) must resume
+        # with it on.
         self._vae_symmetrize_z = bool(vae_symmetrize_z)
         # Temporal chunk size for the residual Wan VAE decode (frames per
         # decoder pass after the mandatory single-frame first chunk).  Larger =
@@ -186,7 +188,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         }[dtype]
         # ``freeze_dit_backbone`` accepts either a bool (permanent state)
         # or a non-negative int ``N`` (frozen for epochs 0..N-1, thawed at
-        # epoch N -- the warm-up schedule restored after Phase 1).  See
+        # epoch N).  See
         # ``_resolve_freeze_dit_backbone`` and
         # ``nanocosmos.modules.cosmos_2_5_common.base.BaseCosmosModule.on_train_epoch_start``.
         initial_frozen, thaw_epoch = _resolve_freeze_dit_backbone(
@@ -206,17 +208,16 @@ class _BaseCosmos25Wrapper(nn.Module):
         # Superset of the FFN hold-out above: freeze the ENTIRE understanding
         # (text) stream -- embed_tokens + the understanding-only attention
         # projections/norms + mlp.* -- turning it into a frozen text encoder.
-        # The generation (vision) stream keeps training and still learns to
-        # attend to the now-static text keys/values.  Cosmos 3 only (via
-        # ``Cosmos3OmniWrapper``).
+        # The generation stream is excluded from this freeze, so it can train
+        # and its softmax can attend to the frozen text keys/values.
+        # Cosmos 3 only (via ``Cosmos3OmniWrapper``).
         self._freeze_understanding_stream = bool(freeze_understanding_stream)
         self._freeze_vae_encoder = freeze_vae_encoder
         # ``gradient_checkpointing`` accepts a bool (all targets) or a list of
         # targets among {"dit", "decode", "head"} so recompute can be traded
         # against memory per component.  ``True`` -> all three; ``False`` /
-        # ``[]`` -> none.  On Blackwell with a large memory budget, e.g.
-        # ``["decode"]`` keeps the (mandatory) per-frame VAE-decode
-        # checkpointing while running the DiT + head without recompute.
+        # ``[]`` -> none.  ``decode`` checkpoints the chunked residual Wan
+        # decode. The 4B pretrain selects ``dit`` and ``decode``.
         if gradient_checkpointing is True:
             ckpt_targets = {"dit", "decode", "head"}
         elif not gradient_checkpointing:
@@ -342,9 +343,10 @@ class _BaseCosmos25Wrapper(nn.Module):
         ``dit_loading_info`` is the ``diffusers`` ``from_pretrained(...,
         output_loading_info=True)`` report for ``self.dit`` (keys:
         ``missing_keys`` / ``unexpected_keys`` / ``mismatched_keys`` /
-        ``error_msgs``) -- e.g. Cosmos3-Edge uses ``missing_keys`` to
-        detect checkpoint/architecture gaps and fill them from a parent
-        tier by truncation (see :mod:`nanocosmos.models.cosmos_3_edge`).
+        ``error_msgs``). Cosmos3-Edge fills ``missing_keys`` from a parent
+        tier only when ``fill_missing_parent_repo_id`` is set. diffusers
+        0.42.1 matches the Edge checkpoint, so the shipped variant leaves
+        that fill unset (see :mod:`nanocosmos.models.cosmos_3_edge`).
         """
         return
 
@@ -355,10 +357,9 @@ class _BaseCosmos25Wrapper(nn.Module):
         else: self.dit.train()`` branch above, so it sees the final initial
         trainable state and can layer additional, narrower freezes on top.
         :class:`~nanocosmos.models.cosmos_3_common.wrapper.Cosmos3OmniWrapper`
-        uses it to enforce the permanent understanding-FFN freeze
-        (``freeze_understanding_ffn``) even when ``freeze_dit_backbone:
-        false`` would otherwise leave the whole DiT (including that
-        branch) trainable from the start.
+        uses it to enforce ``freeze_understanding_stream`` (the whole text
+        encoder) or, when that flag is off, ``freeze_understanding_ffn``
+        (``mlp.*`` only), including when ``freeze_dit_backbone`` is false.
         """
         return
 
@@ -397,7 +398,7 @@ class _BaseCosmos25Wrapper(nn.Module):
     def _diffusers_transformer_cls_name(self) -> str:
         """diffusers class name to load the base DiT into ``self.dit``.
 
-        The historical default is ``"CosmosTransformer3DModel"``.
+        The base default is ``"CosmosTransformer3DModel"``.
         Cosmos 3 overrides this to ``"Cosmos3OmniTransformer"`` so
         :meth:`_try_load_diffusers` imports the omni class.
         """
@@ -417,8 +418,8 @@ class _BaseCosmos25Wrapper(nn.Module):
         Default: ``None`` -- use :data:`hf_loader._DEFAULT_IGNORE_PATTERNS`.
         Subclasses whose HF repo carries large unused subfolders (e.g.
         Cosmos 3's ``vision_encoder`` / ``sound_tokenizer``) override
-        this to skip them -- we only ever load ``transformer/`` and
-        ``vae/`` and feed null conditioning for everything else.
+        this to skip them. Cosmos 3 loads ``transformer/``, ``vae/``, and
+        ``text_tokenizer/`` (metadata prompts). Image and audio stay null.
         """
         return None
 
@@ -607,9 +608,9 @@ class _BaseCosmos25Wrapper(nn.Module):
             # CHECKPOINT INVARIANT: this Wan decoder is intentionally registered
             # under TWO state_dict prefixes -- here as ``model.vae_decoder.*``
             # and again (same module) inside the decoder adapter as
-            # ``model.decoder_adapter.decoder_body.*``. Both prefixes exist in
-            # last.ckpt; do NOT de-duplicate or convert either to an
-            # unregistered reference (it would drop keys and break the load).
+            # ``model.decoder_adapter.decoder_body.*``. Both prefixes are in
+            # the state_dict. Keep both; dropping either removes keys and
+            # breaks a strict load.
             self.vae_decoder = vae.decoder
 
             self.dit = transformer.to(self._dtype)
@@ -624,9 +625,10 @@ class _BaseCosmos25Wrapper(nn.Module):
             logger.warning("diffusers load from local snapshot failed: %s", exc)
             return False
 
-        # Subclass hook -- e.g. Cosmos3-Edge uses ``dit_loading_info`` to
-        # fill any checkpoint/architecture gaps from a parent tier.
-        # Tiers that do not override this hook leave it a no-op.
+        # Subclass hook. Cosmos3-Edge fills missing keys from a parent tier
+        # only when ``fill_missing_parent_repo_id`` is set; the shipped
+        # variant leaves that unset. Tiers that do not override this hook
+        # leave it a no-op.
         self._post_load_diffusers(local_path, cache_dir, hf_token, dit_loading_info)
         return True
 
@@ -681,7 +683,7 @@ class _BaseCosmos25Wrapper(nn.Module):
             # manages gets moved; quant/conv params do not), so we must check
             # *every* param, not just the first, and move the whole module
             # onto the input device.  ``.to()`` is a no-op for params already
-            # co-located, and the VAE is frozen so this never affects grads.
+            # co-located. ``.to()`` does not change ``requires_grad``.
             _vae_off_device = any(
                 p.device != x.device for p in vae.parameters()
             ) or any(
@@ -907,7 +909,7 @@ class _BaseCosmos25Wrapper(nn.Module):
 
     @torch.no_grad()
     def wan_decoder_output(self, x: torch.Tensor) -> Optional[torch.Tensor]:
-        """RGB reconstruction from the **original (pretrained) Wan decoder**.
+        """Diagnostic ``conv_out`` of the pretrained Wan decoder.
 
         Mirrors :meth:`forward` through encode + DiT + ``decoder_body``,
         then applies the pretrained ``conv_out`` preserved at
@@ -915,19 +917,20 @@ class _BaseCosmos25Wrapper(nn.Module):
         :attr:`decoder_adapter.original_conv_out` instead of the
         unified task head.
 
-        Diagnostic only (``true/wan_decoder`` TensorBoard panel).  The
-        pretrained ``conv_out`` is frozen and never optimised; it shows
-        what the Wan VAE believes the model's learned latent should
-        decode to in pixel space.
+        Diagnostic only. Joint runs log ``pred/wan_decoder``; the affinity
+        ``ImageLogger`` logs ``true/wan_decoder``. ``conv_out`` is frozen.
+        On the released Edge Wan2.2 VAE it emits 12 channels. The official
+        VAE decode unpatchifies those to RGB and clamps to ``[-1, 1]``;
+        this path returns the raw activation at the input spatial size.
 
         Args:
             x: Input volume ``[B, C, D, H, W]`` (single-channel EM is
-                tiled to 3-channel RGB internally).
+                tiled to 3-channel RGB before ``vae.encode``, which then
+                patchifies to the VAE's 12-channel input).
 
         Returns:
-            ``[B, 3, D, H, W]`` RGB reconstruction in roughly
-            ``[-1, 1]``, or ``None`` if the wrapper was built without a
-            pretrained VAE (random-init standalone DiT path).
+            ``[B, C_out, D, H, W]`` from :meth:`_DecoderAdapter3D.wan_reconstruct`,
+            or ``None`` if the wrapper was built without a pretrained VAE.
         """
         if not getattr(self.decoder_adapter, "_has_pretrained", False):
             return None
@@ -956,7 +959,7 @@ class _BaseCosmos25Wrapper(nn.Module):
         D_in, H_in, W_in = x.shape[-3], x.shape[-2], x.shape[-1]
 
         # Optional in-plane supersample before the VAE: a finer latent lets
-        # the VAE/DiT resolve membranes the 8x latent would otherwise smear.
+        # the VAE/DiT resolve membranes the 16x latent would otherwise smear.
         f = self._input_supersample
         if f and f != 1:
             x_src = x.as_tensor() if hasattr(x, "as_tensor") else x
@@ -1047,7 +1050,9 @@ class _BaseCosmos25Wrapper(nn.Module):
 
     def freeze_vae_decoder(self) -> None:
         self.decoder_adapter._freeze_body()
-        logger.info("VAE decoder frozen.")
+        logger.info(
+            "VAE decoder early/mid blocks frozen; last up-block and output norm stay trainable."
+        )
 
     def unfreeze_vae_decoder(self) -> None:
         self.decoder_adapter._unfreeze_body()
@@ -1117,11 +1122,11 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         Block-level checkpointing of these is correct only when the body is
         driven by a single ``feat_cache=None`` call (a non-residual Wan
-        VAE).  The residual Wan2.2 VAE Cosmos 3 ships instead decodes
-        frame-by-frame through a stateful causal-conv cache that block-level
+        VAE).  The residual Wan2.2 path Cosmos 3 ships decodes in temporal
+        chunks through a stateful causal-conv cache that block-level
         checkpointing desyncs, so that path sets
-        ``_skip_decoder_body_checkpoint`` and checkpoints per frame in its own
-        decode wrapper instead.
+        ``_skip_decoder_body_checkpoint`` and checkpoints each chunk in its
+        own decode wrapper instead.
         """
         adapter = getattr(self, "decoder_adapter", None)
         body = getattr(adapter, "decoder_body", None) if adapter is not None else None
@@ -1168,12 +1173,12 @@ class _BaseCosmos25Wrapper(nn.Module):
             self._unwrap_forward(m)
 
     def enable_gradient_checkpointing(self, _log: bool = True) -> None:
-        """Enable activation checkpointing on DiT blocks + the VAE decoder.
+        """Enable activation checkpointing on the selected targets.
 
-        Trades ~20-30% slower forward for much lower activation memory,
-        allowing larger batch sizes or patch sizes.  Covers both the DiT
-        transformer blocks and the full-resolution Wan VAE decoder body +
-        task head (the dominant memory consumer for this recipe).
+        Recomputation lowers activation memory. ``dit`` covers the DiT
+        blocks. ``decode`` / ``head`` cover the decoder body and task head,
+        except the residual Wan path, which checkpoints each decode chunk
+        in its own wrapper when ``decode`` is selected.
         """
         self._gradient_checkpointing = True
         if getattr(self, "_ckpt_dit", True):

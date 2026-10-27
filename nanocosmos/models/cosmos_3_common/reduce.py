@@ -9,8 +9,8 @@ trained model), sharing the same depth-remap + width-truncation machinery:
   fresh init.
 * :func:`fill_missing_from_parent` -- given a child model that is MOSTLY
   already correctly loaded, fill ONLY a listed set of missing parameters
-  from a parent tier. The shipped Edge variant does not call this: the
-  pinned diffusers build matches ``nvidia/Cosmos3-Edge``. It remains for
+  from a parent tier. The shipped Edge variant does not call this:
+  diffusers 0.42.1 matches ``nvidia/Cosmos3-Edge``. It remains for
   a variant that sets ``fill_missing_parent_repo_id``.
 
 Depth remap (both operations): keep an evenly-spaced subset of the parent's

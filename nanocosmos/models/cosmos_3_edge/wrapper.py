@@ -3,9 +3,9 @@
 A tier specialisation of
 :class:`nanocosmos.models.cosmos_3_common.wrapper.Cosmos3OmniWrapper`.
 ``nvidia/Cosmos3-Edge`` has released weights and the ``EDGE`` variant loads
-them directly (own transformer + own Wan2.2 VAE). The pinned diffusers
-commit reads ``hidden_act: relu2`` and ``qk_norm_for_text: false``, so that
-load reports no missing keys and the Nano fill stays off.
+them directly (own transformer + own Wan2.2 VAE). diffusers 0.42.1
+reads ``hidden_act: relu2`` and ``qk_norm_for_text: false``, so that
+load reports no missing keys and the parent fill stays off.
 
 :meth:`_post_load_diffusers` still implements two legacy paths, both off in
 the shipped variant: ``reduce_from_parent=True`` replaces the loaded
