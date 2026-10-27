@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "A modular PyTorch Lightning infrastructure for connectomics research."
 readme = "README.md"
 license = {text = "MIT"}
-# The runnable env is Python 3.13 / CUDA 13.2 / Rubin sm_107.  The exact
-# pins, including the torch 2.14 cu132 nightly, live in requirements.txt.
+# The runnable env is Python 3.13 / CUDA 13.4 / Rubin sm_107.  The exact
+# pins, including the torch 2.16 cu134 nightly, live in requirements.txt.
 requires-python = ">=3.12"
 # Core runtime dependencies.  These are the imports actually exercised
 # by ``import nanocosmos`` and by the standard training / inference path.
@@ -45,11 +45,10 @@ dependencies = [
 # Pulls HuggingFace + diffusers (+ transformers for the Cosmos 3 omni
 # Qwen3-VL / Qwen2 sub-towers).
 #
-# Cosmos3-Edge needs the diffusers commit that reads ``hidden_act: relu2``
-# and ``qk_norm_for_text: false``.  A PyPI 0.39 install builds a gated-SiLU
-# MLP the Edge checkpoint does not contain.  Same commit as requirements.txt.
+# Cosmos3-Edge needs diffusers 0.42.1, which reads ``hidden_act: relu2``
+# and ``qk_norm_for_text: false``.  Same release as requirements.txt.
 cosmos = [
-    "diffusers @ git+https://github.com/huggingface/diffusers.git@9f6fc2c13610ead670cbac6dbf974b2a24a9e69b",
+    "diffusers>=0.42.1",
     # transformers and accelerate are not imported directly by the
     # package; they are load-bearing transitively via diffusers (the
     # Cosmos 3 omni Qwen3-VL / Qwen2 sub-towers).  Keep declared.

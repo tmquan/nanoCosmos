@@ -3,7 +3,7 @@
 Cosmos3-Edge has released weights on HuggingFace (``nvidia/Cosmos3-Edge``,
 gated -- needs an HF token). The ``EDGE`` variant loads them directly.
 
-The pinned diffusers commit (``9f6fc2c``) reads ``hidden_act: relu2`` and
+diffusers 0.42.1 reads ``hidden_act: relu2`` and
 ``qk_norm_for_text: false``, so the direct load reports no missing keys.
 ``fill_missing_parent_repo_id`` is unset. A legacy ``reduce_from_parent=True``
 path remains for comparisons; the shipped configs leave it off.

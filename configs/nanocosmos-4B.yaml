@@ -5,8 +5,8 @@
 # but the backbone is Cosmos3-Edge (variant EDGE) instead of the full
 # Cosmos-3 Nano (16B).  Edge usually allows a larger patch/batch than Nano.
 # Edge is loaded DIRECTLY from its own released checkpoint
-# (nvidia/Cosmos3-Edge).  That load is correct only on the diffusers commit
-# pinned in requirements.txt (9f6fc2c), which honors Edge's
+# (nvidia/Cosmos3-Edge).  That load is correct on diffusers 0.42.1
+# (pinned in requirements.txt), which honors Edge's
 # ``hidden_act: relu2`` and ``qk_norm_for_text: false``.  Older diffusers
 # (0.39) builds a gated-SiLU MLP the checkpoint does not contain.
 # Runtime matches the pretrain config: BF16, volume roots under
