@@ -21,7 +21,7 @@ when no relative depth is passed): ``true/image``, ``true/label``,
 recon target (``true/target``), the raw-head prediction (``pred/image``),
 and the Wan-decoder diagnostic (``pred/wan_decoder``) as orthogonal
 mid-planes ``xy`` (mid-z), ``xz`` (mid-y), and ``yz`` (mid-x) on the 4 nm
-source grid.  A coarser plane is bilinear-upsampled onto that grid
+source grid.  A coarser plane is nearest-upsampled onto that grid
 (:func:`~nanocosmos.callbacks.tensorboard.viz._resize_2d`).  sft
 segmentation panels still pick one z slice with ``_best_depth_frac``.
 Tags look like ``{stage}/automatic/{task}/{kind}/{xy|xz|yz}``.

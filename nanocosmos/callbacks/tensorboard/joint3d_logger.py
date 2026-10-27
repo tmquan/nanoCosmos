@@ -7,8 +7,8 @@ task-namespaced tag ``{stage}/{mode}/{task}/...``:
 
 * **both branches** -- reconstruction panels, each as the three orthogonal
   mid-planes (``xy`` / ``xz`` / ``yz``) on the 4 nm grid.  A source or target
-  that is coarser than 4 nm is upsampled onto that grid before the plane is
-  drawn::
+  that is coarser than 4 nm is nearest-upsampled onto that grid before the
+  plane is drawn::
 
       {stage}/automatic/{ssl,sft}/true/image/{xy,xz,yz}    source (degraded on ssl)
       {stage}/automatic/{ssl,sft}/pred/image/{xy,xz,yz}    raw-head small-voxel recon
@@ -227,8 +227,8 @@ class Joint3DImageLogger(ImageLogger):
                 tb, ctx, epoch, "pred/wan_decoder", wan_rgb[:n], fine_size,
             )
         # ssl only.  ``recon_image`` is the clean EM on its own grid, which is
-        # often coarser than the 4 nm source; ``_log_ortho_planes`` upsamples
-        # each plane onto that grid.  sft also stores ``recon_image`` (the
+        # often coarser than the 4 nm source; ``_log_ortho_planes`` nearest-
+        # upsamples each plane onto that grid.  sft also stores ``recon_image`` (the
         # native EM, captured before the input is resampled) and this logger
         # does not draw it.
         recon_t = batch.get("recon_image")

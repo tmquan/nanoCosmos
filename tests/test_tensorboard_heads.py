@@ -164,6 +164,16 @@ class TestOrthogonalMidplanes:
         for plane in planes.values():
             assert torch.allclose(plane, torch.full_like(plane, 0.4))
 
+    def test_coarser_axis_stays_piecewise_constant(self) -> None:
+        # Two native z sections on a 4x finer grid must stay hard blocks.
+        vol = torch.zeros(1, 1, 2, 2, 2)
+        vol[:, :, 0] = 0.0
+        vol[:, :, 1] = 1.0
+        xz = _orthogonal_midplanes(vol, (8, 4, 4))["xz"]
+        assert tuple(xz.shape) == (1, 1, 8, 4)
+        assert torch.equal(xz[:, :, :4], torch.zeros_like(xz[:, :, :4]))
+        assert torch.equal(xz[:, :, 4:], torch.ones_like(xz[:, :, 4:]))
+
     def test_logger_emits_source_and_target_planes(self) -> None:
         tb = _RecordingTB()
         ctx = TagContext(stage="val", mode="automatic", head="ssl")

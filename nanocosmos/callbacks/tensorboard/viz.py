@@ -1,7 +1,7 @@
 """Low-level image utilities for TensorBoard visualisation.
 
 Helpers for the panel loggers: orthogonal mid-planes on the 4 nm grid
-(bilinear upsample when a plane is coarser), 2-D resize, one-slice
+(nearest upsample when a plane is coarser), 2-D resize, one-slice
 depth extraction, per-image min-max normalisation, an HSV colour LUT,
 and integer-label to pastel-RGB mapping.
 """
@@ -40,10 +40,10 @@ def _orthogonal_midplanes(
     """Central xy, xz, and yz planes of a ``[B, C, D, H, W]`` volume.
 
     ``fine_size`` is the 4 nm grid ``(D, H, W)`` (the network field of view).
-    Each mid-plane is bilinear-upsampled onto that grid when its native
-    sampling is coarser, so a 40 nm section axis is drawn at 4 nm pixel
-    spacing instead of as a short strip.  A plane that is already on the
-    4 nm grid is returned unchanged.
+    Each mid-plane is nearest-upsampled onto that grid when its native
+    sampling is coarser, so a 40 nm section stays a constant block at 4 nm
+    pixel spacing instead of a short strip or a blended ramp.  A plane that
+    is already on the 4 nm grid is returned unchanged.
 
     Keys are ``xy`` (fixed z), ``xz`` (fixed y), and ``yz`` (fixed x).
     """
@@ -62,7 +62,10 @@ def _orthogonal_midplanes(
         "xz": (vol[:, :, :, height // 2, :], (fine_d, fine_w)),
         "yz": (vol[:, :, :, :, width // 2], (fine_d, fine_h)),
     }
-    return {name: _resize_2d(plane.contiguous(), size) for name, (plane, size) in planes.items()}
+    return {
+        name: _resize_2d(plane.contiguous(), size, mode="nearest")
+        for name, (plane, size) in planes.items()
+    }
 
 
 def _to_2d(t: torch.Tensor, frac: Optional[torch.Tensor] = None) -> torch.Tensor:
