@@ -11,7 +11,10 @@ task-namespaced tag ``{stage}/{mode}/{task}/...``:
   plane is drawn::
 
       {stage}/automatic/{ssl,sft}/true/image/{xy,xz,yz}    source (degraded on ssl)
-      {stage}/automatic/{ssl,sft}/pred/image/{xy,xz,yz}    raw-head small-voxel recon
+      {stage}/automatic/{ssl,sft}/pred/recon/{xy,xz,yz}  raw head on the degraded latent
+      {stage}/automatic/{ssl,sft}/pred/Euler/{xy,xz,yz} raw head after Euler
+                                                     integration of proj_out
+                                                     (logged when weight_dif > 0)
       {stage}/automatic/{ssl,sft}/pred/wan_decoder/{xy,xz,yz}
                                                      DiT latent through the frozen
                                                      preserved original_conv_out
@@ -171,6 +174,22 @@ class Joint3DImageLogger(ImageLogger):
                 if all(p is not None for p in wan_parts):
                     wan_rgb = torch.cat(wan_parts, dim=0).float()
 
+            # pred/Euler: integrate proj_out from the degraded latent, then
+            # the same task head. pred/recon (``head`` above) stays the
+            # degraded-latent readout. Both run on every rank.
+            few_raw = None
+            crit_cfg = getattr(pl_module, "criterion", None)
+            few_fn = getattr(getattr(pl_module, "model", None), "few_step_reconstruct", None)
+            rflow_w = float(getattr(crit_cfg, "weight_dif", 0.0) or 0.0)
+            diffusion_steps = int(getattr(crit_cfg, "diffusion_steps", 4) or 4)
+            if callable(few_fn) and rflow_w > 0 and diffusion_steps > 0:
+                few_parts = [
+                    few_fn(images[i:i + 1], steps=diffusion_steps) for i in range(n)
+                ]
+                few_head = torch.cat(few_parts, dim=0).float()
+                raw_slice = getattr(crit_cfg, "raw_slice", None)
+                few_raw = few_head[:, raw_slice] if raw_slice is not None else few_head[:, -1:]
+
         if tb is None:  # no image logger: forward done, nothing to write
             return
 
@@ -219,7 +238,11 @@ class Joint3DImageLogger(ImageLogger):
         # Orthogonal mid-planes: xy (fixed z), xz (fixed y), yz (fixed x).
         _log_ortho_planes(tb, ctx, epoch, "true/image", images[:n], fine_size)
         raw = head[:, crit.raw_slice][:n]               # [n,1,D,H,W] linear
-        _log_ortho_planes(tb, ctx, epoch, "pred/image", raw, fine_size)
+        _log_ortho_planes(tb, ctx, epoch, "pred/recon", raw, fine_size)
+        if few_raw is not None:
+            _log_ortho_planes(
+                tb, ctx, epoch, "pred/Euler", few_raw[:n], fine_size,
+            )
         # Wan-decoder diagnostic (frozen ``original_conv_out``).
         # RGB [n,3,D,H,W] ~[-1,1]; each plane is collapsed to grayscale.
         if wan_rgb is not None:

@@ -23,11 +23,13 @@ All scalars live under ``{stage}/{mode}/...`` where ``stage`` is
 supported mode today — structured so ``"prompted"`` can slot in later)::
 
     {stage}/{mode}/loss                         # global weighted total
-    {stage}/{mode}/loss/{aff,sem,raw,recon}    # terms the loss actually emits
+    {stage}/{mode}/loss/{aff,sem,raw,recon,rflow}  # terms the loss actually emits
     {stage}/{mode}/sem/metric/{name}            # foreground (sem) metrics
     {stage}/{mode}/ins/metric/{name}            # instance (MWS) metrics
 
-Zero-weight terms are absent. The joint pretrain logs ``loss/recon``.
+Zero-weight terms are absent. The joint pretrain logs ``loss/recon`` and
+``loss/rflow`` (rectified-flow velocity on ``proj_out``, weight 1 next to
+the reconstruction L1).
 Affinity ``ImageLogger`` image tags share this ``{stage}/{mode}`` prefix.
 ``Joint3DImageLogger`` adds an ``{ssl,sft}`` segment and logs the
 diagnostic Wan ``conv_out`` as ``pred/wan_decoder``.
@@ -276,6 +278,20 @@ class BaseCircuitModule(pl.LightningModule):
             return rearrange(images, self._EXPAND_PATTERN)
         return images
 
+    def _combine_rflow(
+        self,
+        losses: Dict[str, torch.Tensor],
+        images: torch.Tensor,
+        batch: Dict[str, torch.Tensor],
+        prompts: Any,
+    ) -> Dict[str, torch.Tensor]:
+        """Hook for a rectified-flow term beside the task-head loss.
+
+        The base recipe has no flow loss. Joint modules add ``loss/rflow``
+        here so the one-step head and the velocity MSE share one backward.
+        """
+        return losses
+
     # ------------------------------------------------------------------
     # Training step
     # ------------------------------------------------------------------
@@ -294,6 +310,7 @@ class BaseCircuitModule(pl.LightningModule):
         prompts = batch.get("prompt")
         head = self.model(images, prompts=prompts) if prompts is not None else self.model(images)
         losses = self.criterion(head, targets)
+        losses = self._combine_rflow(losses, images, batch, prompts)
         total_loss = losses["loss"]
 
         # Finite-loss guard.  ``total_loss.isnan().any() or .isinf().any()``
@@ -374,6 +391,7 @@ class BaseCircuitModule(pl.LightningModule):
                 else self.model(images)
             )
             losses = self.criterion(head, targets)
+            losses = self._combine_rflow(losses, images, batch, prompts)
 
             # Finite-loss guard.  Unlike ``training_step`` (cadenced, since a
             # skipped backward there just no-ops that step), a NaN/Inf batch

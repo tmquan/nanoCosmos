@@ -939,19 +939,15 @@ class _BaseCosmos25Wrapper(nn.Module):
         features, target_size = self._encode_and_extract(x)
         return self.decoder_adapter.wan_reconstruct(features, target_size=target_size)
 
-    def _encode_and_extract(
-        self, x: torch.Tensor, prompts: Any = None,
+    def _pixels_to_latent(
+        self, x: torch.Tensor,
     ) -> tuple[torch.Tensor, tuple[int, int, int]]:
-        """Shared head of :meth:`forward` and :meth:`wan_decoder_output`.
+        """RGB-adapt, pad, and VAE-encode a ``[B, C, D, H, W]`` volume.
 
-        Adapts to RGB, pads to compression multiples, encodes to the
-        VAE latent, runs the DiT to extract per-layer features, and
-        casts back to the input dtype.  Returns the projected feature
-        map plus the original ``(D, H, W)`` so the decoder side can
-        crop / interpolate back.
-
-        ``prompts`` is forwarded to :meth:`_extract_features` for Cosmos 3
-        text conditioning (ignored by null-text wrappers).
+        ``x`` is in the dataset range ``[0, 1]``. When ``vae_input_pm1`` is
+        set this scales to ``[-1, 1]`` before the encoder, matching
+        :meth:`forward`. Returns the latent and the original ``(D, H, W)``
+        (before supersample or pad) so the decoder can land on the input grid.
         """
         original_dtype = x.dtype
         # Capture the ORIGINAL spatial size before any supersample so the
@@ -990,10 +986,26 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         compute_dtype = self._dtype if self._backbone_loaded else original_dtype
         latent = self._encode_to_latent(rgb.to(dtype=compute_dtype))
+        return latent, (D_in, H_in, W_in)
 
+    def _encode_and_extract(
+        self, x: torch.Tensor, prompts: Any = None,
+    ) -> tuple[torch.Tensor, tuple[int, int, int]]:
+        """Shared head of :meth:`forward` and :meth:`wan_decoder_output`.
+
+        Encodes to the VAE latent, runs the DiT to extract per-layer features,
+        and casts back to the input dtype.  Returns the projected feature
+        map plus the original ``(D, H, W)`` so the decoder side can
+        crop / interpolate back.
+
+        ``prompts`` is forwarded to :meth:`_extract_features` for Cosmos 3
+        text conditioning (ignored by null-text wrappers).
+        """
+        original_dtype = x.dtype
+        latent, spatial = self._pixels_to_latent(x)
         features = self._extract_features(latent, prompts=prompts)
         features = features.to(dtype=original_dtype)
-        return features, (D_in, H_in, W_in)
+        return features, spatial
 
     # ------------------------------------------------------------------
     # Freeze / unfreeze

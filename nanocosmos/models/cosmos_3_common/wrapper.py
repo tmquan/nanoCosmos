@@ -43,8 +43,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.checkpoint
 
+from nanocosmos.losses.rflow import euler_integrate, interpolate_rectified_flow
 from nanocosmos.models.cosmos_3_common.wrapper_base import _BaseCosmos25Wrapper
 
 logger = logging.getLogger(__name__)
@@ -521,10 +523,10 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         ``[hidden, p, p, c]`` and the mean over dims ``(p, p)`` yields the
         ``[hidden, c]`` unit-patch weight (bias is ``hidden``-dim, unchanged).
         ``proj_out`` is the mirror (``[p*p*c, hidden] -> [c, hidden]``; its
-        ``[p*p*c]`` bias -> ``[c]``); note its output is *not* used by the
-        feature path (we hook intermediate blocks), but it must stay
-        shape-consistent so the model's (ignored) prediction tail does not
-        crash.
+        ``[p*p*c]`` bias -> ``[c]``). The one-step task head does not read
+        it (hooks take intermediate blocks). The rectified-flow loss does:
+        ``proj_out`` is the vision velocity, so the rebuilt layer has to
+        stay shape-consistent with the latent.
 
         Finally ``register_to_config(latent_patch_size=1, patch_latent_dim=48)``
         makes ``_patchify_and_pack_latents`` / ``_unpatchify_and_unpack_latents``
@@ -688,13 +690,20 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         latent: torch.Tensor,
         timestep: torch.Tensor,
         prompt: str | None = None,
-    ) -> None:
+        return_velocity: bool = False,
+    ) -> Optional[torch.Tensor]:
         """Drive the omni transformer's diffusion (video) tower over ``latent``.
 
         Features are captured by the persistent block hooks (see
-        :meth:`_register_persistent_hooks` below), so this only has to
-        make ``self.dit`` *run* a single denoising-step forward over one
-        video latent with optional metadata text + null image / audio conditioning.
+        :meth:`_register_persistent_hooks` below). The one-step task head
+        uses those hooks and ignores the return value. Rectified flow sets
+        ``return_velocity`` so ``proj_out``'s unpatchified vision velocity
+        (``[1, C, D, H, W]``) is returned instead.
+
+        ``timestep`` is the value the pipeline would pass in (Cosmos
+        multiplies it by ``config.timestep_scale``, 0.001, before the
+        sinusoidal embed). A unit flow time ``t`` in ``(0, 1)`` is therefore
+        ``t / timestep_scale``.
 
         ``Cosmos3OmniTransformer.forward`` consumes a *packed, unbatched*
         joint token stream and explicit index/position bookkeeping.  We
@@ -761,7 +770,7 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
         # natively bf16 so the outer autocast is redundant anyway.
         with torch.autocast(device_type=device.type, enabled=False), \
                 self._dit_forward_without_ckpt_when_eval():
-            self.dit(
+            out = self.dit(
                 input_ids=input_ids,
                 text_indexes=text_indexes,
                 position_ids=position_ids,
@@ -774,6 +783,15 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
                 vision_timesteps=vision_timesteps,
                 vision_noisy_frame_indexes=vision_noisy_frame_indexes,
             )
+        if not return_velocity:
+            return None
+        sample = out.sample if hasattr(out, "sample") else out[0]
+        if not sample:
+            raise RuntimeError("Cosmos3 DiT returned no vision velocity from proj_out.")
+        velocity = sample[0]
+        if velocity.dim() == 4:
+            velocity = velocity.unsqueeze(0)
+        return velocity
 
     def _build_position_ids(
         self,
@@ -1024,6 +1042,149 @@ class Cosmos3OmniWrapper(_BaseCosmos25Wrapper):
                 features = features.to(head_param.dtype)
             return self.decoder_adapter(
                 features, target_size=target_size, image=x,
+            )
+
+    # ------------------------------------------------------------------
+    # Rectified flow on proj_out
+    # ------------------------------------------------------------------
+
+    def _flow_timestep_scale(self) -> float:
+        """Cosmos multiplies the pipeline timestep by this before the embed."""
+        scale = getattr(getattr(self.dit, "config", None), "timestep_scale", 0.001)
+        scale = float(scale or 0.001)
+        if scale <= 0:
+            raise ValueError(f"timestep_scale must be positive, got {scale}.")
+        return scale
+
+    def _as_volume(self, x: torch.Tensor) -> torch.Tensor:
+        """``[B, D, H, W]`` -> ``[B, 1, D, H, W]``."""
+        if x.dim() == 4:
+            return x.unsqueeze(1)
+        return x
+
+    def _match_clean_grid(self, degraded: torch.Tensor, clean: torch.Tensor) -> torch.Tensor:
+        """Put ``clean`` on ``degraded``'s spatial grid when the target is coarser."""
+        clean = self._as_volume(clean)
+        if clean.shape[-3:] == degraded.shape[-3:]:
+            return clean
+        return F.interpolate(
+            clean.float(), size=degraded.shape[-3:],
+            mode="trilinear", align_corners=False,
+        ).to(dtype=degraded.dtype)
+
+    def predict_velocity(
+        self,
+        latent: torch.Tensor,
+        t_unit: torch.Tensor | float,
+        prompts: Any = None,
+    ) -> torch.Tensor:
+        """``proj_out`` velocity at unit time ``t_unit`` in ``(0, 1]``.
+
+        ``latent`` is ``[B, C, D, H, W]``. The value passed into the
+        transformer is ``t_unit / timestep_scale`` so the sinusoidal embed
+        sees ``t_unit``, matching the Cosmos pipeline.
+        """
+        scale = self._flow_timestep_scale()
+        batch = latent.shape[0]
+        if not torch.is_tensor(t_unit):
+            t_unit = torch.full((batch,), float(t_unit), device=latent.device)
+        else:
+            t_unit = t_unit.to(device=latent.device).reshape(-1)
+            if t_unit.numel() == 1 and batch > 1:
+                t_unit = t_unit.expand(batch)
+        preds: List[torch.Tensor] = []
+        for b in range(batch):
+            prompt_b = None
+            if prompts is not None:
+                try:
+                    prompt_b = prompts[b]
+                except Exception:  # noqa: BLE001
+                    prompt_b = prompts
+            model_t = torch.tensor(
+                [float(t_unit[b].item()) / scale],
+                device=latent.device, dtype=torch.float32,
+            )
+            pred = self._run_dit_forward(
+                latent[b:b + 1], model_t, prompt=prompt_b, return_velocity=True,
+            )
+            if pred is None:
+                raise RuntimeError("velocity forward returned None.")
+            if pred.shape[-3:] != latent.shape[-3:]:
+                pred = pred[
+                    :, :,
+                    :latent.shape[-3], :latent.shape[-2], :latent.shape[-1],
+                ]
+            preds.append(pred)
+        return torch.cat(preds, dim=0)
+
+    def rectified_flow_loss(
+        self,
+        degraded: torch.Tensor,
+        clean: torch.Tensor,
+        prompts: Any = None,
+    ) -> torch.Tensor:
+        """MSE of ``proj_out`` against the straight-path velocity.
+
+        ``degraded`` and ``clean`` are dataset-range ``[0, 1]`` volumes, the
+        same convention as :meth:`forward`. ``x1`` is the degraded latent and
+        ``x0`` is the clean latent (a coarser clean volume is trilinearly
+        resampled onto the degraded grid first). Both encodes are stopped so
+        the loss regularises the DiT, not the frozen VAE. One ``t`` per sample
+        is drawn uniformly from ``(0.02, 0.98)``.
+        """
+        degraded = self._as_volume(degraded)
+        clean = self._match_clean_grid(degraded, clean)
+        with torch.no_grad():
+            x1, _ = self._pixels_to_latent(degraded)
+            x0, _ = self._pixels_to_latent(clean)
+        latent_dtype = x1.dtype
+        x0 = x0.detach().float()
+        x1 = x1.detach().float()
+        if x0.shape != x1.shape:
+            raise RuntimeError(
+                f"flow endpoints differ: clean {tuple(x0.shape)} vs "
+                f"degraded {tuple(x1.shape)}."
+            )
+        t = torch.empty(x0.shape[0], device=x0.device).uniform_(0.02, 0.98)
+        x_t, velocity = interpolate_rectified_flow(x0, x1, t)
+        pred = self.predict_velocity(
+            x_t.to(dtype=latent_dtype), t, prompts=prompts,
+        )
+        return F.mse_loss(pred.float(), velocity)
+
+    @torch.no_grad()
+    def few_step_reconstruct(
+        self,
+        images: torch.Tensor,
+        prompts: Any = None,
+        steps: int = 4,
+    ) -> torch.Tensor:
+        """Task head on a latent walked from the degraded endpoint toward clean.
+
+        Euler integrates ``proj_out`` from ``t = 1`` to ``t = 0`` in ``steps``
+        equal increments, then runs the same feature hooks and task head as
+        the one-step forward. The result is a comparison readout, not a loss.
+        """
+        images = self._as_volume(images)
+        with torch.autocast(device_type=images.device.type, enabled=False):
+            x1_enc, spatial = self._pixels_to_latent(images)
+            enc_dtype = x1_enc.dtype
+            x1 = x1_enc.float()
+
+            def _velocity(state: torch.Tensor, t_unit: float) -> torch.Tensor:
+                return self.predict_velocity(
+                    state.to(dtype=enc_dtype), t_unit, prompts=prompts,
+                ).float()
+
+            refined = euler_integrate(x1, _velocity, steps)
+            features = self._extract_features(
+                refined.to(dtype=enc_dtype), prompts=prompts,
+            )
+            head_param = next(self.decoder_adapter.head.parameters(), None)
+            if head_param is not None and features.dtype != head_param.dtype:
+                features = features.to(head_param.dtype)
+            return self.decoder_adapter(
+                features, target_size=spatial, image=images,
             )
 
     def _install_time_embedder_dtype_guard(self) -> None:

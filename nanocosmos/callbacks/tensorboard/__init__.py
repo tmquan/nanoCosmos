@@ -18,7 +18,8 @@ when no relative depth is passed): ``true/image``, ``true/label``,
 ``pred/label/{pre,mul}``, ``aff/{true,pred}/{offset}``.
 
 :class:`Joint3DImageLogger` logs the EM source (``true/image``), the ssl
-recon target (``true/target``), the raw-head prediction (``pred/image``),
+recon target (``true/target``), the task-head reconstruction
+(``pred/recon``), the Euler-integrated reconstruction (``pred/Euler``),
 and the Wan-decoder diagnostic (``pred/wan_decoder``) as orthogonal
 mid-planes ``xy`` (mid-z), ``xz`` (mid-y), and ``yz`` (mid-x) on the 4 nm
 source grid.  A coarser plane is nearest-upsampled onto that grid

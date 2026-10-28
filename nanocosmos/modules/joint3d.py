@@ -18,10 +18,13 @@ differ from the plain affinity recipe, all task-routing:
   the native label grid before the foreground / Mutex-Watershed metrics; on
   ``ssl`` (no labels) segmentation metrics are skipped.
 
-``training_step`` / ``validation_step`` / the epoch-end reduce are inherited
-verbatim: they call ``_prepare_targets`` -> ``self.model(images)`` ->
+``training_step`` / ``validation_step`` / the epoch-end reduce are inherited.
+They call ``_prepare_targets`` -> ``self.model(images)`` ->
 ``self.criterion(head, targets)``, and :class:`Joint3DReconSegLoss` does the
 branch routing + small-voxel→native pooling internally.
+:meth:`_combine_rflow` then adds the rectified-flow MSE on ``proj_out``
+(``loss/rflow``) at ``weight_dif`` next to the reconstruction L1, scaled
+by the same branch weight.
 
 Batches must be **task-homogeneous** (one branch per step) -- the joint
 datamodule's round-robin sampler guarantees this.
@@ -107,6 +110,36 @@ class Joint3DModule(Cosmos3Nano3DModule):
 
         targets["_cached_targets"] = self.criterion.build_targets(labels, targets)
         return targets
+
+    def _combine_rflow(
+        self,
+        losses: Dict[str, torch.Tensor],
+        images: torch.Tensor,
+        batch: Dict[str, torch.Tensor],
+        prompts: Any,
+    ) -> Dict[str, torch.Tensor]:
+        """Add ``weight_dif * MSE(proj_out, v)`` beside the reconstruction L1.
+
+        The one-step head has already run on the degraded volume at timestep
+        0. This second forward trains the velocity that few-step integration
+        follows. ``recon_image`` stays in the dataset ``[0, 1]`` range; the
+        wrapper applies the VAE scale. A missing clean target skips the term
+        (an sft batch with no ``recon_image``).
+        """
+        weight = float(getattr(self.criterion, "weight_dif", 0.0) or 0.0)
+        clean = None if weight <= 0 else batch.get("recon_image")
+        flow_fn = getattr(self.model, "rectified_flow_loss", None)
+        if weight <= 0 or clean is None or not callable(flow_fn):
+            return losses
+        flow = flow_fn(images, clean, prompts=prompts)
+        losses["loss/rflow"] = flow
+        branch = (
+            self.criterion.weight_ssl
+            if self._batch_task(batch) == SSL
+            else self.criterion.weight_sft
+        )
+        losses["loss"] = losses["loss"] + branch * weight * flow
+        return losses
 
     # ------------------------------------------------------------------
     # Eval metrics (pool small-voxel head -> native label grid for sft)

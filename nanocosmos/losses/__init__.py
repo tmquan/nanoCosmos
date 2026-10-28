@@ -16,8 +16,11 @@ The public loss surface is intentionally small:
   loss (tasks ``ssl`` and ``sft``) on that same head.  Training configs
   use 30 affinity offsets, so the head is 32 channels (affinities + sem
   + raw).  Pretrain (``configs/nanocosmos-4B-pretrain.yaml``) sets
-  ``recon_loss="l1"``, ``weight_rec=1``, ``weight_ssl=5``,
-  ``weight_seg=0``, ``weight_sft=0``.  :data:`HEAD_CHANNELS` remains the
+  ``recon_loss="l1"``, ``weight_rec=1``, ``weight_dif=1``,
+  ``weight_ssl=5``, ``weight_seg=0``, ``weight_sft=0``.
+  ``weight_dif`` scales the rectified-flow MSE on ``proj_out`` next to
+  the L1; the task head stays the one-step readout.
+  :data:`HEAD_CHANNELS` remains the
   default-offset width (14 affinities + sem + raw = 16).
 * :mod:`nanocosmos.losses._common` owns the canonical channel layout
   (:data:`AFFINITY_OFFSETS`, :data:`AFF_SLICE`, :data:`SEM_SLICE`,

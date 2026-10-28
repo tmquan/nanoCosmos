@@ -550,11 +550,17 @@ optimizer:
 # head stays 32 channels (30 offsets + sem + raw), identical to
 # nanocosmos-4B.yaml -- required if this checkpoint is later continued into
 # the joint recipe.  ``weight_raw`` of the inner loss is forced to 0; the EM
-# term is owned by ``weight_rec``.
+# term is owned by ``weight_rec``.  ``weight_dif: 1`` adds the
+# rectified-flow MSE on ``proj_out`` at the same scale as that L1 (both
+# then multiplied by ``weight_ssl``).  ``diffusion_steps`` is only the Euler
+# integral logged as ``pred/Euler``; training still draws one ``t``.
+# ``pred/recon`` is the task head on the degraded latent.
 loss:
   type: joint3d
   recon_loss: l1
   weight_rec: 1.0
+  weight_dif: 1.0
+  diffusion_steps: 4
   weight_seg: 0.0          # no segmentation in this pretrain
   # SSL is the only branch drawn.  weight_ssl scales that recon step.
   weight_ssl: 5.0

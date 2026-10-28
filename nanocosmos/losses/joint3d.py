@@ -113,6 +113,14 @@ class Joint3DReconSegLoss(nn.Module):
         weight_ssl / weight_sft: Per-branch multipliers on that branch's
             *total* (up/down-weight a whole branch independently of how often
             its batches are drawn).
+        weight_dif: Weight of the rectified-flow velocity MSE relative to
+            the reconstruction L1, before the branch multiplier. ``1`` adds
+            the flow term at the same scale as ``weight_rec * L1``. The MSE
+            itself is computed by the wrapper (``proj_out``); this class only
+            stores the weight so every rank agrees on the logged key.
+        diffusion_steps: Euler steps for the ``pred/Euler`` reconstruction panel.
+            Training still draws one random ``t``; this is the comparison
+            integral only.
         recon_image_key: Batch key holding the clean EM reconstruction target
             (default ``"recon_image"``).  On ``ssl`` it is required and lives
             on the coarser of the native voxel size and the 4 nm grid.  On
@@ -138,6 +146,8 @@ class Joint3DReconSegLoss(nn.Module):
         weight_seg: float = 1.0,
         weight_ssl: float = 1.0,
         weight_sft: float = 1.0,
+        weight_dif: float = 1.0,
+        diffusion_steps: int = 4,
         recon_image_key: str = "recon_image",
         task_key: str = "task",
     ) -> None:
@@ -158,6 +168,8 @@ class Joint3DReconSegLoss(nn.Module):
         self.weight_seg = float(weight_seg)
         self.weight_ssl = float(weight_ssl)
         self.weight_sft = float(weight_sft)
+        self.weight_dif = float(weight_dif)
+        self.diffusion_steps = int(diffusion_steps)
 
         self.recon_image_key = str(recon_image_key)
         self.task_key = str(task_key)
@@ -202,6 +214,8 @@ class Joint3DReconSegLoss(nn.Module):
         keys: List[str] = ["loss"]
         if self.weight_rec > 0:
             keys.append("loss/recon")
+        if self.weight_dif > 0:
+            keys.append("loss/rflow")
         if self.weight_seg > 0 and self.seg.weight_aff > 0:
             keys.append("loss/aff")
         if self.weight_seg > 0 and self.seg.weight_sem > 0:
@@ -392,7 +406,8 @@ class Joint3DReconSegLoss(nn.Module):
             f"{self.__class__.__name__}(seg={self.seg!r}, "
             f"recon_loss={self.recon_loss}, weight_rec={self.weight_rec}, "
             f"weight_seg={self.weight_seg}, weight_ssl={self.weight_ssl}, "
-            f"weight_sft={self.weight_sft})"
+            f"weight_sft={self.weight_sft}, weight_dif={self.weight_dif}, "
+            f"diffusion_steps={self.diffusion_steps})"
         )
 
 

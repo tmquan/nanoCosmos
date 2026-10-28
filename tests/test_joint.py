@@ -143,7 +143,11 @@ def test_canonical_loss_keys_stable():
     loss = Joint3DReconSegLoss()
     keys = loss.canonical_loss_keys()
     assert keys[0] == "loss"
-    assert set(keys) == {"loss", "loss/recon", "loss/aff", "loss/sem"}
+    assert set(keys) == {
+        "loss", "loss/recon", "loss/aff", "loss/sem", "loss/rflow",
+    }
+    quiet = Joint3DReconSegLoss(weight_dif=0.0)
+    assert "loss/rflow" not in quiet.canonical_loss_keys()
 
 
 # ---------------------------------------------------------------------------
