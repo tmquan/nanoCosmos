@@ -1,4 +1,8 @@
-# nanocosmos -- pinned runtime dependencies (lockfile).
+# nanocosmos -- Vera Rubin lockfile (sm_107).
+#
+# Install this on Rubin. Blackwell (B300 / sm_103) uses
+# requirements_blackwell.txt. The shared package pins match that file;
+# this one uses the PyTorch 2.15 CUDA 13.4 release wheel.
 #
 # Role of this file
 # -----------------
@@ -21,13 +25,14 @@
 # versions on top of that.
 
 # Core deep learning
-# B300 (sm_103) / driver 595.71.05 / CUDA 13.4.  Newest matched cu134
-# nightly (2026-10-27): torch 2.16.0.dev and torchvision 0.30.0.dev.
-# cuDNN and NCCL come from this torch wheel; do not bump them
-# independently of the pin.
---extra-index-url https://download.pytorch.org/whl/nightly/cu134
-torch==2.16.0.dev20261027+cu134
-torchvision==0.30.0.dev20261027+cu134
+# PyTorch 2.15 CUDA 13.4 release wheels. The 2.15 notes say these wheels
+# add experimental support for NVIDIA Rubin (sm_107). Install from the
+# stable cu134 index, not the nightly: the nightly SASS list stops at
+# sm_100 / sm_120. torchvision 0.29.2 is the build published next to
+# torch 2.15.0+cu134. Do not export TORCH_DISABLE_NATIVE_JIT=1.
+--extra-index-url https://download.pytorch.org/whl/cu134
+torch==2.15.0+cu134
+torchvision==0.29.2+cu134
 pytorch-lightning==2.6.6
 # torchmetrics is not imported directly by nanocosmos, but it is a hard
 # transitive dependency of pytorch-lightning; pinned here so the frozen

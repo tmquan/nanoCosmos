@@ -1,0 +1,121 @@
+# nanocosmos -- Vera Rubin lockfile (sm_107).
+#
+# Install this on Rubin. Blackwell (B300 / sm_103) uses
+# requirements_blackwell.txt. The shared package pins match that file;
+# this one uses the PyTorch 2.15 CUDA 13.4 release wheel.
+#
+# Role of this file
+# -----------------
+# This is the *frozen* version of every package needed to reproduce the
+# CUDA-13.4 / Python-3.13 development environment.  It bundles together
+# the core runtime, the Cosmos backbone, the GPU (RAPIDS) extras, the
+# download-script helpers, the optional visualizer, AND the dev/test
+# tooling -- in other words, every ``[project.optional-dependencies]``
+# group from ``pyproject.toml`` rolled into one installable manifest.
+#
+# When to use which file
+# ----------------------
+#   * ``pip install -r requirements.txt``      -- bit-for-bit reproduction
+#                                                of the dev environment.
+#   * ``pip install -e ".[cosmos,dev]"``       -- permissive lower bounds,
+#                                                pulled from pyproject.toml.
+#
+# Keep ``pyproject.toml`` as the single source of truth for the package's
+# logical dependency *groups*; this file just freezes specific resolved
+# versions on top of that.
+
+# Core deep learning
+# PyTorch 2.15 CUDA 13.4 release wheels. The 2.15 notes say these wheels
+# add experimental support for NVIDIA Rubin (sm_107). Install from the
+# stable cu134 index, not the nightly: the nightly SASS list stops at
+# sm_100 / sm_120. torchvision 0.29.2 is the build published next to
+# torch 2.15.0+cu134. Do not export TORCH_DISABLE_NATIVE_JIT=1.
+--extra-index-url https://download.pytorch.org/whl/cu134
+torch==2.15.0+cu134
+torchvision==0.29.2+cu134
+pytorch-lightning==2.6.6
+# torchmetrics is not imported directly by nanocosmos, but it is a hard
+# transitive dependency of pytorch-lightning; pinned here so the frozen
+# lockfile reproduces the exact installed version.
+torchmetrics==1.9.0
+monai==1.6.1
+einops==0.8.2
+
+# GPU acceleration (CUDA 13 wheels on NVIDIA's index).
+# Enables:
+#   - cupy-backed Mutex Watershed agglomeration (``mws_cp``) plus DLPack
+#     zero-copy torch <-> cupy interop in
+#     ``nanocosmos.inference.mutex_watershed``.
+#   - cupy / cucim-backed EDT / Gaussian / connected components in
+#     ``nanocosmos.transforms`` (optional; scipy / skimage CPU fallback).
+# cupy-cuda13x works across the whole CUDA 13.x series (via cuda-pathfinder),
+# so the same wheel is valid on the 13.4 runtime.
+#
+# NOTE: install with `pip`, not `uv pip`.  cupy-cuda13x pins
+# cuda-pathfinder which uv treats as a pre-release request and refuses by
+# default.  If you must use uv, pass
+# `--prerelease=allow --index-strategy unsafe-best-match`.
+--extra-index-url https://pypi.nvidia.com
+cupy-cuda13x==14.2.0
+
+# Configuration
+hydra-core==1.3.8
+# hydra-core 1.3.8 requires omegaconf<2.4.
+omegaconf==2.3.1
+
+# Data formats
+h5py==3.16.0
+tifffile==2026.10.15
+pynrrd==1.1.3
+nibabel==5.4.2
+pillow==13.0.0
+cloud-volume==12.15.2
+
+# Scientific computing
+numpy==2.5.4
+scipy==1.18.1
+scikit-learn==1.9.1
+scikit-image==0.26.0
+
+# Experiment tracking
+wandb==0.31.0
+tensorboard==2.21.0
+
+# Visualization
+matplotlib==3.11.2
+
+# Optional visualizer (``nanocosmos.visualizer``) -- FastAPI + WebGL QA
+# viewer, not on the training/inference path.
+fastapi==0.162.0
+uvicorn==0.54.0
+pydantic==2.14.1
+
+# Cosmos 3 backbones (Nano 16B, Edge 4B, Super 64B).
+#
+# diffusers 0.42.1 ships ``Cosmos3OmniTransformer`` and reads Cosmos3-Edge's
+# config flags (``hidden_act: relu2`` / ``qk_norm_for_text: false``), so the
+# released ``nvidia/Cosmos3-Edge`` checkpoint loads directly (see
+# nanocosmos/models/cosmos_3_edge/variants.py).  Changing diffusers /
+# transformers / safetensors can change how HF weights deserialize via
+# ``from_pretrained``; re-verify pretrained-weight loading after any bump.
+diffusers==0.42.1
+# Cosmos 3 is an omni model: the pipeline pulls a Qwen3-VL vision encoder +
+# Qwen2 tokenizer from transformers, so it is a hard dependency.
+# transformers and accelerate are NOT imported directly by the package; they
+# are pulled in transitively by diffusers.  Pinned to the resolved versions.
+transformers==5.21.0
+huggingface_hub==2.3.0
+safetensors==0.8.0
+accelerate==1.15.0
+
+# HTTP / networking
+charset-normalizer==3.5.2
+chardet==7.7.0
+
+# Utilities
+rich==15.0.0
+tqdm==4.70.1
+
+# Dev / testing
+pytest==9.1.1
+pytest-cov==7.1.0
