@@ -560,7 +560,7 @@ loss:
   recon_loss: l1
   weight_rec: 1.0
   weight_dif: 1.0
-  diffusion_steps: 4
+  diffusion_steps: 1
   weight_seg: 0.0          # no segmentation in this pretrain
   # SSL is the only branch drawn.  weight_ssl scales that recon step.
   weight_ssl: 5.0

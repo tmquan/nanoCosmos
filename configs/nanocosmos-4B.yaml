@@ -889,7 +889,7 @@ loss:
   recon_loss: l1
   weight_rec: 1.0
   weight_dif: 1.0
-  diffusion_steps: 4
+  diffusion_steps: 1
   weight_seg: 1.0
   # Per-branch multipliers (independent of draw frequency). The SSL recon
   # branch is weighted 5x the SFT seg branch (weight_ssl / weight_sft).

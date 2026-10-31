@@ -181,7 +181,7 @@ class Joint3DImageLogger(ImageLogger):
             crit_cfg = getattr(pl_module, "criterion", None)
             few_fn = getattr(getattr(pl_module, "model", None), "few_step_reconstruct", None)
             rflow_w = float(getattr(crit_cfg, "weight_dif", 0.0) or 0.0)
-            diffusion_steps = int(getattr(crit_cfg, "diffusion_steps", 4) or 4)
+            diffusion_steps = int(getattr(crit_cfg, "diffusion_steps", 1) or 1)
             if callable(few_fn) and rflow_w > 0 and diffusion_steps > 0:
                 few_parts = [
                     few_fn(images[i:i + 1], steps=diffusion_steps) for i in range(n)

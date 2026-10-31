@@ -218,6 +218,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Machine bootstrap notes (hostnames, lease ids). Not part of the package.
-SERVER.md

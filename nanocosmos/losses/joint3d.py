@@ -147,7 +147,7 @@ class Joint3DReconSegLoss(nn.Module):
         weight_ssl: float = 1.0,
         weight_sft: float = 1.0,
         weight_dif: float = 1.0,
-        diffusion_steps: int = 4,
+        diffusion_steps: int = 1,
         recon_image_key: str = "recon_image",
         task_key: str = "task",
     ) -> None:
