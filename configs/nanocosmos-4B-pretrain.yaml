@@ -532,7 +532,7 @@ model:
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: false  # non-causal z: avg(forward, z-flipped) encode and decoder body
+  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
 
 optimizer:
   lr: 0.0002
@@ -560,7 +560,7 @@ loss:
   recon_loss: l1
   weight_rec: 1.0
   weight_dif: 1.0
-  diffusion_steps: 1
+  diffusion_steps: 35
   weight_seg: 0.0          # no segmentation in this pretrain
   # SSL is the only branch drawn.  weight_ssl scales that recon step.
   weight_ssl: 5.0

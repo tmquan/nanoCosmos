@@ -161,7 +161,7 @@ def nic_rx():
     raise SystemExit(f"NIC {nic} not in /proc/net/dev")
 
 raw = subprocess.check_output(
-    ["find", "/scratch/EM", "-type", "f", "-printf", "%s\t%P\0"])
+    ["find", "/scratch/EM", "-type", "f", "-printf", "%s\\t%P\\0"])
 rows = []
 for rec in raw.split(b"\0"):
     if not rec:
