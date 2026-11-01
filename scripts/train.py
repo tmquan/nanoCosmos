@@ -154,6 +154,33 @@ def _prefer_bundled_cudnn() -> None:
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
+def _py314_hydra_help() -> None:
+    """Accept Hydra's lazy help object on Python 3.14.
+
+    argparse 3.14 rejects a help value that does not support ``in``
+    (``'%' not in help``). Hydra 1.3 defines ``LazyCompletionHelp``
+    inside ``get_args_parser`` with only ``__repr__``, so parser
+    construction raises ``ValueError: badly formed help string``.
+    """
+    if sys.version_info < (3, 14):
+        return
+    import argparse
+
+    original = argparse.ArgumentParser.add_argument
+
+    def add_argument(self, *args, **kwargs):
+        help_text = kwargs.get("help")
+        if (
+            help_text is not None
+            and help_text is not argparse.SUPPRESS
+            and not isinstance(help_text, str)
+        ):
+            kwargs["help"] = str(help_text)
+        return original(self, *args, **kwargs)
+
+    argparse.ArgumentParser.add_argument = add_argument
+
+
 if __name__ == "__main__":
     _prefer_bundled_cudnn()
 
@@ -1001,4 +1028,5 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    _py314_hydra_help()
     main()

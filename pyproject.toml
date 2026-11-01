@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "A modular PyTorch Lightning infrastructure for connectomics research."
 readme = "README.md"
 license = {text = "MIT"}
-# The runnable env is Python 3.13 / CUDA 13.4 / B300 sm_103.  The exact
-# pins, including the torch 2.16 cu134 nightly, live in requirements.txt.
-requires-python = ">=3.12"
+# The runnable env is Python 3.14 / CUDA 13.4.  The exact
+# pins, including torch 2.15.0+cu134 for Blackwell and Rubin, live in requirements.txt.
+requires-python = ">=3.14"
 # Core runtime dependencies.  These are the imports actually exercised
 # by ``import nanocosmos`` and by the standard training / inference path.
 # Optional features (Cosmos backbone, GPU acceleration, the JS

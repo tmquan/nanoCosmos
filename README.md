@@ -92,7 +92,7 @@ nanoCosmos/             repo root
 
 ## Install
 
-From the repo root. `requirements.txt` pins the stack (Python 3.13, CUDA 13.4, torch 2.16.0.dev20261027+cu134). `pip install -e . --no-deps` installs this package on that lockfile.
+From the repo root. `requirements.txt` pins the stack for Blackwell and Rubin (Python 3.14, CUDA 13.4, torch 2.15.0+cu134). `pip install -e . --no-deps` installs this package on that lockfile.
 
 ```bash
 pip install -r requirements.txt

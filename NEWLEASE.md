@@ -35,12 +35,12 @@ Skip it when those are already present.
 
 ## 2. Environment
 
-Python 3.13. Keep the cu134 nightly. Replacing it with the Cosmos Framework
-cu130 pin, or with a pip resolver that pulls `torch==2.11`, breaks sm_103.
+Python 3.14. Blackwell uses the same PyTorch 2.15 CUDA 13.4 release wheel
+as Rubin (`torch==2.15.0+cu134`). Leave `TORCH_DISABLE_NATIVE_JIT` unset.
 
 ```bash
 source "$HOME/anaconda3/etc/profile.d/conda.sh"
-conda create -n nanocosmos python=3.13 -y
+conda create -n nanocosmos python=3.14 -y
 conda activate nanocosmos
 pip install uv
 cd "$HOME/nanoCosmos"
@@ -48,7 +48,7 @@ uv pip install -r requirements.txt --prerelease=allow --index-strategy unsafe-be
 python -c 'import torch; print(torch.__version__, torch.cuda.get_device_capability())'
 ```
 
-The print must be `2.16.0.dev20261027+cu134` and capability `(10, 3)`.
+The print must be `2.15.0+cu134` and capability `(10, 3)`.
 `requirements.txt` also pins `diffusers==0.42.1`, which is the release that
 reads Edge `hidden_act: relu2` and `qk_norm_for_text: false`.
 
@@ -167,7 +167,7 @@ the process did not see the env's cuDNN plugins. Activate `nanocosmos`
 before launch, or:
 
 ```bash
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.13/site-packages/nvidia/cudnn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.14/site-packages/nvidia/cudnn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ```
 
 ## 5. Resume

@@ -1,13 +1,12 @@
-# nanocosmos -- Vera Rubin lockfile (sm_107).
+# nanocosmos -- CUDA 13.4 lockfile (Blackwell sm_103 and Rubin sm_107).
 #
-# Install this on Rubin. Blackwell (B300 / sm_103) uses
-# requirements_blackwell.txt. The shared package pins match that file;
-# this one uses the PyTorch 2.15 CUDA 13.4 release wheel.
+# Same pins as requirements.txt. Blackwell uses torch 2.15.0+cu134,
+# the same release wheel as Rubin.
 #
 # Role of this file
 # -----------------
 # This is the *frozen* version of every package needed to reproduce the
-# CUDA-13.4 / Python-3.13 development environment.  It bundles together
+# CUDA-13.4 / Python-3.14 development environment.  It bundles together
 # the core runtime, the Cosmos backbone, the GPU (RAPIDS) extras, the
 # download-script helpers, the optional visualizer, AND the dev/test
 # tooling -- in other words, every ``[project.optional-dependencies]``
@@ -25,11 +24,9 @@
 # versions on top of that.
 
 # Core deep learning
-# PyTorch 2.15 CUDA 13.4 release wheels. The 2.15 notes say these wheels
-# add experimental support for NVIDIA Rubin (sm_107). Install from the
-# stable cu134 index, not the nightly: the nightly SASS list stops at
-# sm_100 / sm_120. torchvision 0.29.2 is the build published next to
-# torch 2.15.0+cu134. Do not export TORCH_DISABLE_NATIVE_JIT=1.
+# PyTorch 2.15 CUDA 13.4 release wheels for Blackwell and Rubin.
+# torchvision 0.29.2 is the build published next to torch 2.15.0+cu134.
+# Leave TORCH_DISABLE_NATIVE_JIT unset.
 --extra-index-url https://download.pytorch.org/whl/cu134
 torch==2.15.0+cu134
 torchvision==0.29.2+cu134
