@@ -229,6 +229,37 @@ def test_degrade_without_downsample_keeps_depth():
     assert torch.equal(out["image"].float(), img)
 
 
+def test_degrade_loss_target_is_augmented_clean():
+    """Jitter and contrast are the target. Downsample, missing sections, and
+    noise are derived from that target and do not change it."""
+    t = RandResolutionDegraded(
+        prob=1.0, zf_range=(8.0, 8.0), jitter_prob=0.0, contrast_prob=1.0,
+        contrast_gamma=(2.0, 2.0), missing_prob=0.0, noise_prob=0.0,
+    )
+    t.set_random_state(0)
+    img = torch.linspace(0.1, 0.9, 32).view(1, 32, 1, 1).expand(1, 32, 8, 8).contiguous()
+    out = t({"image": img.clone()})
+    augmented = img.clamp(0.0, 1.0).pow(2.0)
+    assert torch.allclose(out["recon_image"].float(), augmented)
+    nearest = torch.nn.functional.interpolate(
+        augmented.unsqueeze(0), size=(4, 8, 8), mode="nearest",
+    ).squeeze(0)
+    assert torch.allclose(out["image"].float(), nearest)
+
+
+def test_degrade_noise_does_not_enter_target():
+    t = RandResolutionDegraded(
+        prob=1.0, downsample=False, jitter_prob=0.0, contrast_prob=0.0,
+        missing_prob=1.0, max_missing=2, noise_prob=1.0, noise_std=0.05,
+    )
+    t.set_random_state(0)
+    img = torch.rand(1, 32, 8, 8).clamp(0.2, 0.8)
+    out = t({"image": img.clone()})
+    assert torch.equal(out["recon_image"].float(), img)
+    assert out["image"].shape == img.shape
+    assert not torch.allclose(out["image"].float(), img)
+
+
 def test_degrade_passthrough_still_writes_target():
     t = RandResolutionDegraded(prob=0.0)
     t.set_random_state(0)

@@ -19,21 +19,22 @@ spatial size it is given.  In the joint pipeline that size is the
 :class:`~nanocosmos.transforms.fine_grid.ToFineGridd` nearest-upsamples
 ``image`` onto the 4 nm grid:
 
-* ``image``        -- the degraded volume.  With ``downsample`` it is shorter
-  in ``z`` (nearest-neighbour decimation).  The 4 nm upsample is the next
-  transform, not this one.
-* ``recon_image``  -- a pristine copy of the input (the L1 target), still at
-  the input resolution.
+* ``recon_image``  -- the augmented clean crop (the L1 target): per-section
+  jitter and gamma contrast, still at the input resolution.
+* ``image``        -- that same crop after degrade and input-only noise.
+  With ``downsample`` it is shorter in ``z`` (nearest-neighbour decimation).
+  The 4 nm upsample is the next transform, not this one.
 
-Degrade is three pieces.  The datamodule turns **downsample** on only for a
-4 nm crop; a coarser crop is already the measurement, so downsample is
-skipped and the other two pieces still run:
+The order after the read is:
 
-1. **Nearest ``z`` downsample** (4 nm only) -- ``d = round(D / zf)`` sections,
-   each a nearest sample of the fine stack, not an average.
-2. **Missing / duplicated sections** -- blank or replicate whole sections.
-3. **Voxel-value augmentation** -- per-section jitter, Gaussian noise, and
-   gamma contrast.
+1. **Augment clean** -- per-section jitter, then gamma contrast.  This
+   snapshot is the reconstruction target.
+2. **Nearest ``z`` downsample** (4 nm only) -- ``d = round(D / zf)`` sections
+   of the augmented clean, each a nearest sample, not an average.  The
+   datamodule turns this on only for a 4 nm crop.
+3. **Augment noise** -- missing / duplicated sections, then per-section
+   Gaussian noise.  These touch ``image`` only.  A coarser crop skips the
+   downsample and still gets this step, at its own depth.
 
 Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
@@ -59,14 +60,16 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
     Args:
         keys: Image key(s) to degrade.  Default ``("image",)``.
-        recon_key: Key under which the pristine small-voxel copy (the
-            reconstruction target) is stored.  Default ``"recon_image"``.
+        recon_key: Key under which the augmented clean crop (jitter and
+            contrast, the reconstruction target) is stored.  Default
+            ``"recon_image"``.
         zf_range: ``(min, max)`` factor on the input z size, used only when
             ``downsample`` is set.  ``d = round(D / zf)``.  On a 4 nm crop,
             ``(2, 10)`` spans 8 nm to 40 nm sections.  Sampled log-uniformly.
-        downsample: Nearest-downsample ``z`` before the other defects.  The
-            datamodule sets this only for a 4 nm crop.  Off: missing sections
-            and voxel augmentation still run, at the crop's own depth.
+        downsample: Nearest-downsample ``z`` of the augmented clean, before
+            missing sections and noise.  The datamodule sets this only for a
+            4 nm crop.  Off: those input defects still run, at the crop's
+            own depth.
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
             exists).
@@ -223,6 +226,14 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
             do = self.R.random() < self.prob and D > 1
             if do:
+                # Augment clean first.  Jitter and contrast are the values
+                # the loss compares to; degrade and noise are derived from
+                # this snapshot and do not write back into it.
+                if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
+                    clean = self._jitter_sections(clean)
+                if self.R.random() < self.contrast_prob:
+                    clean = self._section_contrast(clean)
+
                 coarse = clean
                 d_coarse = D
                 if self.downsample:
@@ -236,12 +247,8 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
                 if d_coarse > 1 and self.R.random() < self.missing_prob:
                     coarse = self._drop_sections(coarse)
-                if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
-                    coarse = self._jitter_sections(coarse)
                 if self.noise_std > 0 and self.R.random() < self.noise_prob:
                     coarse = self._section_noise(coarse)
-                if self.R.random() < self.contrast_prob:
-                    coarse = self._section_contrast(coarse)
 
                 degraded = coarse
                 if self.z_sections_key is not None:

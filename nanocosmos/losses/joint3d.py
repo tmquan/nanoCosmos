@@ -23,9 +23,10 @@ per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
 (8 nm) is one such rung.
 
 ``ssl``  -- self-supervised reconstruction.  The batched ``recon_image`` is
-    the native crop nearest-upsampled to 4 nm.  The L1 average-pools ``raw``
-    onto ``recon_native_size`` (each native voxel is the mean of the 4 nm
-    voxels in its bin) and compares it there.  A 4 nm crop skips the pool.
+    the augmented clean crop (jitter and contrast) nearest-upsampled to
+    4 nm.  The L1 average-pools ``raw`` onto ``recon_native_size`` (each
+    native voxel is the mean of the 4 nm voxels in its bin) and compares it
+    to those augmented-clean values.  A 4 nm crop skips the pool.
     No segmentation supervision.
 
 ``sft``  -- segmentation, gated by labels: any labeled rung.  The
@@ -299,8 +300,8 @@ class Joint3DReconSegLoss(nn.Module):
         The 4 nm ``raw`` channel is average-pooled onto the native crop, so
         each native voxel is the mean of the 4 nm voxels in its bin. A crop
         that is already 4 nm skips that pool. When ``native_size`` is set,
-        ``recon_image`` is the native crop nearest-upsampled to 4 nm and the
-        comparison target is read back off that cube.
+        ``recon_image`` is the augmented clean crop nearest-upsampled to 4 nm
+        and those values are read back off that cube.
         """
         target = _as_channeled(recon_image, head.dim()).to(torch.float32)
         raw = head[:, self.raw_slice]
