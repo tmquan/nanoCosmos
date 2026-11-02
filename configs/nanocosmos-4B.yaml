@@ -130,23 +130,22 @@ data:
   # length stays fixed regardless of how they are set.
   balance: volume
 
-  # ---- realistic large-voxel degradation for the SSL branch ----
-  # (nanocosmos.transforms.RandResolutionDegraded) -- the free
-  # large-voxel -> small-voxel pair.
+  # ---- SSL degradation.  A 4 nm crop is nearest-downsampled in z, then
+  # gets missing sections and the voxel augmentations.  A coarser crop skips
+  # the downsample and still gets missing sections and voxel augmentation.
+  # The next transform nearest-upsamples the result onto the 4 nm grid.
   degrade:
-    # Simulated section thickness zf = large_voxel_z / fine(4 nm).  Spans 8 nm (FIB)
-    # .. 40 nm (CREMI/MICrONS) sections, i.e. zf 2 .. 10, log-uniform.
+    # Section thickness on a 4 nm crop: zf 2..10 is 8..40 nm, log-uniform.
     zf_range: [2.0, 10.0]
-    jitter_prob: 0.5            # per-section in-plane misalignment (grid_sample)
-    max_jitter: 2.0             # +/- voxels
     missing_prob: 0.3           # missing / duplicated sections
     max_missing: 2
     missing_fill: zero
-    noise_prob: 0.3             # section-dependent gaussian noise (gentled)
+    jitter_prob: 0.5            # per-section in-plane misalignment
+    max_jitter: 2.0             # +/- voxels
+    noise_prob: 0.3             # section-dependent gaussian noise
     noise_std: 0.01
-    contrast_prob: 0.5          # section-dependent gamma jitter
+    contrast_prob: 0.5          # section-dependent gamma
     contrast_gamma: [0.8, 1.25]
-    up_mode: nearest            # physically-faithful blocky z step (see RandResolutionDegraded docstring)
 
   # ---- the resolution ladder, as two task branches; the multi-task sampler
   # yields task-homogeneous batches and interleaves them round-robin

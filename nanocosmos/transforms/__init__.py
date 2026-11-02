@@ -32,6 +32,7 @@ Public surface
 * :class:`RandMissingSliced`            -- CREMI-style missing z-sections.
 * :class:`RandResolutionDegraded`       -- SSL large-voxel degradation.
 * :class:`ToFineGridd`                  -- resample a native patch to the fine grid.
+* :class:`ReconNearestToFined`          -- nearest-upsample the native recon target.
 
 Elastic deformation uses MONAI's :class:`Rand3DElasticd` directly --
 it's configured by the datamodule and not re-exported here.
@@ -52,7 +53,7 @@ from nanocosmos.transforms.rand_transpose_zyx import RandTransposeZYXd
 from nanocosmos.transforms.resolution_zoom import RandResolutionZoomd
 from nanocosmos.transforms.missing_slice import RandMissingSliced
 from nanocosmos.transforms.degrade import RandResolutionDegraded
-from nanocosmos.transforms.fine_grid import ToFineGridd
+from nanocosmos.transforms.fine_grid import ReconNearestToFined, ToFineGridd
 
 __all__ = [
     "Labeld",
@@ -64,4 +65,5 @@ __all__ = [
     "RandMissingSliced",
     "RandResolutionDegraded",
     "ToFineGridd",
+    "ReconNearestToFined",
 ]

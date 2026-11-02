@@ -9,10 +9,14 @@ Geometry (see doc/RESOLUTION_LADDER.md).  The network runs on a fixed fine
 grid (``patch_size`` @ ``pixel_size`` nm, e.g. [400, 400, 400] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
-the fine grid while the label stays native.  By default the recon target
-sits on the coarser of native and fine.  ``recon_on_fine_grid`` places it
-on the fine grid instead (trilinear), so every resolution has the same
-cubic recon shape.
+the fine grid while the label stays native.  SSL degrade is nearest ``z``
+downsample (4 nm crops only), missing sections, and voxel augmentation.
+``ToFineGridd`` then nearest-upsamples the image onto the 4 nm cube.  The
+clean target is nearest-upsampled onto that cube after the axis permutation,
+and only then collated, so an anisotropic crop still stacks.
+``recon_native_size`` records the native crop.  The L1 trilinearly
+resamples the 4 nm head back onto it, and skips that resample when the
+crop is already 4 nm.
 
 ``rand_transpose_zyx`` (train only) then draws a uniform permutation of the
 three axes, after :class:`~nanocosmos.transforms.ToFineGridd` and
@@ -32,13 +36,13 @@ Branches & batching.  Volumes are bucketed into round-robin groups per the
 group is single-task, single-resolution, and a single ``label_convention``,
 so a batch drawn from one group is **task-homogeneous** and, with
 ``rand_transpose_zyx`` off, **shape-homogeneous**.  That is what
-``Joint3DReconSegLoss`` / ``Joint3DModule`` require.  With the flag on, a
-zyx permutation changes an anisotropic recon or label shape, so that train
-group is dropped to ``batch_size`` 1 (an INFO log records the configured
-size).  ``recon_on_fine_grid`` keeps the ssl recon target cubic, so those
-groups keep the branch batch size.  A labeled anisotropic group still drops
-to 1, because the label stays on the native grid.  Isotropic groups always
-keep the branch batch size.  A round-robin batch sampler draws one group
+``Joint3DReconSegLoss`` / ``Joint3DModule`` require.  The ssl recon target
+is nearest-upsampled onto the cubic fine grid before collation, so an
+anisotropic ssl group keeps its branch batch size under
+``rand_transpose_zyx``.  A labeled anisotropic group still drops to
+``batch_size`` 1 (an INFO log records the configured size), because the
+label stays on the native grid.  Isotropic groups always keep the branch
+batch size.  A round-robin batch sampler draws one group
 per batch.  Its RNG is
 ``seed + epoch`` with no rank offset, so every rank walks the same schedule.
 The loader passes that object as ``batch_sampler`` and uses the
@@ -53,7 +57,9 @@ Config schema (``cfg.data``)::
                                      #   rand_transpose_zyx is on
     pixel_size: [4, 4, 4]            # fine voxel size nm (cubic)
     rand_transpose_zyx: true         # train-only random z/y/x permutation.
-                                     #   Anisotropic train groups run at
+                                     #   ssl keeps batch_size (recon is
+                                     #   nearest-upsampled before collation).
+                                     #   A labeled anisotropic group runs at
                                      #   batch_size 1 (INFO log).
     degrade: {zf_range: [...], ...}  # RandResolutionDegraded kwargs (ssl)
     sft_min_foreground: 0.8          # sft gate: BOTH label fg AND image non-zero
@@ -101,6 +107,7 @@ from nanocosmos.transforms import (
     Labeld,
     RandResolutionDegraded,
     RandTransposeZYXd,
+    ReconNearestToFined,
     ToFineGridd,
 )
 
@@ -115,7 +122,7 @@ from nanocosmos.datamodules.condition_text import (  # noqa: E402
 _DEGRADE_KEYS = (
     "zf_range", "prob", "jitter_prob", "max_jitter", "missing_prob",
     "max_missing", "missing_fill", "noise_prob", "noise_std", "contrast_prob",
-    "contrast_gamma", "up_mode",
+    "contrast_gamma",
 )
 
 
@@ -187,7 +194,6 @@ class Joint3DDataModule(pl.LightningDataModule):
         patch_size: Sequence[int] = (320, 256, 256),
         pixel_size: Sequence[float] = (4.0, 4.0, 4.0),
         rand_transpose_zyx: bool = False,
-        recon_on_fine_grid: bool = False,
         branches: Optional[Dict[str, Any]] = None,
         degrade: Optional[Dict[str, Any]] = None,
         val_volumes: Optional[List[Dict[str, Any]]] = None,
@@ -220,10 +226,6 @@ class Joint3DDataModule(pl.LightningDataModule):
         # Train-only zyx permutation.  Requires a cubic FOV so each permutation
         # preserves the physical extent on every axis.  See _group_transform.
         self.rand_transpose_zyx = bool(rand_transpose_zyx)
-        # ssl recon target on the fine grid (same shape as ``image``).  Coarse
-        # native volumes are trilinearly resampled up; the crop read stays at
-        # the real native voxel size.
-        self.recon_on_fine_grid = bool(recon_on_fine_grid)
         if self.rand_transpose_zyx:
             if len(self.fine_patch) != 3 or len(set(self.fine_patch)) != 1:
                 raise ValueError(
@@ -345,18 +347,22 @@ class Joint3DDataModule(pl.LightningDataModule):
         label_convention: Optional[str] = None,
         augment: bool = False,
     ) -> Compose:
-        if self.recon_on_fine_grid:
-            recon_size = self.fine_patch
-        else:
-            recon_size = _scaled(
-                self.fine_patch, self.fine_nm,
-                [max(float(r), self.fine_nm) for r in native_res],
-            )
+        # Degrade and nearest-upsample first, then the loader collates.
+        # ToFineGridd puts ``image`` on the fine grid.  The clean target
+        # stays at the native crop through the optional zyx permutation,
+        # then ``ReconNearestToFined`` repeats it onto the fine cube.
+        recon_size = _scaled(
+            self.fine_patch, self.fine_nm,
+            [max(float(r), self.fine_nm) for r in native_res],
+        )
         if task == "ssl":
             ssl_keys = ["image", "recon_image"]
             tf: List[Any] = [
                 EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
-                RandResolutionDegraded(keys=["image"], recon_key="recon_image", **self.degrade),
+                RandResolutionDegraded(
+                    keys=["image"], recon_key="recon_image",
+                    downsample=self._is_fine_nm(native_res), **self.degrade,
+                ),
                 ToFineGridd(
                     image_size=self.fine_patch, recon_size=recon_size,
                     set_recon_from_image=False, task="ssl",
@@ -365,6 +371,7 @@ class Joint3DDataModule(pl.LightningDataModule):
             ]
             if augment:
                 self._append_axis_perm(tf, ssl_keys, native_res)
+            self._append_recon_on_fine(tf)
             return Compose(tf)
         # sft pipeline.  Optional boundary erosion makes the sem head target thin
         # membranes instead of near-degenerate full foreground.  Erosion runs on
@@ -403,7 +410,21 @@ class Joint3DDataModule(pl.LightningDataModule):
         ]
         if augment:
             self._append_axis_perm(sft_tf, out_keys, native_res)
+        self._append_recon_on_fine(sft_tf)
         return Compose(sft_tf)
+
+    def _is_fine_nm(self, native_res: Sequence[float]) -> bool:
+        """True when every native axis is the fine voxel size (the 4 nm crop)."""
+        return all(abs(float(r) - self.fine_nm) <= 1e-3 for r in native_res)
+
+    def _append_recon_on_fine(self, tf: List[Any]) -> None:
+        """Nearest-upsample the native clean target onto the fine cube.
+
+        Always runs, after degradation and after the zyx permutation, so
+        collation sees one 4 nm shape. ``recon_native_size`` is the permuted
+        native grid the L1 trilinearly resamples back to.
+        """
+        tf.append(ReconNearestToFined(self.fine_patch))
 
     def _build_group(
         self,
@@ -598,19 +619,13 @@ class Joint3DDataModule(pl.LightningDataModule):
             for desc, res, gvols, mult, conv in branch_groups:
                 n_group = max(bs, int(round(self.num_samples * weight * mult / mean_mult)))
                 group_bs = bs
-                # A zyx permutation moves anisotropic arrays with the native
-                # axes, so two samples in one batch can have different shapes.
-                # The ssl recon target is cubic when it lives on the fine grid.
-                # Labels stay native, so a labeled anisotropic group still
-                # cannot stack.  Isotropic groups keep ``bs``.
+                # The recon target is nearest-upsampled onto the cubic fine
+                # grid before collation, so an ssl batch stacks.  Labels stay
+                # native: a zyx permutation gives an anisotropic label two
+                # shapes, and that group cannot stack.
                 anisotropic = len(set(float(r) for r in res)) > 1
-                recon_varies = anisotropic and not self.recon_on_fine_grid
                 label_varies = anisotropic and task != "ssl"
-                if (
-                    self.rand_transpose_zyx
-                    and group_bs > 1
-                    and (recon_varies or label_varies)
-                ):
+                if self.rand_transpose_zyx and group_bs > 1 and label_varies:
                     logger.info(
                         "rand_transpose_zyx: task=%s %s native_resolution=%s "
                         "trains at batch_size 1 (configured %d)",

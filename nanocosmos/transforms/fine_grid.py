@@ -16,24 +16,10 @@ voxel size and brought onto that grid by :class:`ToFineGridd`:
   stays native; for a fine rung whose native voxel is *smaller* than the grid
   (COSEM 3.24 nm) it is downsampled to the grid.
 
-``image_mode`` defaults to ``"nearest"`` for the SAME physical reason as
-:class:`nanocosmos.transforms.degrade.RandResolutionDegraded`'s ``up_mode``
-default: for volumes coarser than the fine grid (the common anisotropic
-connectomics case -- CREMI/MICrONS-style thick ``z`` sections), each native
-voxel is a single integrated measurement, so repeating it as a constant block
-(nearest) reproduces the genuine sharp step-transitions of the real
-acquisition, whereas trilinear invents a blend between measurements that
-never physically happened. This MUST stay consistent with
-``RandResolutionDegraded.up_mode`` -- this transform performs the analogous
-native-coarse -> fine-grid step for REAL coarse volumes on the ``sft`` branch
-and at inference, while ``RandResolutionDegraded`` does it for SSL's
-synthetic degradation; a mismatch between the two would mean the SSL branch
-pretrains the backbone on a different degradation shape than the model
-actually has to invert on real labelled/inference data. (For the rarer
-finer-than-grid case -- e.g. COSEM 3.24 nm needing a real downsample --
-nearest is a plain sample-and-hold decimation, not anti-aliased; this is a
-deliberate trade-off for cross-branch consistency, not an accuracy
-optimisation for that direction.)
+``image_mode`` defaults to ``"nearest"``: a voxel coarser than 4 nm is one
+measurement, so the network input repeats it as a constant block.  The
+reconstruction L1 does the opposite resample, trilinear from the 4 nm
+prediction back to the native crop.
 
 On the ``sft`` branch the clean native image is captured as ``recon_image``
 before the image is resampled (the raw data-consistency target).  On ``ssl``
@@ -79,9 +65,7 @@ class ToFineGridd(MapTransform):
             native / fine).  If ``None``, the recon target is left at native.
         image_key / recon_key / label_key: dict keys.
         image_mode: Interpolation for the ``image`` -> fine-grid resample
-            (``"nearest"`` default; ``"trilinear"`` for a softer look) --
-            see the module docstring; must stay consistent with
-            ``RandResolutionDegraded.up_mode``.
+            (``"nearest"`` default).
         set_recon_from_image: capture ``recon_image = image.clone()`` (the clean
             native patch) before resampling the image -- used on the ``sft``
             branch (on ``ssl`` the degradation transform already wrote it).
@@ -133,4 +117,38 @@ class ToFineGridd(MapTransform):
         return d
 
 
-__all__ = ["ToFineGridd"]
+class ReconNearestToFined(MapTransform):
+    """Repeat the native clean target onto the fine grid and remember its size.
+
+    Runs after degradation and after a zyx permutation, before collation.
+    ``recon_image`` becomes a nearest-neighbour upsample of the native crop,
+    so every sample has the 4 nm shape. ``recon_native_size`` is the spatial
+    size before that upsample. The L1 trilinearly resamples the 4 nm
+    prediction back to that size.
+    """
+
+    def __init__(
+        self,
+        fine_size: Sequence[int],
+        *,
+        recon_key: str = "recon_image",
+        size_key: str = "recon_native_size",
+        allow_missing_keys: bool = True,
+    ) -> None:
+        super().__init__([recon_key], allow_missing_keys=allow_missing_keys)
+        self.fine_size = tuple(int(s) for s in fine_size)
+        self.recon_key = recon_key
+        self.size_key = size_key
+
+    def __call__(self, data: Dict) -> Dict:
+        d = dict(data)
+        if self.recon_key not in d:
+            return d
+        recon = d[self.recon_key]
+        spatial = tuple(int(s) for s in recon.shape[-3:])
+        d[self.size_key] = torch.tensor(spatial, dtype=torch.int64)
+        d[self.recon_key] = _resample(recon, self.fine_size, "nearest")
+        return d
+
+
+__all__ = ["ToFineGridd", "ReconNearestToFined"]

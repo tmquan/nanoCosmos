@@ -380,7 +380,6 @@ def build_datamodule(cfg: DictConfig) -> pl.LightningDataModule:
             patch_size=tuple(d.get("patch_size", (320, 256, 256))),
             pixel_size=tuple(d.get("pixel_size", (4.0, 4.0, 4.0))),
             rand_transpose_zyx=bool(d.get("rand_transpose_zyx", False)),
-            recon_on_fine_grid=bool(d.get("recon_on_fine_grid", False)),
             branches=OmegaConf.to_container(d.get("branches", {}), resolve=True),
             degrade=OmegaConf.to_container(d.get("degrade", {}), resolve=True),
             val_volumes=OmegaConf.to_container(d.get("val_volumes"), resolve=True)

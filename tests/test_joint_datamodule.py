@@ -142,8 +142,10 @@ def test_joint_datamodule_batch_contract(synth_root):
         assert "recon_image" in batch
         if task == "sft":
             # 8 nm native label grid: round(32 * 4 / 8) = 16.
+            # The recon target is nearest-upsampled to the 4 nm cube.
             assert tuple(batch["label"].shape[-3:]) == (16, 16, 16)
-            assert tuple(batch["recon_image"].shape[-3:]) == (16, 16, 16)
+            assert tuple(batch["recon_image"].shape[-3:]) == (32, 32, 32)
+            assert tuple(batch["recon_native_size"][0].tolist()) == (16, 16, 16)
         else:
             # ssl 4 nm == fine grid.
             assert tuple(batch["recon_image"].shape[-3:]) == (32, 32, 32)
@@ -244,39 +246,14 @@ def test_rand_transpose_zyx_requires_cubic_fov():
         )
 
 
-def test_rand_transpose_zyx_uses_batch_size_1_for_anisotropic(synth_root):
-    dm = Joint3DDataModule(
-        data_root=synth_root,
-        patch_size=(32, 32, 32),
-        pixel_size=(4.0, 4.0, 4.0),
-        rand_transpose_zyx=True,
-        branches={
-            "ssl": {
-                "batch_size": 2,
-                "sample_weight": 1.0,
-                "volumes": [{
-                    "vol": "cosem_vol", "root": synth_root,
-                    "native_resolution": [16, 4, 4], "imaging": "ssTEM",
-                }],
-            },
-        },
-        num_workers=0,
-        persistent_workers=False,
-        num_samples=2,
-    )
-    dm.setup()
-    assert dm._train_groups[-1][2] == 1
-
-
-def test_recon_on_fine_grid_keeps_batch_size_for_anisotropic(synth_root):
-    """4 nm recon target stays cubic under zyx permutation, so batch 2 stacks."""
+def test_anisotropic_ssl_keeps_batch_size(synth_root):
+    """Native recon is nearest-upsampled to the cube, so batch 2 stacks."""
     fine = 32
     dm = Joint3DDataModule(
         data_root=synth_root,
         patch_size=(fine, fine, fine),
         pixel_size=(4.0, 4.0, 4.0),
         rand_transpose_zyx=True,
-        recon_on_fine_grid=True,
         branches={
             "ssl": {
                 "batch_size": 2,
@@ -297,9 +274,14 @@ def test_recon_on_fine_grid_keeps_batch_size_for_anisotropic(synth_root):
     )
     dm.setup()
     assert dm._train_groups[-1][2] == 2
+    assert dm._group_transform("ssl", (16, 4, 4)).transforms[1].downsample is False
+    assert dm._group_transform("ssl", (4, 4, 4)).transforms[1].downsample is True
     batch = next(iter(dm.train_dataloader()))
     assert tuple(batch["image"].shape) == (2, 1, fine, fine, fine)
     assert tuple(batch["recon_image"].shape) == (2, 1, fine, fine, fine)
+    for i in range(2):
+        nat = tuple(int(v) for v in batch["recon_native_size"][i].tolist())
+        assert sorted(nat) == [8, 32, 32]
 
 
 def test_rand_transpose_zyx_augments_finest_axis(synth_root):
@@ -343,7 +325,8 @@ def test_rand_transpose_zyx_augments_finest_axis(synth_root):
         prompt = batch["prompt"][0]
         nums = tuple(int(v) for v in _PROMPT_ZYX.search(prompt).groups())
         assert sorted(nums) == sorted(native)
-        assert tuple(batch["recon_image"].shape[-3:]) == _recon_for(fine, 4.0, nums)
+        assert tuple(batch["recon_image"].shape[-3:]) == (fine, fine, fine)
+        assert tuple(batch["recon_native_size"][0].tolist()) == _recon_for(fine, 4.0, nums)
         finest_on_z = finest_on_z or nums[0] == 4
         coarse_on_z = coarse_on_z or nums[0] == 16
     assert finest_on_z and coarse_on_z
@@ -351,4 +334,5 @@ def test_rand_transpose_zyx_augments_finest_axis(synth_root):
     for batch in dm.val_dataloader():
         assert batch["prompt"][0] == "ssTEM · z16 y4 x4 nm · ssl"
         assert tuple(batch["image"].shape) == (1, 1, fine, fine, fine)
-        assert tuple(batch["recon_image"].shape[-3:]) == (8, 32, 32)
+        assert tuple(batch["recon_image"].shape[-3:]) == (fine, fine, fine)
+        assert tuple(batch["recon_native_size"][0].tolist()) == (8, 32, 32)

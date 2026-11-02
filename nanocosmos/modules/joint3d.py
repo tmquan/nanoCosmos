@@ -87,11 +87,14 @@ class Joint3DModule(Cosmos3Nano3DModule):
         task = self._batch_task(batch)
         targets: Dict[str, Any] = {"task": task}
 
-        # Reconstruction target (clean EM): required on ssl, optional on sft
-        # (the raw data-consistency term).  Pooled to its own grid in the loss.
+        # Reconstruction target (clean EM): required on ssl, optional on sft.
+        # The L1 trilinearly resamples the 4 nm head to ``recon_native_size``.
         recon = batch.get("recon_image")
         if recon is not None:
             targets["recon_image"] = self._maybe_scale_recon(recon)
+        native_size = batch.get("recon_native_size")
+        if native_size is not None:
+            targets["recon_native_size"] = native_size
 
         if task == SSL:
             return targets  # label-free branch

@@ -22,12 +22,10 @@ task-homogeneous -- the datamodule's round-robin sampler, which also sets
 per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
 (8 nm) is one such rung.
 
-``ssl``  -- self-supervised reconstruction, gated by voxel size:
-    a degraded input is matched to the clean EM,
-    ``L1(pool(raw -> recon_image grid), recon_image)``.  ``recon_image``
-    sits on the coarser of the native voxel size and the 4 nm grid (COSEM
-    ~4 nm lands on the fine grid; unlabeled FIB-25 and other 8 nm neuropil
-    stay on their native grid).  No segmentation supervision.
+``ssl``  -- self-supervised reconstruction.  The batched ``recon_image`` is
+    the native crop nearest-upsampled to 4 nm.  The L1 trilinearly
+    resamples ``raw`` back to ``recon_native_size`` (skipped when that size
+    is already 4 nm) and compares it there.  No segmentation supervision.
 
 ``sft``  -- segmentation, gated by labels: any labeled rung.  The
     small-voxel head is pooled to the **label grid** (``labels.shape[-3:]``)
@@ -87,6 +85,42 @@ def _as_channeled(x: torch.Tensor, ndim: int) -> torch.Tensor:
     if x.dim() == ndim - 1:
         return x.unsqueeze(1)
     return x
+
+
+def _nearest_gather_index(native: int, fine: int, device: torch.device) -> torch.Tensor:
+    """Output index whose nearest-upsample source is each native index.
+
+    Matches ``F.interpolate(..., mode="nearest")``: source
+    ``min(floor(dst * native / fine), native - 1)`` with a float32 scale.
+    """
+    native = int(native)
+    fine = int(fine)
+    if native == fine:
+        return torch.arange(native, device=device)
+    if native > fine or native < 1 or fine < 1:
+        raise ValueError(
+            f"native size {native} must lie in 1..{fine} to undo a nearest upsample."
+        )
+    dst = torch.arange(fine, dtype=torch.float32)
+    scale = torch.tensor(native, dtype=torch.float32) / torch.tensor(fine, dtype=torch.float32)
+    src = torch.floor(dst * scale).to(torch.long).clamp(max=native - 1)
+    first = torch.full((native,), -1, dtype=torch.long)
+    first[src.flip(0)] = torch.arange(fine - 1, -1, -1)
+    if bool((first < 0).any()):
+        raise RuntimeError(
+            f"nearest upsample from {native} to {fine} does not cover every native index."
+        )
+    return first.to(device)
+
+
+def _native_from_nearest(vol: torch.Tensor, native: Sequence[int]) -> torch.Tensor:
+    """Read the native voxels back out of a nearest-upsampled ``[N,C,D,H,W]``."""
+    fine = vol.shape[-3:]
+    idx = [
+        _nearest_gather_index(int(n), int(f), vol.device)
+        for n, f in zip(native, fine)
+    ]
+    return vol[:, :, idx[0]][:, :, :, idx[1]][:, :, :, :, idx[2]]
 
 
 class Joint3DReconSegLoss(nn.Module):
@@ -257,18 +291,55 @@ class Joint3DReconSegLoss(nn.Module):
 
     def _recon_term(
         self, head: torch.Tensor, recon_image: torch.Tensor,
+        native_size: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """``L1`` (or configured) on the ``raw`` channel vs the clean EM.
 
-        The small-voxel ``raw`` channel is pooled to the reconstruction
-        target's own grid (``recon_image.shape[-3:]``) before the regression,
-        so the term works when the target is already on the 4 nm grid (COSEM;
-        the pool is a no-op) and when it stays on a coarser native grid
-        (FIB 8 nm SSL, and the sft native-EM target).
+        The 4 nm ``raw`` channel is trilinearly resampled to the native crop.
+        A crop that is already 4 nm skips that resample. When ``native_size``
+        is set, ``recon_image`` is the native crop nearest-upsampled to 4 nm
+        and the comparison target is read back off that cube.
         """
         target = _as_channeled(recon_image, head.dim()).to(torch.float32)
-        raw = self._pool_to(head[:, self.raw_slice], target.shape[-3:])
+        raw = head[:, self.raw_slice]
+        if native_size is not None:
+            if tuple(target.shape[-3:]) != tuple(raw.shape[-3:]):
+                raise ValueError(
+                    "recon_image must be nearest-upsampled to the 4 nm head "
+                    f"{tuple(raw.shape[-3:])}; got {tuple(target.shape[-3:])}."
+                )
+            return self._native_trilinear_l1(raw, target, native_size)
+        if tuple(raw.shape[-3:]) != tuple(target.shape[-3:]):
+            raw = F.interpolate(
+                raw.float(), size=tuple(target.shape[-3:]),
+                mode="trilinear", align_corners=False,
+            )
         return self._recon_fn(raw.float(), target.detach())
+
+    def _native_trilinear_l1(
+        self, raw: torch.Tensor, target: torch.Tensor, native_size: torch.Tensor,
+    ) -> torch.Tensor:
+        """Trilinear-resample each 4 nm prediction to its native crop and take L1.
+
+        ``target`` is the nearest repeat of that crop. Samples in one batch
+        may have different native shapes after a zyx permutation. A native
+        size equal to the 4 nm grid is compared directly.
+        """
+        if native_size.dim() == 1:
+            native_size = native_size.unsqueeze(0).expand(raw.shape[0], -1)
+        fine = tuple(int(s) for s in raw.shape[-3:])
+        losses = []
+        for i in range(raw.shape[0]):
+            nat = tuple(int(v) for v in native_size[i].tolist())
+            pred = raw[i:i + 1].float()
+            tgt = target[i:i + 1].float()
+            if nat != fine:
+                pred = F.interpolate(
+                    pred, size=nat, mode="trilinear", align_corners=False,
+                )
+                tgt = _native_from_nearest(tgt, nat)
+            losses.append(self._recon_fn(pred, tgt.detach()))
+        return torch.stack(losses).mean()
 
     def _seg_terms(
         self,
@@ -358,6 +429,7 @@ class Joint3DReconSegLoss(nn.Module):
         total = head.new_zeros(())
 
         recon_image = targets.get(self.recon_image_key)
+        native_size = targets.get("recon_native_size")
 
         if task == SSL:
             # ---- self-supervised reconstruction of the clean EM ----
@@ -371,7 +443,7 @@ class Joint3DReconSegLoss(nn.Module):
                     f"target)."
                 )
             if self.weight_rec > 0:
-                l_recon = self._recon_term(head, recon_image)
+                l_recon = self._recon_term(head, recon_image, native_size)
                 out["loss/recon"] = l_recon
                 total = total + self.weight_rec * l_recon
             branch_w = self.weight_ssl
@@ -393,7 +465,7 @@ class Joint3DReconSegLoss(nn.Module):
             # the measured data after that downsample.  Optional (skipped
             # when the datamodule omits ``recon_image``).
             if recon_image is not None and self.weight_rec > 0:
-                l_recon = self._recon_term(head, recon_image)
+                l_recon = self._recon_term(head, recon_image, native_size)
                 out["loss/recon"] = l_recon
                 total = total + self.weight_rec * l_recon
             branch_w = self.weight_sft

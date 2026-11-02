@@ -16,46 +16,24 @@ size* = coarse, e.g. 30-40 nm.)
 :class:`RandResolutionDegraded` maps one image patch ``[C, D, H, W]`` at the
 spatial size it is given.  In the joint pipeline that size is the
 **native-resolution crop**, before
-:class:`~nanocosmos.transforms.fine_grid.ToFineGridd`:
+:class:`~nanocosmos.transforms.fine_grid.ToFineGridd` nearest-upsamples
+``image`` onto the 4 nm grid:
 
-* ``image``        -- the **degraded** volume, upsampled back to that same
-  spatial size, blurry / aliased in ``z``;
-* ``recon_image``  -- a pristine copy of the input (the L1 reconstruction
-  target), still at the input resolution.
+* ``image``        -- the degraded volume.  With ``downsample`` it is shorter
+  in ``z`` (nearest-neighbour decimation).  The 4 nm upsample is the next
+  transform, not this one.
+* ``recon_image``  -- a pristine copy of the input (the L1 target), still at
+  the input resolution.
 
-:class:`~nanocosmos.transforms.fine_grid.ToFineGridd` then places ``image``
-on the fine grid and ``recon_image`` on the coarser of native and fine.
+Degrade is three pieces.  The datamodule turns **downsample** on only for a
+4 nm crop; a coarser crop is already the measurement, so downsample is
+skipped and the other two pieces still run:
 
-The degradation composes the dominant real ssTEM / SBEM defects, each
-independently probability-gated, so the reconstruction does not overfit
-clean ``z``-decimation (the make-or-break sim-to-real concern):
-
-1. **``z`` slab integration + decimation** -- ``adaptive_avg_pool3d`` to
-   ``d ~= D / zf`` sections (a large physical voxel *averages* the small
-   sub-voxels; this is the real large-voxel acquisition, not a point
-   subsample).
-2. **section misalignment / jitter** -- a small per-section in-plane
-   translation via ``grid_sample`` (the registration error between serial
-   sections).
-3. **missing / duplicated sections** -- blank or replicate whole
-   sections (acquisition dropouts; cf. :class:`RandMissingSliced`).
-4. **section-dependent noise + contrast** -- per-section Gaussian noise
-   and gamma jitter (staining / detector variation).
-5. **``z`` up-sampling back to the input depth ``D``** -- nearest by default
-   (physically faithful: a coarse section is a single integrated measurement
-   with no information about anything smoother than the jump to the next
-   section, so nearest reproduces the genuine sharp step-transitions of a
-   real thick-section stack placed on the input canvas; trilinear is
-   available for a softer look but invents a linear blend between sections
-   that has no physical basis and can mask the very artifact the model must
-   invert).  The degraded stack is back on the input canvas; in the joint
-   pipeline :class:`nanocosmos.transforms.fine_grid.ToFineGridd` then
-   resamples ``image`` onto the fine grid.  ``up_mode`` must stay consistent
-   with that transform's ``image_mode`` (also nearest by default): this
-   transform is the synthetic coarse-to-fine step on SSL, and
-   ``ToFineGridd`` is the native-coarse -> fine-grid step for real coarse
-   volumes on the ``sft`` branch and at inference.  A mismatch trains SSL
-   on a different degradation shape than those real coarse volumes.
+1. **Nearest ``z`` downsample** (4 nm only) -- ``d = round(D / zf)`` sections,
+   each a nearest sample of the fine stack, not an average.
+2. **Missing / duplicated sections** -- blank or replicate whole sections.
+3. **Voxel-value augmentation** -- per-section jitter, Gaussian noise, and
+   gamma contrast.
 
 Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
@@ -83,30 +61,25 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         keys: Image key(s) to degrade.  Default ``("image",)``.
         recon_key: Key under which the pristine small-voxel copy (the
             reconstruction target) is stored.  Default ``"recon_image"``.
-        zf_range: ``(min, max)`` factor on the **input** z voxel size; the
-            sampled ``zf`` sets the number of retained sections
-            ``d = round(D / zf)``.  On a 4 nm crop, ``(2, 10)`` spans 8 nm
-            (FIB) to 40 nm (CREMI / MICrONS) sections.  On a coarser native
-            crop the same factor is relative to that crop's voxel size.
-            ``zf`` is sampled log-uniformly so scales are symmetric.
+        zf_range: ``(min, max)`` factor on the input z size, used only when
+            ``downsample`` is set.  ``d = round(D / zf)``.  On a 4 nm crop,
+            ``(2, 10)`` spans 8 nm to 40 nm sections.  Sampled log-uniformly.
+        downsample: Nearest-downsample ``z`` before the other defects.  The
+            datamodule sets this only for a 4 nm crop.  Off: missing sections
+            and voxel augmentation still run, at the crop's own depth.
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
             exists).
         jitter_prob / max_jitter: Per-section in-plane translation
             (pixels, uniform in ``[-max_jitter, max_jitter]`` per section).
-        missing_prob / max_missing: Missing/duplicated-section defect on
-            the coarse stack (reuses the zero / replicate fill convention).
+        missing_prob / max_missing: Missing/duplicated-section defect.
         missing_fill: ``"zero"`` | ``"replicate"`` for dropped sections.
         noise_prob / noise_std: Per-section additive Gaussian noise (std
             relative to the ``[0, 1]`` intensity range).
         contrast_prob / contrast_gamma: Per-section gamma jitter
             ``gamma ~ U(contrast_gamma)``.
-        z_sections_key: Optional key to record the coarse section count
-            ``d`` (handy when re-using this to synthesise large-voxel pairs).
-        up_mode: Interpolation for the final ``z`` up-sample back to ``D``
-            (``"nearest"`` default -- physically faithful blocky/step
-            look, see the module docstring; ``"trilinear"`` for a softer,
-            blended look).
+        z_sections_key: Optional key recording the depth after downsample
+            (the input depth when downsample is off).
     """
 
     def __init__(
@@ -114,6 +87,7 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         keys: KeysCollection = ("image",),
         recon_key: str = "recon_image",
         zf_range: Tuple[float, float] = (2.0, 10.0),
+        downsample: bool = True,
         prob: float = 1.0,
         jitter_prob: float = 0.5,
         max_jitter: float = 2.0,
@@ -125,12 +99,12 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         contrast_prob: float = 0.5,
         contrast_gamma: Tuple[float, float] = (0.8, 1.25),
         z_sections_key: Optional[str] = None,
-        up_mode: str = "nearest",
         allow_missing_keys: bool = False,
     ) -> None:
         super().__init__(keys, allow_missing_keys=allow_missing_keys)
         self.recon_key = str(recon_key)
         self.zf_range = (float(zf_range[0]), float(zf_range[1]))
+        self.downsample = bool(downsample)
         self.prob = float(prob)
         self.jitter_prob = float(jitter_prob)
         self.max_jitter = float(max_jitter)
@@ -146,9 +120,6 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         self.contrast_prob = float(contrast_prob)
         self.contrast_gamma = (float(contrast_gamma[0]), float(contrast_gamma[1]))
         self.z_sections_key = z_sections_key
-        if up_mode not in ("trilinear", "nearest"):
-            raise ValueError(f"up_mode must be 'trilinear' or 'nearest'; got {up_mode!r}.")
-        self.up_mode = up_mode
 
     # ------------------------------------------------------------------
     # Sampling
@@ -252,30 +223,29 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
             do = self.R.random() < self.prob and D > 1
             if do:
-                zf = self._sample_zf()
-                d_coarse = max(1, int(round(D / zf)))
-                coarse = F.adaptive_avg_pool3d(
-                    clean.unsqueeze(0), (d_coarse, H, W),
-                ).squeeze(0)
+                coarse = clean
+                d_coarse = D
+                if self.downsample:
+                    zf = self._sample_zf()
+                    d_coarse = max(1, int(round(D / zf)))
+                    if d_coarse != D:
+                        coarse = F.interpolate(
+                            clean.unsqueeze(0), size=(d_coarse, H, W),
+                            mode="nearest",
+                        ).squeeze(0)
 
-                if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
-                    coarse = self._jitter_sections(coarse)
                 if d_coarse > 1 and self.R.random() < self.missing_prob:
                     coarse = self._drop_sections(coarse)
+                if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
+                    coarse = self._jitter_sections(coarse)
                 if self.noise_std > 0 and self.R.random() < self.noise_prob:
                     coarse = self._section_noise(coarse)
                 if self.R.random() < self.contrast_prob:
                     coarse = self._section_contrast(coarse)
 
-                up_kw = (
-                    {"mode": "nearest"} if self.up_mode == "nearest"
-                    else {"mode": "trilinear", "align_corners": False}
-                )
-                degraded = F.interpolate(
-                    coarse.unsqueeze(0), size=(D, H, W), **up_kw,
-                ).squeeze(0)
+                degraded = coarse
                 if self.z_sections_key is not None:
-                    d[self.z_sections_key] = int(d_coarse)
+                    d[self.z_sections_key] = int(coarse.shape[1])
             else:
                 degraded = clean.clone()
                 if self.z_sections_key is not None:

@@ -6,9 +6,10 @@
 task-namespaced tag ``{stage}/{mode}/{task}/...``:
 
 * **both branches** -- reconstruction panels, each as the three orthogonal
-  mid-planes (``xy`` / ``xz`` / ``yz``) on the 4 nm grid.  A source or target
-  that is coarser than 4 nm is nearest-upsampled onto that grid before the
-  plane is drawn::
+  mid-planes (``xy`` / ``xz`` / ``yz``) on the 4 nm grid only.  A source or
+  target that is coarser than 4 nm is nearest-upsampled onto that grid
+  before the plane is drawn.  That resample is display only; the L1 stays
+  on the native crop::
 
       {stage}/automatic/{ssl,sft}/true/image/{xy,xz,yz}    source (degraded on ssl)
       {stage}/automatic/{ssl,sft}/pred/recon/{xy,xz,yz}  raw head on the degraded latent
@@ -228,8 +229,9 @@ class Joint3DImageLogger(ImageLogger):
             uniq = list(dict.fromkeys(shown))
             tb.add_text(ctx.tag("volume"), ", ".join(uniq), global_step=epoch)
 
-        # 4 nm field of view: the network input.  Source and target mid-planes
-        # are drawn on this grid; a coarser recon target is upsampled per plane.
+        # 4 nm display grid: the network input.  Source and target mid-planes
+        # are drawn only on this grid; a coarser recon target is nearest-
+        # upsampled per plane for display.  That image is not the L1 target.
         # Seg panels still share the fine in-plane size so labels line up with xy.
         fine_size = tuple(int(s) for s in images.shape[-3:])
         target_hw = (fine_size[1], fine_size[2])

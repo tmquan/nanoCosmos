@@ -47,14 +47,60 @@ def test_ssl_branch_recon_only():
     assert head.grad is not None and torch.isfinite(head.grad).all()
 
 
-def test_ssl_recon_pools_raw_to_larger_voxel_target():
-    # FIB-style SSL: clean EM target on a larger-voxel native grid than the
-    # small-voxel prediction -> raw is pooled down to the target grid before L1.
+def test_ssl_l1_is_trilinear_at_native():
+    """4 nm output is trilinearly resampled to each native crop;  the target
+    is the native voxels recovered from the nearest-upsampled batch tensor."""
+    loss = Joint3DReconSegLoss()
+    fine = (8, 8, 4)
+    sizes = [(4, 8, 2), (8, 4, 2)]
+    natives = [torch.rand(1, 1, *s) for s in sizes]
+    target = torch.cat([
+        torch.nn.functional.interpolate(n, size=fine, mode="nearest") for n in natives
+    ], 0)
+    head = _head(b=2, d=fine[0], h=fine[1], w=fine[2])
+    out = loss(head, {
+        "task": SSL,
+        "recon_image": target,
+        "recon_native_size": torch.tensor(sizes),
+    })
+    raw = head[:, loss.raw_slice].detach().float()
+    terms = []
+    for i, size in enumerate(sizes):
+        pred = torch.nn.functional.interpolate(
+            raw[i:i + 1], size=size, mode="trilinear", align_corners=False,
+        )
+        terms.append(torch.nn.functional.l1_loss(pred, natives[i].float()))
+    expected = torch.stack(terms).mean()
+    assert torch.allclose(out["loss/recon"], expected)
+    out["loss"].backward()
+    assert torch.isfinite(head.grad).all()
+
+
+def test_ssl_4nm_native_skips_resample():
+    loss = Joint3DReconSegLoss()
+    head = _head()
+    em = torch.rand(2, 1, 32, 32, 32)
+    out = loss(head, {
+        "task": SSL,
+        "recon_image": em,
+        "recon_native_size": torch.tensor([[32, 32, 32], [32, 32, 32]]),
+    })
+    raw = head[:, loss.raw_slice].detach().float()
+    assert torch.allclose(out["loss/recon"], torch.nn.functional.l1_loss(raw, em))
+
+
+def test_ssl_recon_resamples_raw_to_larger_voxel_target():
+    # Coarser clean EM than the 4 nm prediction: raw is trilinearly resampled
+    # onto that grid before L1.
     loss = Joint3DReconSegLoss()
     head = _head(d=32, h=32, w=32)
-    em = torch.rand(2, 1, 16, 16, 16)      # larger-voxel native EM (e.g. FIB 8 nm)
+    em = torch.rand(2, 1, 16, 16, 16)
     out = loss(head, {"task": SSL, "recon_image": em})
-    assert "loss/recon" in out
+    raw = head[:, loss.raw_slice].detach().float()
+    pred = torch.nn.functional.interpolate(
+        raw, size=(16, 16, 16), mode="trilinear", align_corners=False,
+    )
+    assert torch.allclose(out["loss/recon"], torch.nn.functional.l1_loss(pred, em))
     out["loss"].backward()
     assert torch.isfinite(head.grad).all()
 
@@ -154,18 +200,37 @@ def test_canonical_loss_keys_stable():
 # RandResolutionDegraded
 # ---------------------------------------------------------------------------
 
-def test_degrade_preserves_shape_and_writes_recon_target():
-    t = RandResolutionDegraded(prob=1.0, z_sections_key="z_sections")
+def test_degrade_downsamples_z_and_keeps_clean_target():
+    t = RandResolutionDegraded(
+        prob=1.0, zf_range=(8.0, 8.0), missing_prob=0.0, jitter_prob=0.0,
+        noise_prob=0.0, contrast_prob=0.0, z_sections_key="z_sections",
+    )
+    t.set_random_state(0)
+    img = torch.arange(32, dtype=torch.float32).view(1, 32, 1, 1).expand(1, 32, 16, 16).contiguous()
+    out = t({"image": img.clone()})
+    assert out["z_sections"] == 4
+    assert tuple(out["image"].shape) == (1, 4, 16, 16)
+    assert out["recon_image"].shape == img.shape
+    assert torch.equal(out["recon_image"].float(), img)
+    nearest = torch.nn.functional.interpolate(
+        img.unsqueeze(0), size=(4, 16, 16), mode="nearest",
+    ).squeeze(0)
+    assert torch.equal(out["image"].float(), nearest)
+
+
+def test_degrade_without_downsample_keeps_depth():
+    t = RandResolutionDegraded(
+        prob=1.0, downsample=False, zf_range=(8.0, 8.0), missing_prob=0.0,
+        jitter_prob=0.0, noise_prob=0.0, contrast_prob=0.0,
+        z_sections_key="z_sections",
+    )
     t.set_random_state(0)
     img = torch.rand(1, 32, 16, 16)
-    out = t({"image": img})
+    out = t({"image": img.clone()})
+    assert out["z_sections"] == 32
     assert out["image"].shape == img.shape
-    assert out["recon_image"].shape == img.shape
-    # The recon target is the pristine input; the degraded image differs.
-    assert torch.allclose(out["recon_image"].float(), img)
-    assert not torch.allclose(out["image"].float(), img)
-    # Coarse section count recorded and strictly fewer than D.
-    assert 1 <= out["z_sections"] < 32
+    assert torch.equal(out["recon_image"].float(), img)
+    assert torch.equal(out["image"].float(), img)
 
 
 def test_degrade_passthrough_still_writes_target():
@@ -250,5 +315,7 @@ def test_degrade_zf_controls_section_count():
     t = RandResolutionDegraded(prob=1.0, zf_range=(8.0, 8.0), z_sections_key="z_sections")
     t.set_random_state(1)
     out = t({"image": torch.rand(1, 32, 16, 16)})
-    # zf == 8 on D == 32 -> ~4 sections.
+    # zf == 8 on D == 32 -> 4 sections, and the image stays at that depth.
     assert out["z_sections"] == 4
+    assert out["image"].shape[1] == 4
+    assert out["recon_image"].shape[1] == 32
