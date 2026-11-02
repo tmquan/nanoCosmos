@@ -53,8 +53,8 @@ data:
   # in the stored axis order.
   rand_transpose_zyx: true
   # Nearest-upsample onto the 4 nm cube, then batch, so every resolution
-  # stacks at batch_size 2.  The L1 trilinearly resamples the 4 nm raw head
-  # to the native crop; a 4 nm crop skips that resample.  TensorBoard shows
+  # stacks at batch_size 2.  The L1 average-pools the 4 nm raw head onto
+  # the native crop; a 4 nm crop skips that pool.  TensorBoard shows
   # the 4 nm cube.
   # No resolution jitter of the read FOV.  The network input is the 4 nm grid.
   num_workers: 8
@@ -110,7 +110,7 @@ data:
   # ---- resolution ladder, SSL only.  Each volume declares its NATIVE
   # resolution (z, y, x nm).  The network input is nearest-resampled onto
   # the 4 nm grid.  Downsample runs only on a 4 nm crop.  The L1
-  # trilinearly resamples the 4 nm prediction to the native crop.
+  # average-pools the 4 nm prediction onto the native crop.
   # TensorBoard shows the 4 nm cube.
   # RandResolutionDegraded builds the large-voxel input.  There is no sft
   # branch in this pretrain. ----

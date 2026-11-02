@@ -23,9 +23,10 @@ per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
 (8 nm) is one such rung.
 
 ``ssl``  -- self-supervised reconstruction.  The batched ``recon_image`` is
-    the native crop nearest-upsampled to 4 nm.  The L1 trilinearly
-    resamples ``raw`` back to ``recon_native_size`` (skipped when that size
-    is already 4 nm) and compares it there.  No segmentation supervision.
+    the native crop nearest-upsampled to 4 nm.  The L1 average-pools ``raw``
+    onto ``recon_native_size`` (each native voxel is the mean of the 4 nm
+    voxels in its bin) and compares it there.  A 4 nm crop skips the pool.
+    No segmentation supervision.
 
 ``sft``  -- segmentation, gated by labels: any labeled rung.  The
     small-voxel head is pooled to the **label grid** (``labels.shape[-3:]``)
@@ -295,10 +296,11 @@ class Joint3DReconSegLoss(nn.Module):
     ) -> torch.Tensor:
         """``L1`` (or configured) on the ``raw`` channel vs the clean EM.
 
-        The 4 nm ``raw`` channel is trilinearly resampled to the native crop.
-        A crop that is already 4 nm skips that resample. When ``native_size``
-        is set, ``recon_image`` is the native crop nearest-upsampled to 4 nm
-        and the comparison target is read back off that cube.
+        The 4 nm ``raw`` channel is average-pooled onto the native crop, so
+        each native voxel is the mean of the 4 nm voxels in its bin. A crop
+        that is already 4 nm skips that pool. When ``native_size`` is set,
+        ``recon_image`` is the native crop nearest-upsampled to 4 nm and the
+        comparison target is read back off that cube.
         """
         target = _as_channeled(recon_image, head.dim()).to(torch.float32)
         raw = head[:, self.raw_slice]
@@ -308,18 +310,14 @@ class Joint3DReconSegLoss(nn.Module):
                     "recon_image must be nearest-upsampled to the 4 nm head "
                     f"{tuple(raw.shape[-3:])}; got {tuple(target.shape[-3:])}."
                 )
-            return self._native_trilinear_l1(raw, target, native_size)
-        if tuple(raw.shape[-3:]) != tuple(target.shape[-3:]):
-            raw = F.interpolate(
-                raw.float(), size=tuple(target.shape[-3:]),
-                mode="trilinear", align_corners=False,
-            )
+            return self._native_pool_l1(raw, target, native_size)
+        raw = self._pool_to(raw, target.shape[-3:])
         return self._recon_fn(raw.float(), target.detach())
 
-    def _native_trilinear_l1(
+    def _native_pool_l1(
         self, raw: torch.Tensor, target: torch.Tensor, native_size: torch.Tensor,
     ) -> torch.Tensor:
-        """Trilinear-resample each 4 nm prediction to its native crop and take L1.
+        """Average-pool each 4 nm prediction to its native crop and take L1.
 
         ``target`` is the nearest repeat of that crop. Samples in one batch
         may have different native shapes after a zyx permutation. A native
@@ -334,9 +332,7 @@ class Joint3DReconSegLoss(nn.Module):
             pred = raw[i:i + 1].float()
             tgt = target[i:i + 1].float()
             if nat != fine:
-                pred = F.interpolate(
-                    pred, size=nat, mode="trilinear", align_corners=False,
-                )
+                pred = self._pool_to(pred, nat)
                 tgt = _native_from_nearest(tgt, nat)
             losses.append(self._recon_fn(pred, tgt.detach()))
         return torch.stack(losses).mean()

@@ -47,9 +47,9 @@ def test_ssl_branch_recon_only():
     assert head.grad is not None and torch.isfinite(head.grad).all()
 
 
-def test_ssl_l1_is_trilinear_at_native():
-    """4 nm output is trilinearly resampled to each native crop;  the target
-    is the native voxels recovered from the nearest-upsampled batch tensor."""
+def test_ssl_l1_pools_4nm_to_native():
+    """Each native voxel is the mean of the 4 nm voxels in its bin. The target
+    is the native crop recovered from the nearest-upsampled batch tensor."""
     loss = Joint3DReconSegLoss()
     fine = (8, 8, 4)
     sizes = [(4, 8, 2), (8, 4, 2)]
@@ -66,9 +66,7 @@ def test_ssl_l1_is_trilinear_at_native():
     raw = head[:, loss.raw_slice].detach().float()
     terms = []
     for i, size in enumerate(sizes):
-        pred = torch.nn.functional.interpolate(
-            raw[i:i + 1], size=size, mode="trilinear", align_corners=False,
-        )
+        pred = torch.nn.functional.adaptive_avg_pool3d(raw[i:i + 1], size)
         terms.append(torch.nn.functional.l1_loss(pred, natives[i].float()))
     expected = torch.stack(terms).mean()
     assert torch.allclose(out["loss/recon"], expected)
@@ -89,17 +87,15 @@ def test_ssl_4nm_native_skips_resample():
     assert torch.allclose(out["loss/recon"], torch.nn.functional.l1_loss(raw, em))
 
 
-def test_ssl_recon_resamples_raw_to_larger_voxel_target():
-    # Coarser clean EM than the 4 nm prediction: raw is trilinearly resampled
-    # onto that grid before L1.
+def test_ssl_recon_pools_raw_to_larger_voxel_target():
+    # Coarser clean EM than the 4 nm prediction: raw is average-pooled onto
+    # that grid before L1.
     loss = Joint3DReconSegLoss()
     head = _head(d=32, h=32, w=32)
     em = torch.rand(2, 1, 16, 16, 16)
     out = loss(head, {"task": SSL, "recon_image": em})
     raw = head[:, loss.raw_slice].detach().float()
-    pred = torch.nn.functional.interpolate(
-        raw, size=(16, 16, 16), mode="trilinear", align_corners=False,
-    )
+    pred = torch.nn.functional.adaptive_avg_pool3d(raw, (16, 16, 16))
     assert torch.allclose(out["loss/recon"], torch.nn.functional.l1_loss(pred, em))
     out["loss"].backward()
     assert torch.isfinite(head.grad).all()

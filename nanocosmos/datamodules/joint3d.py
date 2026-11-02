@@ -14,9 +14,9 @@ downsample (4 nm crops only), missing sections, and voxel augmentation.
 ``ToFineGridd`` then nearest-upsamples the image onto the 4 nm cube.  The
 clean target is nearest-upsampled onto that cube after the axis permutation,
 and only then collated, so an anisotropic crop still stacks.
-``recon_native_size`` records the native crop.  The L1 trilinearly
-resamples the 4 nm head back onto it, and skips that resample when the
-crop is already 4 nm.
+``recon_native_size`` records the native crop.  The L1 average-pools the
+4 nm head onto it, so each native voxel is the mean of the 4 nm voxels in
+its bin, and skips that pool when the crop is already 4 nm.
 
 ``rand_transpose_zyx`` (train only) then draws a uniform permutation of the
 three axes, after :class:`~nanocosmos.transforms.ToFineGridd` and
@@ -422,7 +422,7 @@ class Joint3DDataModule(pl.LightningDataModule):
 
         Always runs, after degradation and after the zyx permutation, so
         collation sees one 4 nm shape. ``recon_native_size`` is the permuted
-        native grid the L1 trilinearly resamples back to.
+        native grid the L1 average-pools back to.
         """
         tf.append(ReconNearestToFined(self.fine_patch))
 

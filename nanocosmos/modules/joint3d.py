@@ -88,7 +88,7 @@ class Joint3DModule(Cosmos3Nano3DModule):
         targets: Dict[str, Any] = {"task": task}
 
         # Reconstruction target (clean EM): required on ssl, optional on sft.
-        # The L1 trilinearly resamples the 4 nm head to ``recon_native_size``.
+        # The L1 average-pools the 4 nm head onto ``recon_native_size``.
         recon = batch.get("recon_image")
         if recon is not None:
             targets["recon_image"] = self._maybe_scale_recon(recon)
