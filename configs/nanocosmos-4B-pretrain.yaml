@@ -50,12 +50,15 @@ data:
   # anisotropic ssTEM / SBEM, any axis on isotropic FIB-SEM) -- therefore
   # lands on network z, y, or x equally often.  Section degradation stays
   # glued to the native section axis as that axis moves.  Validation stays
-  # in the stored axis order.  Anisotropic groups (CREMI, SNEMI3D, Mossy/Pyra)
-  # train at batch size 1, because a permutation changes the recon shape.
-  # Isotropic groups keep the branch batch size.
+  # in the stored axis order.
   rand_transpose_zyx: true
-  # No resolution jitter.  Each volume is resampled onto this 4 nm grid;
-  # the raw head is pooled back to the recon target (max(native, 4 nm)).
+  # Reconstruction target is the 4 nm network grid for every native
+  # resolution (trilinear).  Coarse volumes are upsampled onto that cube, so
+  # a zyx permutation no longer changes the recon shape and every resolution
+  # group keeps batch_size 2.  The crop is still read at the real native
+  # voxel size.  The raw head is supervised on this same 4 nm grid.
+  recon_on_fine_grid: true
+  # No resolution jitter.  The network input is resampled onto this 4 nm grid.
   num_workers: 8
   pin_memory: true
   persistent_workers: true
@@ -108,14 +111,14 @@ data:
     up_mode: nearest            # physically-faithful blocky z step (see RandResolutionDegraded docstring)
 
   # ---- resolution ladder, SSL only.  Each volume declares its NATIVE
-  # resolution (z, y, x nm).  The datamodule resamples the image onto the
-  # 4 nm fine grid; RandResolutionDegraded builds the large-voxel input and
-  # the loss pools ``raw`` back to the recon-target grid.  There is no sft
+  # resolution (z, y, x nm).  The datamodule resamples the image and the
+  # recon target onto the 4 nm fine grid; RandResolutionDegraded builds the
+  # large-voxel input.  There is no sft
   # branch in this pretrain. ----
   branches:
     ssl:
       task: ssl
-      batch_size: 1
+      batch_size: 2
       sample_weight: 1.0
       # Smallest-voxel rung: COSEM ~4 nm (image-only; organelle labels unused),
       # PLUS unlabeled FIB-25 / Hemibrain / MaleCNS neuropil and CREMI padded
@@ -396,7 +399,7 @@ data:
       # ssl_min_autocorr gate to land on.  No CloudVolume source for MitoEM2
       # (local nnU-Net conversion only), so "ignore in config" is the only fix;
       # see doc/DATASETS.md#ssl-crop-cleaning-content--structure-gates.
-  val_batch_size: 1
+  val_batch_size: 2
   # Per (task, resolution) ssl val group.  Segmentation val is off.
   val_num_samples: 32
   # Validation: ssl holdouts only (image-only recon; no labeled sft).

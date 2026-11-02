@@ -268,6 +268,40 @@ def test_rand_transpose_zyx_uses_batch_size_1_for_anisotropic(synth_root):
     assert dm._train_groups[-1][2] == 1
 
 
+def test_recon_on_fine_grid_keeps_batch_size_for_anisotropic(synth_root):
+    """4 nm recon target stays cubic under zyx permutation, so batch 2 stacks."""
+    fine = 32
+    dm = Joint3DDataModule(
+        data_root=synth_root,
+        patch_size=(fine, fine, fine),
+        pixel_size=(4.0, 4.0, 4.0),
+        rand_transpose_zyx=True,
+        recon_on_fine_grid=True,
+        branches={
+            "ssl": {
+                "batch_size": 2,
+                "sample_weight": 1.0,
+                "volumes": [{
+                    "vol": "cosem_vol", "root": synth_root,
+                    "native_resolution": [16, 4, 4], "imaging": "ssTEM",
+                }],
+            },
+        },
+        degrade={
+            "zf_range": [2.0, 2.0], "missing_prob": 0.0, "jitter_prob": 0.0,
+            "noise_prob": 0.0, "contrast_prob": 0.0,
+        },
+        num_workers=0,
+        persistent_workers=False,
+        num_samples=4,
+    )
+    dm.setup()
+    assert dm._train_groups[-1][2] == 2
+    batch = next(iter(dm.train_dataloader()))
+    assert tuple(batch["image"].shape) == (2, 1, fine, fine, fine)
+    assert tuple(batch["recon_image"].shape) == (2, 1, fine, fine, fine)
+
+
 def test_rand_transpose_zyx_augments_finest_axis(synth_root):
     """Train crops reorient zyx; the 4 nm axes move, val stays native."""
     native = (16, 4, 4)
