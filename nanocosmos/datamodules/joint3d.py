@@ -9,16 +9,17 @@ Geometry (see doc/RESOLUTION_LADDER.md).  The network runs on a fixed fine
 grid (``patch_size`` @ ``pixel_size`` nm, e.g. [400, 400, 400] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
-the fine grid while the label stays native.  SSL then augments the clean
-crop (jitter, contrast), nearest-downsamples ``z`` of that crop (4 nm
-only), and adds missing sections and noise on the input alone.
+the fine grid while the label stays native.  SSL then runs Augment
+(jitter, contrast), Degrade (nearest ``z`` downsample, 4 nm only), and
+Corrupt (missing sections and noise) on the input alone.
 ``ToFineGridd`` nearest-upsamples the image onto the 4 nm cube.  The
-augmented clean target is nearest-upsampled onto that cube after the axis
+augmented target is nearest-upsampled onto that cube after the axis
 permutation, and only then collated, so an anisotropic crop still stacks.
-``recon_native_size`` records that target's grid.  The L1 average-pools the
-4 nm head onto it, so each native voxel is the mean of the 4 nm voxels in
-its bin, and skips that pool when the crop is already 4 nm. The comparison
-is the augmented-clean value, not the read and not the noisy input.
+``recon_native_size`` records that target's grid.  After the forward pass,
+Resample average-pools the 4 nm head onto that native resolution, so each
+native voxel is the mean of the 4 nm voxels in its bin, and skips the pool
+when the crop is already 4 nm. The comparison
+is the augmented value, not the read and not the corrupted input.
 
 ``rand_transpose_zyx`` (train only) then draws a uniform permutation of the
 three axes, after :class:`~nanocosmos.transforms.ToFineGridd` and
@@ -424,7 +425,7 @@ class Joint3DDataModule(pl.LightningDataModule):
 
         Always runs, after degradation and after the zyx permutation, so
         collation sees one 4 nm shape. ``recon_native_size`` is the permuted
-        native grid the L1 average-pools back to.
+        native resolution Resample pools back to.
         """
         tf.append(ReconNearestToFined(self.fine_patch))
 

@@ -18,12 +18,12 @@ voxel size and brought onto that grid by :class:`ToFineGridd`:
 
 ``image_mode`` defaults to ``"nearest"``: a voxel coarser than 4 nm is one
 measurement, so the network input repeats it as a constant block.  The
-reconstruction L1 average-pools the 4 nm prediction back to the native crop.
+reconstruction Resample average-pools the 4 nm prediction back to the native resolution.
 
 On the ``sft`` branch the clean native image is captured as ``recon_image``
 before the image is resampled (the raw data-consistency target).  On ``ssl``
 the degradation transform has already written ``recon_image`` (the augmented
-clean patch: jitter and contrast); this transform only moves the two onto
+patch: jitter and contrast); this transform only moves the two onto
 their grids.
 """
 
@@ -123,8 +123,8 @@ class ReconNearestToFined(MapTransform):
     Runs after degradation and after a zyx permutation, before collation.
     ``recon_image`` becomes a nearest-neighbour upsample of the native crop,
     so every sample has the 4 nm shape. ``recon_native_size`` is the spatial
-    size before that upsample. The L1 average-pools the 4 nm prediction
-    back to that size.
+    size before that upsample. Resample average-pools the 4 nm prediction
+    back to that native resolution.
     """
 
     def __init__(

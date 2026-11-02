@@ -118,22 +118,21 @@ data:
   # length stays fixed regardless of how they are set.
   balance: volume
 
-  # ---- SSL pair.  Jitter and contrast augment the clean crop and are the
-  # loss target.  A 4 nm crop is then nearest-downsampled in z.  Missing
-  # sections and noise touch the input only.  A coarser crop skips the
-  # downsample and still gets those input defects.  The next transform
-  # nearest-upsamples onto the 4 nm grid.
+  # ---- SSL pair.  Augment (jitter, contrast) is the loss target.  Degrade
+  # nearest-downsamples z of a 4 nm crop.  Corrupt (missing sections, noise)
+  # touches the input only.  A coarser crop skips degrade and still gets
+  # corrupt.  The next transform nearest-upsamples onto the 4 nm grid.
   degrade:
     # Section thickness on a 4 nm crop: zf 2..10 is 8..40 nm, log-uniform.
     zf_range: [2.0, 10.0]
-    missing_prob: 0.3           # degraded input only
+    missing_prob: 0.3           # Corrupt, input only
     max_missing: 2
     missing_fill: zero
-    jitter_prob: 0.5            # clean crop, before degrade; in the loss target
+    jitter_prob: 0.5            # Augment; in the loss target
     max_jitter: 2.0             # +/- voxels
-    noise_prob: 0.3             # degraded input only
+    noise_prob: 0.3             # Corrupt, input only
     noise_std: 0.01
-    contrast_prob: 0.5          # clean crop, before degrade; in the loss target
+    contrast_prob: 0.5          # Augment; in the loss target
     contrast_gamma: [0.8, 1.25]
 
   # ---- the resolution ladder, as two task branches; the multi-task sampler

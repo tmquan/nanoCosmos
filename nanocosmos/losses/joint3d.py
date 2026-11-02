@@ -23,10 +23,11 @@ per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
 (8 nm) is one such rung.
 
 ``ssl``  -- self-supervised reconstruction.  The batched ``recon_image`` is
-    the augmented clean crop (jitter and contrast) nearest-upsampled to
-    4 nm.  The L1 average-pools ``raw`` onto ``recon_native_size`` (each
-    native voxel is the mean of the 4 nm voxels in its bin) and compares it
-    to those augmented-clean values.  A 4 nm crop skips the pool.
+    the augmented crop (jitter and contrast) nearest-upsampled to
+    4 nm.  Resample average-pools ``raw`` onto the native resolution
+    ``recon_native_size`` (each native voxel is the mean of the 4 nm voxels
+    in its bin) and the L1 compares it to those augmented values.  A 4 nm
+    crop skips the resample.
     No segmentation supervision.
 
 ``sft``  -- segmentation, gated by labels: any labeled rung.  The
@@ -297,10 +298,11 @@ class Joint3DReconSegLoss(nn.Module):
     ) -> torch.Tensor:
         """``L1`` (or configured) on the ``raw`` channel vs the clean EM.
 
-        The 4 nm ``raw`` channel is average-pooled onto the native crop, so
-        each native voxel is the mean of the 4 nm voxels in its bin. A crop
-        that is already 4 nm skips that pool. When ``native_size`` is set,
-        ``recon_image`` is the augmented clean crop nearest-upsampled to 4 nm
+        Resample average-pools the 4 nm ``raw`` channel onto the native
+        resolution, so each native voxel is the mean of the 4 nm voxels in
+        its bin. A crop that is already 4 nm skips that resample. When
+        ``native_size`` is set,
+        ``recon_image`` is the augmented crop nearest-upsampled to 4 nm
         and those values are read back off that cube.
         """
         target = _as_channeled(recon_image, head.dim()).to(torch.float32)

@@ -230,8 +230,8 @@ def test_degrade_without_downsample_keeps_depth():
 
 
 def test_degrade_loss_target_is_augmented_clean():
-    """Jitter and contrast are the target. Downsample, missing sections, and
-    noise are derived from that target and do not change it."""
+    """Augment is the target. Degrade and corrupt are derived from it and
+    do not change it."""
     t = RandResolutionDegraded(
         prob=1.0, zf_range=(8.0, 8.0), jitter_prob=0.0, contrast_prob=1.0,
         contrast_gamma=(2.0, 2.0), missing_prob=0.0, noise_prob=0.0,

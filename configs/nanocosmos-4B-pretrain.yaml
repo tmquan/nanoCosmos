@@ -53,9 +53,9 @@ data:
   # in the stored axis order.
   rand_transpose_zyx: true
   # Nearest-upsample onto the 4 nm cube, then batch, so every resolution
-  # stacks at batch_size 2.  The L1 average-pools the 4 nm raw head onto
-  # the augmented clean crop; a 4 nm crop skips that pool.  TensorBoard
-  # shows the 4 nm cube.
+  # stacks at batch_size 2.  After the forward pass, Resample average-pools
+  # the 4 nm raw head onto the native resolution; a 4 nm crop skips it.
+  # TensorBoard shows the 4 nm cube.
   # No resolution jitter of the read FOV.  The network input is the 4 nm grid.
   num_workers: 8
   pin_memory: true
@@ -90,28 +90,27 @@ data:
   # length stays fixed regardless of how they are set.
   balance: volume
 
-  # ---- SSL pair.  Jitter and contrast augment the clean crop and are the
-  # loss target.  A 4 nm crop is then nearest-downsampled in z.  Missing
-  # sections and noise touch the input only.  A coarser crop skips the
-  # downsample and still gets those input defects.  The next transform
-  # nearest-upsamples onto the 4 nm grid.
+  # ---- SSL pair.  Augment (jitter, contrast) is the loss target.  Degrade
+  # nearest-downsamples z of a 4 nm crop.  Corrupt (missing sections, noise)
+  # touches the input only.  A coarser crop skips degrade and still gets
+  # corrupt.  The next transform nearest-upsamples onto the 4 nm grid.
   degrade:
     # Section thickness on a 4 nm crop: zf 2..10 is 8..40 nm, log-uniform.
     zf_range: [2.0, 10.0]
-    missing_prob: 0.3           # degraded input only
+    missing_prob: 0.3           # Corrupt, input only
     max_missing: 2
     missing_fill: zero
-    jitter_prob: 0.5            # clean crop, before degrade; in the loss target
+    jitter_prob: 0.5            # Augment; in the loss target
     max_jitter: 2.0             # +/- voxels
-    noise_prob: 0.3             # degraded input only
+    noise_prob: 0.3             # Corrupt, input only
     noise_std: 0.01
-    contrast_prob: 0.5          # clean crop, before degrade; in the loss target
+    contrast_prob: 0.5          # Augment; in the loss target
     contrast_gamma: [0.8, 1.25]
 
   # ---- resolution ladder, SSL only.  Each volume declares its NATIVE
   # resolution (z, y, x nm).  The network input is nearest-resampled onto
-  # the 4 nm grid.  Downsample runs only on a 4 nm crop.  The L1
-  # average-pools the 4 nm prediction onto the augmented clean crop.
+  # the 4 nm grid.  Downsample runs only on a 4 nm crop.  Resample
+  # average-pools the 4 nm prediction onto the native resolution.
   # TensorBoard shows the 4 nm cube.
   # RandResolutionDegraded builds the large-voxel input.  There is no sft
   # branch in this pretrain. ----

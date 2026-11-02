@@ -19,22 +19,22 @@ spatial size it is given.  In the joint pipeline that size is the
 :class:`~nanocosmos.transforms.fine_grid.ToFineGridd` nearest-upsamples
 ``image`` onto the 4 nm grid:
 
-* ``recon_image``  -- the augmented clean crop (the L1 target): per-section
+* ``recon_image``  -- the augmented crop (the L1 target): per-section
   jitter and gamma contrast, still at the input resolution.
-* ``image``        -- that same crop after degrade and input-only noise.
-  With ``downsample`` it is shorter in ``z`` (nearest-neighbour decimation).
+* ``image``        -- that crop after degrade and corrupt.  With
+  ``downsample`` it is shorter in ``z`` (nearest-neighbour decimation).
   The 4 nm upsample is the next transform, not this one.
 
 The order after the read is:
 
-1. **Augment clean** -- per-section jitter, then gamma contrast.  This
-   snapshot is the reconstruction target.
-2. **Nearest ``z`` downsample** (4 nm only) -- ``d = round(D / zf)`` sections
-   of the augmented clean, each a nearest sample, not an average.  The
-   datamodule turns this on only for a 4 nm crop.
-3. **Augment noise** -- missing / duplicated sections, then per-section
-   Gaussian noise.  These touch ``image`` only.  A coarser crop skips the
-   downsample and still gets this step, at its own depth.
+1. **Augment** -- per-section jitter, then gamma contrast.  This snapshot
+   is the reconstruction target.
+2. **Degrade** -- nearest ``z`` downsample (4 nm only).  ``d = round(D / zf)``
+   sections of the augmented crop, each a nearest sample, not an average.
+   The datamodule turns this on only for a 4 nm crop.
+3. **Corrupt** -- missing sections, then per-section Gaussian noise.  These
+   touch ``image`` only.  A coarser crop skips degrade and still gets this
+   step, at its own depth.
 
 Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
@@ -60,16 +60,14 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
     Args:
         keys: Image key(s) to degrade.  Default ``("image",)``.
-        recon_key: Key under which the augmented clean crop (jitter and
-            contrast, the reconstruction target) is stored.  Default
-            ``"recon_image"``.
+        recon_key: Key under which the augmented crop (jitter and contrast,
+            the reconstruction target) is stored.  Default ``"recon_image"``.
         zf_range: ``(min, max)`` factor on the input z size, used only when
             ``downsample`` is set.  ``d = round(D / zf)``.  On a 4 nm crop,
             ``(2, 10)`` spans 8 nm to 40 nm sections.  Sampled log-uniformly.
-        downsample: Nearest-downsample ``z`` of the augmented clean, before
-            missing sections and noise.  The datamodule sets this only for a
-            4 nm crop.  Off: those input defects still run, at the crop's
-            own depth.
+        downsample: Degrade by nearest-downsampling ``z`` of the augmented
+            crop, before corrupt.  The datamodule sets this only for a 4 nm
+            crop.  Off: corrupt still runs, at the crop's own depth.
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
             exists).
@@ -226,9 +224,9 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
             do = self.R.random() < self.prob and D > 1
             if do:
-                # Augment clean first.  Jitter and contrast are the values
-                # the loss compares to; degrade and noise are derived from
-                # this snapshot and do not write back into it.
+                # Augment first.  Jitter and contrast are the values the loss
+                # compares to.  Degrade and corrupt are derived from this
+                # snapshot and do not write back into it.
                 if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
                     clean = self._jitter_sections(clean)
                 if self.R.random() < self.contrast_prob:
