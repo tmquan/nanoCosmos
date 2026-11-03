@@ -44,6 +44,9 @@ from nanocosmos.models.cosmos_2_5_common.layers import (
     _adapt_to_rgb,
 )
 from nanocosmos.models.cosmos_2_5_common.standalone_dit import _StandaloneDiT3D
+from nanocosmos.models.cosmos_2_5_common.vae_isotropic import (
+    make_wan_compression_isotropic,
+)
 from nanocosmos.models.cosmos_2_5_common.variants import _VariantConfigBase
 
 logger = logging.getLogger(__name__)
@@ -269,6 +272,15 @@ class _BaseCosmos25Wrapper(nn.Module):
         if self._backend == "diffusers":
             self._register_persistent_hooks()
 
+        wan_patch_size = None
+        vae_holder = getattr(self, "_vae_ref", None)
+        if vae_holder:
+            vae_cfg = getattr(vae_holder[0], "config", None)
+            raw_patch = (
+                getattr(vae_cfg, "patch_size", None) if vae_cfg is not None else None
+            )
+            if raw_patch is not None:
+                wan_patch_size = int(raw_patch)
         self.decoder_adapter = _DecoderAdapter3D(
             vae_decoder=self.vae_decoder,
             latent_channels=self.cfg.latent_channels,
@@ -282,6 +294,7 @@ class _BaseCosmos25Wrapper(nn.Module):
             skip_channels=highres_skip_channels,
             image_channels=in_channels,
             symmetrize_z=self._vae_symmetrize_z,
+            wan_patch_size=wan_patch_size,
         )
         if self.decoder_adapter.to_latent is not None:
             self.decoder_adapter.to_latent.float()
@@ -603,6 +616,12 @@ class _BaseCosmos25Wrapper(nn.Module):
             )
 
             vae = vae.to(self._dtype)
+            # Released Wan2.2 is 16x in xy and 4x in z. Drop the xy-only
+            # patch and make the xy-only resample also halve z, so both
+            # axes are 8x. The new temporal conv is not in the checkpoint.
+            # encoder conv_in / decoder conv_out shapes change, so a
+            # checkpoint saved before this edit will not strict-load.
+            make_wan_compression_isotropic(vae)
             self._vae_ref = [vae]
             self.vae_encoder = vae.encoder
             # CHECKPOINT INVARIANT: this Wan decoder is intentionally registered
@@ -919,9 +938,9 @@ class _BaseCosmos25Wrapper(nn.Module):
 
         Diagnostic only. Joint runs log ``pred/wan_decoder``; the affinity
         ``ImageLogger`` logs ``true/wan_decoder``. ``conv_out`` is frozen.
-        On the released Edge Wan2.2 VAE it emits 12 channels. The official
-        VAE decode unpatchifies those to RGB and clamps to ``[-1, 1]``;
-        this path returns the raw activation at the input spatial size.
+        On the released Edge Wan2.2 VAE it emits 12 packed channels
+        (``patch_size=2``, xy only). This path unpatchifies those to RGB
+        and clamps to ``[-1, 1]``, same as ``AutoencoderKLWan._decode``.
 
         Args:
             x: Input volume ``[B, C, D, H, W]`` (single-channel EM is
@@ -929,8 +948,9 @@ class _BaseCosmos25Wrapper(nn.Module):
                 patchifies to the VAE's 12-channel input).
 
         Returns:
-            ``[B, C_out, D, H, W]`` from :meth:`_DecoderAdapter3D.wan_reconstruct`,
-            or ``None`` if the wrapper was built without a pretrained VAE.
+            ``[B, 3, D, H, W]`` RGB in ``[-1, 1]`` from
+            :meth:`_DecoderAdapter3D.wan_reconstruct`, or ``None`` if the
+            wrapper was built without a pretrained VAE.
         """
         if not getattr(self.decoder_adapter, "_has_pretrained", False):
             return None

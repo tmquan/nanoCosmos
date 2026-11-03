@@ -28,6 +28,53 @@ from nanocosmos.losses import HEAD_CHANNELS
 logger = logging.getLogger(__name__)
 
 
+def unpatchify_wan(x: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """Invert the Wan xy pixel-shuffle.
+
+    ``x`` is ``[B, C * p * p, D, H, W]`` from ``conv_out``. The result is
+    ``[B, C, D, H * p, W * p]``. Depth is not patched. ``p == 1`` returns
+    ``x``. The layout matches diffusers ``unpatchify``.
+    """
+    p = int(patch_size)
+    if p == 1:
+        return x
+    if p < 1:
+        raise ValueError(f"Wan patch_size must be >= 1, got {p}.")
+    if x.dim() != 5:
+        raise ValueError(
+            f"Wan conv_out must be [B, C, D, H, W], got {tuple(x.shape)}."
+        )
+    batch, packed, depth, height, width = x.shape
+    area = p * p
+    if packed % area != 0:
+        raise ValueError(
+            f"Wan conv_out channels {packed} are not divisible by "
+            f"patch_size**2={area}."
+        )
+    channels = packed // area
+    x = x.view(batch, channels, p, p, depth, height, width)
+    # (p_w, p_h) packing: the second patch axis is the row offset.
+    x = x.permute(0, 1, 4, 5, 3, 6, 2).contiguous()
+    return x.view(batch, channels, depth, height * p, width * p)
+
+
+def _wan_patch_size_for(out_channels: int, configured: Optional[int]) -> int:
+    """Pixel-shuffle factor for a Wan ``conv_out``.
+
+    The released Edge VAE uses ``patch_size=2`` and ``out_channels=12``
+    (``3 * 2 * 2``). When the VAE config does not say, infer ``p`` from
+    ``out_channels == 3 * p * p``.
+    """
+    if configured is not None:
+        return int(configured)
+    if out_channels > 0 and out_channels % 3 == 0:
+        area = out_channels // 3
+        root = int(round(area ** 0.5))
+        if root >= 1 and root * root == area:
+            return root
+    return 1
+
+
 class _FeatureProjector3D(nn.Module):
     """Fuse multi-layer DiT features into a 3-D spatial feature map."""
 
@@ -144,6 +191,7 @@ class _DecoderAdapter3D(nn.Module):
         skip_channels: int = 8,
         image_channels: int = 1,
         symmetrize_z: bool = False,
+        wan_patch_size: Optional[int] = None,
     ) -> None:
         super().__init__()
         self._has_pretrained = vae_decoder is not None
@@ -157,6 +205,12 @@ class _DecoderAdapter3D(nn.Module):
         # ``_ProgressiveUpsampler3D`` fallback is not causal, so this is a
         # no-op there. See :meth:`_decode_body`.
         self._symmetrize_z = bool(symmetrize_z)
+        # xy pixel-shuffle of the pretrained ``conv_out``. Set for real in
+        # ``_replace_conv_out``; 1 means the diagnostic is already RGB.
+        self._wan_patch_size_cfg = (
+            None if wan_patch_size is None else int(wan_patch_size)
+        )
+        self._wan_patch_size = 1
 
         # Will be populated by ``_replace_conv_out`` when a pretrained
         # decoder is provided; stays ``None`` for the random-init
@@ -182,7 +236,8 @@ class _DecoderAdapter3D(nn.Module):
             self._hidden_ch = feature_size
 
         # High-resolution input skip.  The decoder features above are
-        # bandwidth-limited by the VAE's spatial_compression (16x on Wan2.2): they
+        # bandwidth-limited by the VAE's spatial_compression (8x after the
+        # isotropic Wan edit; the checkpoint itself is 16x in xy): they
         # carry semantics but not the 1-voxel membranes the affinity head
         # needs.  A thin full-resolution conv stem on the raw input routes
         # those sharp edges *around* the latent bottleneck and is fused with
@@ -235,14 +290,22 @@ class _DecoderAdapter3D(nn.Module):
                 self.original_conv_out = final
                 for p in self.original_conv_out.parameters():
                     p.requires_grad = False
+                if hasattr(final, "out_channels"):
+                    out_ch = int(final.out_channels)
+                else:
+                    out_ch = int(final.weight.shape[0])
+                self._wan_patch_size = _wan_patch_size_for(
+                    out_ch, self._wan_patch_size_cfg,
+                )
                 setattr(self.decoder_body, attr, nn.Identity())
                 logger.info(
                     "Replaced decoder.%s (hidden_ch=%d) with Identity; "
                     "preserved original conv_out as adapter.original_conv_out "
-                    "(frozen) for the diagnostic wan_decoder panel "
+                    "(frozen, out_channels=%d, patch_size=%d) for the "
+                    "diagnostic wan_decoder panel "
                     "(joint: pred/wan_decoder; affinity ImageLogger: "
                     "true/wan_decoder).",
-                    attr, ch,
+                    attr, ch, out_ch, self._wan_patch_size,
                 )
                 return ch
         logger.warning(
@@ -308,10 +371,11 @@ class _DecoderAdapter3D(nn.Module):
         return decoded
 
     def _decode_body(
-        self, features: torch.Tensor, target_size: tuple,
+        self, features: torch.Tensor, target_size: tuple, *, resize: bool = True,
     ) -> torch.Tensor:
         """Run features through ``decoder_body`` (with the swapped-out
-        ``Identity`` final conv) and resize to ``target_size``.
+        ``Identity`` final conv). When ``resize`` is set, trilinear-resize
+        to ``target_size`` for the task head.
 
         Returns the post-norm-out, pre-conv-out feature volume that the
         unified head consumes.  Shared between :meth:`forward` and
@@ -338,7 +402,11 @@ class _DecoderAdapter3D(nn.Module):
             decoded = decoded.to(features.dtype)
         else:
             decoded = self.decoder_body(features)
-        if decoded.shape[-3:] != target_size:
+        # The task head wants features on the 4 nm grid. The pretrained
+        # conv_out does not: it emits a packed xy patch on the decoder's
+        # native grid (half xy, full z). ``wan_reconstruct`` passes
+        # ``resize=False`` and unpatchifies afterwards.
+        if resize and decoded.shape[-3:] != target_size:
             decoded = F.interpolate(
                 decoded, size=target_size, mode="trilinear", align_corners=False,
             )
@@ -348,31 +416,41 @@ class _DecoderAdapter3D(nn.Module):
     def wan_reconstruct(
         self, features: torch.Tensor, target_size: tuple,
     ) -> Optional[torch.Tensor]:
-        """Diagnostic Wan ``conv_out`` applied to the task-head features.
+        """Diagnostic Wan RGB decode of the task-head features.
 
-        Mirrors :meth:`forward`'s body pass and then applies the
-        original Wan ``conv_out`` (preserved at construction in
+        Mirrors :meth:`forward`'s body pass, then applies the original
+        Wan ``conv_out`` (preserved at construction in
         :attr:`original_conv_out` before the adapter swapped it for
         ``Identity``) instead of the unified task head.
 
-        Diagnostic only. The body features are already resized to
-        ``target_size``. On the released Edge Wan2.2 VAE, ``conv_out``
-        emits 12 channels (``out_channels``, ``patch_size=2``). The
-        official ``AutoencoderKLWan.decode`` unpatchifies that tensor to
-        3-channel RGB and clamps to ``[-1, 1]``. This path returns the
-        raw ``conv_out`` activation and does neither. ``to_latent`` is
-        randomly initialised, so step 0 is the pretrained decoder on a
-        random projection of the DiT features.
+        Diagnostic only. ``conv_out`` runs on the decoder's native grid.
+        On the released Edge Wan2.2 VAE that grid is full depth and half
+        xy, and ``conv_out`` emits 12 channels (``3 * patch_size**2`` with
+        ``patch_size=2``). Those channels are an xy pixel-shuffle, not an
+        image. This path unpatchifies them to 3-channel RGB and clamps to
+        ``[-1, 1]``, matching ``AutoencoderKLWan._decode``. Resizing the
+        body to the full 4 nm cube *before* ``conv_out`` and then averaging
+        the 12 channels paints a 2-pixel weave on xy and stripes on xz/yz.
+
+        ``to_latent`` is randomly initialised, so the panel is the
+        pretrained decoder on a random projection of the DiT features, not
+        the training reconstruction (``pred/recon``).
 
         Returns:
-            ``[B, C_out, D, H, W]`` at the input spatial size, or
+            ``[B, 3, D, H, W]`` RGB in ``[-1, 1]`` at ``target_size``, or
             ``None`` if the wrapper was built without a pretrained VAE.
         """
         if not self._has_pretrained or self.original_conv_out is None:
             return None
-        decoded = self._decode_body(features, target_size)
+        decoded = self._decode_body(features, target_size, resize=False)
         body_dtype = next(self.original_conv_out.parameters()).dtype
-        rgb = self.original_conv_out(decoded.to(body_dtype))
+        packed = self.original_conv_out(decoded.to(body_dtype))
+        rgb = unpatchify_wan(packed, self._wan_patch_size).clamp(-1.0, 1.0)
+        spatial = tuple(int(s) for s in target_size)
+        if tuple(rgb.shape[-3:]) != spatial:
+            rgb = F.interpolate(
+                rgb.float(), size=spatial, mode="trilinear", align_corners=False,
+            )
         return rgb.to(features.dtype)
 
 

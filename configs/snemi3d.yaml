@@ -303,15 +303,15 @@ model:
   feature_size: 64
 
   # --- Effective latent resolution (membrane sharpness) ---
-  # The pretrained Wan VAE has a fixed 16x in-plane spatial compression
-  # (4x in z), so a 1-voxel membrane lands inside one latent cell and the
-  # decode is blurry -> soft affinities -> Mutex Watershed under-segmentation.
+  # The Wan VAE compresses 8x on z and xy, so a 1-voxel membrane lands
+  # inside one latent cell and the decode is blurry -> soft affinities ->
+  # Mutex Watershed under-segmentation.
   # ``input_supersample`` upsamples the EM in-plane *before* the VAE, so
-  # the latent grid is ``input/16`` of a larger image: at 2 the latent is
-  # H/8, W/8 of the original (H/16, W/16 at 1) -- 2x finer per membrane.
-  # Cost: ~factor^2 more DiT tokens + VAE work (Z is left alone, matching
-  # anisotropy), so cut ``data.batch_size`` to fit.  ``1`` disables.
-  input_supersample: 1            # 2 -> latent H/8, W/8 (H/16, W/16 at 1)
+  # the latent grid is ``input/8`` of a larger image: at 2 the latent is
+  # H/4, W/4 of the original (H/8, W/8 at 1) -- 2x finer per membrane.
+  # Cost: ~factor^2 more DiT tokens + VAE work (z is not supersampled),
+  # so cut ``data.batch_size`` to fit.  ``1`` disables.
+  input_supersample: 1            # 2 -> latent H/4, W/4 (H/8, W/8 at 1)
   # Full-resolution input skip into the head: routes the raw EM's sharp
   # edges *around* the VAE bottleneck and fuses them before the head.
   # Independent of input_supersample; can be combined.  Disabled here so

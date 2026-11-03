@@ -10,7 +10,7 @@
 #   training.compile = false  (checkpoint HOP and forward-hook capture)
 #   training.compile_fullgraph = true
 #
-# Cosmos 3 Nano's VAE uses 16x spatial compression, which blurs
+# Cosmos 3 Nano's VAE uses 8x compression on z and xy, which blurs
 # membranes.  Pair it with a high-resolution input when
 # under-segmentation shows up.
 #

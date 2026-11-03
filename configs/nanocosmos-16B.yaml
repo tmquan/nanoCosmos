@@ -59,9 +59,9 @@ data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 200 x 256 x 256 @ 4 nm; z-heavy (super-resolution axis).  Cosmos-3 Wan VAE
-  # compresses 4x in z, 16x in xy -> DiT token grid (50, 16, 16) = 12,800 tokens.
-  # xy matches nanocosmos-4B (16 x 16); z is 50 because this patch is z=200
-  # (that recipe is z=400 -> 100). Nano is memory-heavier: keep patch/batch
+  # compresses 8x on z and xy -> DiT token grid (25, 32, 32) = 25,600 tokens.
+  # xy matches nanocosmos-4B (32 x 32); z is 25 because this patch is z=200
+  # (that recipe is z=400 -> 50). Nano is memory-heavier: keep patch/batch
   # smaller than nanocosmos-4B. Drop further (e.g. 160x256x256) if it OOMs.
   patch_size: [200, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm

@@ -11,7 +11,7 @@
 # (0.39) builds a gated-SiLU MLP the checkpoint does not contain.
 # Runtime matches the pretrain config: BF16, volume roots under
 # ``${oc.env:HOME}/data``, ``hydra.job.chdir: false``.  Edge shares
-# Nano's Wan2.2-TI2V VAE (16x-xy / 4x-z) and has ~4x fewer transformer
+# Nano's Wan2.2-TI2V VAE (isotropic 8x on z and xy) and has ~4x fewer transformer
 # params, so it usually fits with a comparable or larger batch than the
 # 16B recipe.
 #
@@ -67,10 +67,11 @@ data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm voxel.  patch_size is (z, y, x) on that grid.
   # 400 x 256 x 256 @ 4 nm = 1.6 x 1.02 x 1.02 um FOV; z-heavy on purpose (z is the
-  # super-resolution axis).  Cosmos3-Edge shares Nano's Wan2.2 VAE (4x in z, 16x
-  # in xy) plus the latent_patch_size 2->1 repatch, so the DiT token grid is the
-  # full latent grid (400/4, 256/16, 256/16) = (100, 16, 16) = 25,600 tokens --
-  # 2x the 16B recipe's z-depth (200 -> 50) because this patch is z=400 vs 200.
+  # super-resolution axis).  Cosmos3-Edge shares Nano's Wan2.2 VAE, made
+  # isotropic at 8x on z and xy, plus the latent_patch_size 2->1 repatch, so
+  # the DiT token grid is the full latent grid (400/8, 256/8, 256/8) =
+  # (50, 32, 32) = 51,200 tokens -- 2x the 16B recipe's z-depth
+  # (25 vs 50) because this patch is z=400 vs 200.
   # Edge trims transformer depth/width (not the VAE/token grid) and has ~4x fewer
   # params than Nano, which is why it can afford the deeper patch; but self-
   # attention is quadratic in token count, so drop the patch (e.g. 200x256x256,

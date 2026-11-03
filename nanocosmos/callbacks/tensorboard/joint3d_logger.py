@@ -67,7 +67,9 @@ def _log_ortho_planes(tb, ctx, epoch: int, tag: str, vol: torch.Tensor, fine_siz
     """Log the xy / xz / yz mid-planes of ``vol`` on the 4 nm ``fine_size`` grid.
 
     ``vol`` is ``[B, C, D, H, W]``.  Multi-channel volumes (the Wan decoder's
-    RGB render) are averaged to one grayscale plane before the contrast stretch.
+    unpatchified RGB) are averaged to one grayscale plane before the
+    contrast stretch.  That mean is only a display of an image; a packed
+    12-channel ``conv_out`` has to be unpatchified first.
     """
     for name, plane in _orthogonal_midplanes(vol, fine_size).items():
         if plane.shape[1] != 1:
@@ -246,7 +248,8 @@ class Joint3DImageLogger(ImageLogger):
                 tb, ctx, epoch, "pred/Euler", few_raw[:n], fine_size,
             )
         # Wan-decoder diagnostic (frozen ``original_conv_out``).
-        # RGB [n,3,D,H,W] ~[-1,1]; each plane is collapsed to grayscale.
+        # Unpatchified RGB [n,3,D,H,W] in [-1,1]; each plane is collapsed
+        # to grayscale. Not the training reconstruction.
         if wan_rgb is not None:
             _log_ortho_planes(
                 tb, ctx, epoch, "pred/wan_decoder", wan_rgb[:n], fine_size,

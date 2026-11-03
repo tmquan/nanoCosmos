@@ -17,7 +17,8 @@ Geometry, verified against the released ``transformer/config.json``
     hidden_size=2048, num_hidden_layers=28, num_attention_heads=16,
     num_key_value_heads=8 (GQA), head_dim=128, intermediate_size=9216
 
-The VAE is Edge's own Wan2.2-TI2V (``z_dim=48``, 16x spatial / 4x temporal).
+The VAE is Edge's own Wan2.2-TI2V (``z_dim=48``). The checkpoint is
+16x spatial / 4x temporal; load makes it 8x on both axes.
 
 Set ``model.pretrained=false`` to skip the download and train the Edge
 geometry from scratch (standalone DiT + learned conv tokenizer).
@@ -39,8 +40,8 @@ _VARIANT_CONFIGS: Dict[str, _VariantConfig] = {
         num_layers=28,
         num_heads=16,
         latent_channels=48,
-        spatial_compression=16,
-        temporal_compression=4,
+        spatial_compression=8,
+        temporal_compression=8,
         # Weight-footprint hint for the ~2B dense tower plus the Wan2.2 VAE.
         estimated_vram_gb=14.0,
         max_sequence_length=131072,
