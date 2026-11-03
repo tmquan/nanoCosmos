@@ -236,8 +236,7 @@ class _DecoderAdapter3D(nn.Module):
             self._hidden_ch = feature_size
 
         # High-resolution input skip.  The decoder features above are
-        # bandwidth-limited by the VAE's spatial_compression (8x after the
-        # isotropic Wan edit; the checkpoint itself is 16x in xy): they
+        # bandwidth-limited by the VAE's spatial_compression (16x on Wan2.2): they
         # carry semantics but not the 1-voxel membranes the affinity head
         # needs.  A thin full-resolution conv stem on the raw input routes
         # those sharp edges *around* the latent bottleneck and is fused with

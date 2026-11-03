@@ -22,11 +22,9 @@ Nano (16B)          4096      36     32    8       128         12288  Qwen3-VL 8
 Super (64B)         5120      64     64    8       128         25600  Qwen3-VL 32B
 ================  ======  ======  =====  ===  ========  ============  ========
 
-Every tier shares the Wan2.2-TI2V VAE (``AutoencoderKLWan``: ``z_dim=48``).
-The checkpoint is 16x spatial / 4x temporal; load drops the xy-only patch
-and makes the xy-only resample also halve z, so both axes are 8x. Published
-``latent_patch_size=2`` (nanoCosmos repatches this to 1 after load),
-``head_dim=128``,
+Every tier shares the Wan2.2-TI2V VAE (``AutoencoderKLWan``: ``z_dim=48``,
+16x spatial / 4x temporal), published ``latent_patch_size=2`` (nanoCosmos
+repatches this to 1 after load), ``head_dim=128``,
 ``num_key_value_heads=8`` (GQA), and mRoPE section ``[24, 20, 20]``.
 The released Edge ``transformer/config.json`` sets ``rope_theta`` to ``1e8``.
 ``_VariantConfig.use_moe`` is local metadata. The tower keeps separate

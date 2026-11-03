@@ -10,8 +10,7 @@ Numbers mirrored verbatim from the published HF config
 Note the Qwen3-VL-style decoupling: ``num_heads * head_dim = 64 * 128 = 8192``
 which is NOT equal to ``hidden_size=5120`` (``q_proj`` projects to 8192, then
 ``o_proj`` back to 5120).  The VAE is the same Wan2.2-TI2V VAE as the other
-tiers (``z_dim=48``). The checkpoint is 16x spatial / 4x temporal;
-load makes it 8x on both axes.
+tiers (``z_dim=48``, 16x spatial / 4x temporal).
 
 Super initialises from pre-trained Qwen3-VL 32B and is loadable from
 HuggingFace.  Only BF16 is officially supported.  This is a very large
@@ -31,8 +30,8 @@ _VARIANT_CONFIGS: Dict[str, _VariantConfig] = {
         num_layers=64,
         num_heads=64,
         latent_channels=48,
-        spatial_compression=8,
-        temporal_compression=8,
+        spatial_compression=16,
+        temporal_compression=4,
         # 32B dense tower @ bf16 ~= 64 GB of weights before activations /
         # optimiser state; assume FSDP sharding for any training.
         estimated_vram_gb=80.0,

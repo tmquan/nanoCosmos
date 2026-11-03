@@ -44,9 +44,6 @@ from nanocosmos.models.cosmos_2_5_common.layers import (
     _adapt_to_rgb,
 )
 from nanocosmos.models.cosmos_2_5_common.standalone_dit import _StandaloneDiT3D
-from nanocosmos.models.cosmos_2_5_common.vae_isotropic import (
-    make_wan_compression_isotropic,
-)
 from nanocosmos.models.cosmos_2_5_common.variants import _VariantConfigBase
 
 logger = logging.getLogger(__name__)
@@ -616,12 +613,6 @@ class _BaseCosmos25Wrapper(nn.Module):
             )
 
             vae = vae.to(self._dtype)
-            # Released Wan2.2 is 16x in xy and 4x in z. Drop the xy-only
-            # patch and make the xy-only resample also halve z, so both
-            # axes are 8x. The new temporal conv is not in the checkpoint.
-            # encoder conv_in / decoder conv_out shapes change, so a
-            # checkpoint saved before this edit will not strict-load.
-            make_wan_compression_isotropic(vae)
             self._vae_ref = [vae]
             self.vae_encoder = vae.encoder
             # CHECKPOINT INVARIANT: this Wan decoder is intentionally registered

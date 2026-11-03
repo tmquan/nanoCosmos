@@ -38,9 +38,8 @@ ckpt_path_only_prefixes: null
 data:
   dataset: joint3d        # -> Joint3DDataModule (multi-task round-robin)
   # Fixed FINE network grid: 4 nm cubic voxel.  patch_size is (z, y, x).
-  # The Wan VAE is isotropic 8x (released 16x xy / 4x z: the xy-only patch
-  # is dropped and the xy-only resample also halves z).  256^3 -> latent
-  # 32^3 = 32768 tokens.
+  # Wan2.2 VAE is 4x in z and 16x in xy. latent_patch_size 2->1 leaves
+  # the DiT on the latent grid (64, 16, 16) = 16,384 tokens.
   patch_size: [256, 256, 256]
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # Train-only random permutation of z, y, x.  The FOV is cubic, so each of

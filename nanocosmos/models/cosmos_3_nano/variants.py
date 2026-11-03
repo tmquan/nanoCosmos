@@ -7,8 +7,7 @@ Numbers mirrored verbatim from the published HF config
 ``intermediate_size=12288`` (MLP ratio 3.0), ``latent_channel=48``,
 ``latent_patch_size=2``, ``max_position_embeddings=262144``, ``use_moe=true``.
 The VAE (``vae/config.json``, ``AutoencoderKLWan``, Wan2.2-TI2V) is
-``z_dim=48``. The checkpoint is 16x spatial / 4x temporal; load makes
-it 8x on both axes.
+``z_dim=48``, 16x spatial / 4x temporal.
 
 Nano initialises from pre-trained Qwen3-VL 8B and is loadable from HuggingFace.
 Only BF16 is officially supported (per the model card); keep ``model.dtype``
@@ -27,8 +26,8 @@ _VARIANT_CONFIGS: Dict[str, _VariantConfig] = {
         num_layers=36,
         num_heads=32,
         latent_channels=48,
-        spatial_compression=8,
-        temporal_compression=8,
+        spatial_compression=16,
+        temporal_compression=4,
         # 16B params @ bf16 ~= 32 GB of weights before activations /
         # optimiser state; a frozen feature-extractor forward fits in
         # ~40 GB, an end-to-end fine-tune needs materially more.
