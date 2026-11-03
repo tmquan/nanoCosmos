@@ -501,8 +501,8 @@ model:
   dropout: 0.0                 # no dropout anywhere in the Cosmos3 model (matches 16B)
   pretrained: true
   dtype: bf16                  # weight dtype; paired with training.precision bf16-true
-  # VAE encoder stays frozen.  VAE decoder stays frozen except its last
-  # up-block and output norm (kept trainable by ``_freeze_body`` in
+  # VAE encoder stays frozen.  VAE decoder stays frozen, including the
+  # last up-block and output norm (``_freeze_body`` in
   # ``nanocosmos/models/cosmos_2_5_common/decoder.py``).  The AR reasoner
   # stays frozen (embed_tokens, AR MLP, AR norms, lm_head, and the AR half
   # of packed attention).  ``freeze_dit_backbone: false`` trains the DiT
@@ -533,7 +533,7 @@ model:
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
+  vae_symmetrize_z: false  # causal Wan z; true averages forward with z-flipped encode and decode
 
 optimizer:
   lr: 0.0002

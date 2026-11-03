@@ -866,7 +866,7 @@ model:
   - dit
   - decode
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
+  vae_symmetrize_z: false  # causal Wan z; true averages forward with z-flipped encode and decode
 
 optimizer:
   lr: 0.0002

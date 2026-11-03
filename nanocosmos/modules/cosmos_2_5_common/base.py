@@ -12,9 +12,9 @@ this module adds:
   ``freeze_dit_backbone``, ``freeze_understanding_stream``,
   ``freeze_understanding_ffn``). An integer
   ``freeze_dit_backbone`` is a warm-up thawed in
-  :meth:`on_train_epoch_start`. ``freeze_vae_decoder`` leaves the
-  decoder's last up-block and output norm trainable, and the decode
-  stays on the loss path into the DiT
+  :meth:`on_train_epoch_start`. ``freeze_vae_decoder`` freezes the
+  whole decoder body, including the last up-block and output norm, and
+  the decode stays on the loss path into the DiT
 * fused-norm NaN/Inf gradient guard (one device->host sync per step
   via :func:`torch._foreach_norm` rather than one per parameter --
   see :meth:`BaseCosmosModule.configure_gradient_clipping`)

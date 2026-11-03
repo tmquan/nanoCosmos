@@ -167,13 +167,12 @@ class _BaseCosmos25Wrapper(nn.Module):
         # the Wan VAE over z -- encoder and decoder body -- by averaging the
         # forward pass with a z-flipped pass (see :meth:`_encode_to_latent`
         # and ``_DecoderAdapter3D._decode_body``). The encoder stays frozen.
-        # With ``freeze_vae_decoder`` the last up-block and output norm stay
-        # trainable, and gradients still flow through the body into the DiT.
+        # With ``freeze_vae_decoder`` the whole decoder body stays frozen,
+        # and gradients still flow through the body into the DiT.
         # Costs one extra encode and one extra decode. This shifts the latent
         # distribution and adds no state_dict keys. A checkpoint trained with
         # the flag off must resume with it off, and one trained with it on
-        # (the pretrain config sets ``vae_symmetrize_z: true``) must resume
-        # with it on.
+        # must resume with it on. Configs leave it off.
         self._vae_symmetrize_z = bool(vae_symmetrize_z)
         # Temporal chunk size for the residual Wan VAE decode (frames per
         # decoder pass after the mandatory single-frame first chunk).  Larger =
@@ -1074,7 +1073,7 @@ class _BaseCosmos25Wrapper(nn.Module):
     def freeze_vae_decoder(self) -> None:
         self.decoder_adapter._freeze_body()
         logger.info(
-            "VAE decoder early/mid blocks frozen; last up-block and output norm stay trainable."
+            "VAE decoder frozen (body, last up-block, and output norm)."
         )
 
     def unfreeze_vae_decoder(self) -> None:

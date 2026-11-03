@@ -158,12 +158,13 @@ class _DecoderAdapter3D(nn.Module):
     otherwise drop the pretrained weights.
 
     Freeze policy when ``freeze_vae_decoder`` is set:
-      - Decoder body (early / mid blocks): frozen
-      - Last up-block + output norm: trainable
+      - Decoder body, including the last up-block and output norm: frozen
       - ``to_latent`` and the task head: trainable
       - Preserved ``original_conv_out``: frozen (diagnostic only)
     The body stays in the autograd graph, so the loss reaches the DiT
-    through the decoder.
+    through the decoder. The last block stays frozen on purpose: it is the
+    basis ``conv_out`` unpacks into RGB. Training it leaves that basis, and
+    ``pred/wan_decoder`` collapses to the 2×2 pixel-shuffle tile.
 
     CHECKPOINT INVARIANT: which submodules exist here is conditional. With a
     pretrained VAE (``pretrained=True``) this holds ``to_latent`` +
@@ -199,9 +200,9 @@ class _DecoderAdapter3D(nn.Module):
         self.highres_skip = bool(highres_skip)
         # Average the causal Wan decoder body with a z-flipped decode so EM
         # depth is symmetric (same ``vae_symmetrize_z`` as the encoder).
-        # Early/mid blocks may be frozen; the last up-block and output norm
-        # stay trainable when ``freeze_vae_decoder`` is set, and gradients
-        # still flow through the body. The random-init
+        # ``freeze_vae_decoder`` freezes the whole body, including the last
+        # up-block and output norm. Gradients still flow through it into
+        # ``to_latent`` and the DiT. The random-init
         # ``_ProgressiveUpsampler3D`` fallback is not causal, so this is a
         # no-op there. See :meth:`_decode_body`.
         self._symmetrize_z = bool(symmetrize_z)
@@ -314,20 +315,12 @@ class _DecoderAdapter3D(nn.Module):
         return self.to_latent.linear.out_features
 
     def _freeze_body(self) -> None:
+        # The whole pretrained body, not only the early blocks. The frozen
+        # ``conv_out`` reads this basis. Thawing the last up-block and the
+        # output norm lets the task head abandon it, and the diagnostic RGB
+        # becomes a constant 2×2 tile.
         for p in self.decoder_body.parameters():
             p.requires_grad = False
-        for attr in ("up_blocks", "up"):
-            if hasattr(self.decoder_body, attr):
-                blocks = getattr(self.decoder_body, attr)
-                if hasattr(blocks, "__len__") and len(blocks) > 0:
-                    for p in blocks[-1].parameters():
-                        p.requires_grad = True
-                break
-        for attr in ("conv_norm_out", "norm_out"):
-            if hasattr(self.decoder_body, attr):
-                for p in getattr(self.decoder_body, attr).parameters():
-                    p.requires_grad = True
-                break
 
     def _unfreeze_body(self) -> None:
         for p in self.decoder_body.parameters():
@@ -384,9 +377,8 @@ class _DecoderAdapter3D(nn.Module):
         When ``symmetrize_z`` is set, the Wan body is run twice -- forward
         and z-flipped -- and averaged, so the causal temporal decode is
         symmetric along the EM depth axis. ``to_latent`` and the head run
-        once each. With ``freeze_vae_decoder``, early/mid blocks stay frozen
-        and the last up-block plus output norm still train, so this decode
-        stays on the loss path. Costs a second decode.
+        once each. With ``freeze_vae_decoder`` the body weights stay frozen
+        and this decode stays on the loss path. Costs a second decode.
         """
         if self._has_pretrained:
             latent = self.to_latent(features)

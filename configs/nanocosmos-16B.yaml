@@ -836,7 +836,7 @@ model:
   freeze_vae_decoder: true
   gradient_checkpointing: true
   vae_input_pm1: true
-  vae_symmetrize_z: true  # non-causal z: avg(forward, z-flipped) encode and decoder body
+  vae_symmetrize_z: false  # causal Wan z; true averages forward with z-flipped encode and decode
 
 optimizer:
   lr: 0.0002                # Cosmos 3 generator SFT base LR (2e-4)
