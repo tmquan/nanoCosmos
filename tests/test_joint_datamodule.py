@@ -266,7 +266,7 @@ def test_anisotropic_ssl_keeps_batch_size(synth_root):
         },
         degrade={
             "zf_range": [2.0, 2.0], "missing_prob": 0.0, "jitter_prob": 0.0,
-            "noise_prob": 0.0, "contrast_prob": 0.0,
+            "noise_prob": 0.0, "contrast_prob": 0.0, "volume_contrast_prob": 0.0,
         },
         num_workers=0,
         persistent_workers=False,
@@ -305,7 +305,7 @@ def test_rand_transpose_zyx_augments_finest_axis(synth_root):
         },
         degrade={
             "zf_range": [2.0, 2.0], "missing_prob": 0.0, "jitter_prob": 0.0,
-            "noise_prob": 0.0, "contrast_prob": 0.0,
+            "noise_prob": 0.0, "contrast_prob": 0.0, "volume_contrast_prob": 0.0,
         },
         val_volumes=[{
             "vol": "cosem_vol", "root": synth_root, "task": "ssl",

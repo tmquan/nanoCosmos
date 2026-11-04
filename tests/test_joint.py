@@ -199,7 +199,8 @@ def test_canonical_loss_keys_stable():
 def test_degrade_downsamples_z_and_keeps_clean_target():
     t = RandResolutionDegraded(
         prob=1.0, zf_range=(8.0, 8.0), missing_prob=0.0, jitter_prob=0.0,
-        noise_prob=0.0, contrast_prob=0.0, z_sections_key="z_sections",
+        noise_prob=0.0, contrast_prob=0.0, volume_contrast_prob=0.0,
+        z_sections_key="z_sections",
     )
     t.set_random_state(0)
     img = torch.arange(32, dtype=torch.float32).view(1, 32, 1, 1).expand(1, 32, 16, 16).contiguous()
@@ -218,7 +219,7 @@ def test_degrade_without_downsample_keeps_depth():
     t = RandResolutionDegraded(
         prob=1.0, downsample=False, zf_range=(8.0, 8.0), missing_prob=0.0,
         jitter_prob=0.0, noise_prob=0.0, contrast_prob=0.0,
-        z_sections_key="z_sections",
+        volume_contrast_prob=0.0, z_sections_key="z_sections",
     )
     t.set_random_state(0)
     img = torch.rand(1, 32, 16, 16)
@@ -233,8 +234,9 @@ def test_degrade_loss_target_is_augmented_clean():
     """Augment is the target. Degrade and corrupt are derived from it and
     do not change it."""
     t = RandResolutionDegraded(
-        prob=1.0, zf_range=(8.0, 8.0), jitter_prob=0.0, contrast_prob=1.0,
-        contrast_gamma=(2.0, 2.0), missing_prob=0.0, noise_prob=0.0,
+        prob=1.0, zf_range=(8.0, 8.0), jitter_prob=0.0, contrast_prob=0.0,
+        volume_contrast_prob=1.0, volume_contrast_gamma=(2.0, 2.0),
+        missing_prob=0.0, noise_prob=0.0,
     )
     t.set_random_state(0)
     img = torch.linspace(0.1, 0.9, 32).view(1, 32, 1, 1).expand(1, 32, 8, 8).contiguous()
@@ -250,7 +252,8 @@ def test_degrade_loss_target_is_augmented_clean():
 def test_degrade_noise_does_not_enter_target():
     t = RandResolutionDegraded(
         prob=1.0, downsample=False, jitter_prob=0.0, contrast_prob=0.0,
-        missing_prob=1.0, max_missing=2, noise_prob=1.0, noise_std=0.05,
+        volume_contrast_prob=0.0, missing_prob=1.0, max_missing=2,
+        noise_prob=1.0, noise_std=0.05,
     )
     t.set_random_state(0)
     img = torch.rand(1, 32, 8, 8).clamp(0.2, 0.8)
@@ -258,6 +261,51 @@ def test_degrade_noise_does_not_enter_target():
     assert torch.equal(out["recon_image"].float(), img)
     assert out["image"].shape == img.shape
     assert not torch.allclose(out["image"].float(), img)
+
+
+def test_degrade_missing_section_is_whole_native_section():
+    """Missing runs after corrupt, so no noise or shift reaches the section."""
+    t = RandResolutionDegraded(
+        prob=1.0, downsample=False, jitter_prob=1.0, contrast_prob=1.0,
+        volume_contrast_prob=0.0, missing_prob=1.0, max_missing=2,
+        missing_fill="zero", noise_prob=1.0, noise_std=0.05,
+    )
+    img = torch.rand(1, 26, 16, 16).clamp(0.1, 0.9)
+    for seed in range(5):
+        t.set_random_state(seed)
+        out = t({"image": img.clone()})["image"].float()
+        blank = [z for z in range(26) if torch.count_nonzero(out[:, z]) == 0]
+        assert 1 <= len(blank) <= 2
+        partial = [z for z in range(26) if z not in blank and (out[:, z] == 0).all(dim=-1).any()]
+        assert partial == []
+
+
+def test_degrade_replicated_section_is_exact_copy():
+    t = RandResolutionDegraded(
+        prob=1.0, downsample=False, jitter_prob=1.0, contrast_prob=1.0,
+        volume_contrast_prob=0.0, missing_prob=1.0, max_missing=1,
+        missing_fill="replicate", noise_prob=1.0, noise_std=0.05,
+    )
+    t.set_random_state(3)
+    img = torch.rand(1, 12, 16, 16)
+    out = t({"image": img.clone()})["image"].float()
+    dup = [z for z in range(11) if torch.equal(out[:, z], out[:, z + 1])]
+    assert len(dup) == 1
+
+
+def test_degrade_section_jitter_and_gamma_stay_out_of_target():
+    """Per-section terms are Corrupt. The target only sees one gamma."""
+    t = RandResolutionDegraded(
+        prob=1.0, downsample=False, jitter_prob=1.0, max_jitter=2.0,
+        contrast_prob=1.0, contrast_gamma=(0.5, 2.0),
+        volume_contrast_prob=1.0, volume_contrast_gamma=(2.0, 2.0),
+        missing_prob=0.0, noise_prob=0.0,
+    )
+    t.set_random_state(0)
+    img = torch.rand(1, 16, 12, 12).clamp(0.1, 0.9)
+    out = t({"image": img.clone()})
+    assert torch.allclose(out["recon_image"].float(), img.pow(2.0))
+    assert not torch.allclose(out["image"].float(), img.pow(2.0))
 
 
 def test_degrade_passthrough_still_writes_target():

@@ -19,22 +19,27 @@ spatial size it is given.  In the joint pipeline that size is the
 :class:`~nanocosmos.transforms.fine_grid.ToFineGridd` nearest-upsamples
 ``image`` onto the 4 nm grid:
 
-* ``recon_image``  -- the augmented crop (the L1 target): per-section
-  jitter and gamma contrast, still at the input resolution.
+* ``recon_image``  -- the augmented crop (the L1 target): one gamma for the
+  whole crop, still at the input resolution.
 * ``image``        -- that crop after degrade and corrupt.  With
   ``downsample`` it is shorter in ``z`` (nearest-neighbour decimation).
   The 4 nm upsample is the next transform, not this one.
 
 The order after the read is:
 
-1. **Augment** -- per-section jitter, then gamma contrast.  This snapshot
-   is the reconstruction target.
+1. **Augment** -- one gamma for the whole crop.  This snapshot is the
+   reconstruction target.  Nothing here varies by section, so the target
+   is as isotropic as the read.
 2. **Degrade** -- nearest ``z`` downsample (4 nm only).  ``d = round(D / zf)``
    sections of the augmented crop, each a nearest sample, not an average.
    The datamodule turns this on only for a 4 nm crop.
-3. **Corrupt** -- missing sections, then per-section Gaussian noise.  These
-   touch ``image`` only.  A coarser crop skips degrade and still gets this
-   step, at its own depth.
+3. **Corrupt** -- per-section jitter, per-section gamma, then per-section
+   Gaussian noise.  These touch ``image`` only.  A coarser crop skips
+   degrade and still gets this step, at its own depth.
+4. **Missing** -- last, on every crop.  Whole native sections (the
+   decimated ones on a 4 nm crop) are zeroed or replaced by an exact copy
+   of the nearest surviving section.  Nothing runs after it, so a missing
+   section stays missing.
 
 Image-only: there is no label here (SSL is unlabeled).  When used to
 *synthesise* a large-voxel SFT pair from a labelled small-voxel volume, run it
@@ -60,7 +65,7 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
     Args:
         keys: Image key(s) to degrade.  Default ``("image",)``.
-        recon_key: Key under which the augmented crop (jitter and contrast,
+        recon_key: Key under which the augmented crop (whole-crop gamma,
             the reconstruction target) is stored.  Default ``"recon_image"``.
         zf_range: ``(min, max)`` factor on the input z size, used only when
             ``downsample`` is set.  ``d = round(D / zf)``.  On a 4 nm crop,
@@ -71,14 +76,18 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
             exists).
-        jitter_prob / max_jitter: Per-section in-plane translation
+        volume_contrast_prob / volume_contrast_gamma: Augment.  One gamma
+            ``~ U(volume_contrast_gamma)`` for the whole crop.  In the
+            target and the input.
+        jitter_prob / max_jitter: Corrupt.  Per-section in-plane translation
             (pixels, uniform in ``[-max_jitter, max_jitter]`` per section).
-        missing_prob / max_missing: Missing/duplicated-section defect.
-        missing_fill: ``"zero"`` | ``"replicate"`` for dropped sections.
-        noise_prob / noise_std: Per-section additive Gaussian noise (std
-            relative to the ``[0, 1]`` intensity range).
-        contrast_prob / contrast_gamma: Per-section gamma jitter
+        contrast_prob / contrast_gamma: Corrupt.  Per-section gamma
             ``gamma ~ U(contrast_gamma)``.
+        missing_prob / max_missing: Missing.  Up to ``max_missing`` whole
+            native sections are missing or duplicated, after corrupt.
+        missing_fill: ``"zero"`` | ``"replicate"`` for dropped sections.
+        noise_prob / noise_std: Corrupt.  Per-section additive Gaussian noise
+            (std relative to the ``[0, 1]`` intensity range).
         z_sections_key: Optional key recording the depth after downsample
             (the input depth when downsample is off).
     """
@@ -99,6 +108,8 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         noise_std: float = 0.05,
         contrast_prob: float = 0.5,
         contrast_gamma: Tuple[float, float] = (0.8, 1.25),
+        volume_contrast_prob: float = 0.5,
+        volume_contrast_gamma: Tuple[float, float] = (0.8, 1.25),
         z_sections_key: Optional[str] = None,
         allow_missing_keys: bool = False,
     ) -> None:
@@ -120,6 +131,10 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         self.noise_std = float(noise_std)
         self.contrast_prob = float(contrast_prob)
         self.contrast_gamma = (float(contrast_gamma[0]), float(contrast_gamma[1]))
+        self.volume_contrast_prob = float(volume_contrast_prob)
+        self.volume_contrast_gamma = (
+            float(volume_contrast_gamma[0]), float(volume_contrast_gamma[1]),
+        )
         self.z_sections_key = z_sections_key
 
     # ------------------------------------------------------------------
@@ -156,26 +171,36 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         )
         return x.permute(1, 0, 2, 3).contiguous()
 
-    def _drop_sections(self, coarse: torch.Tensor) -> torch.Tensor:
-        """Blank or replicate up to ``max_missing`` coarse sections.
+    def _pick_missing(self, d: int) -> Dict[int, Optional[int]]:
+        """Choose up to ``max_missing`` of ``d`` native sections to drop.
+
+        Returns ``{section: source}``.  ``source`` is the nearest surviving
+        section for ``"replicate"``, else ``None`` (zero fill).
 
         Deliberately kept separate from :class:`RandMissingSliced` (in
         ``missing_slice.py``): that transform applies the same missing-section
         defect to a full-resolution ``[C, D, H, W]`` image at augmentation
-        time, whereas this operates on the coarse decimated stack inside the
+        time, whereas this operates on the native section stack inside the
         SSL degrade model, so the two are not merged into one helper.
         """
-        c, d, h, w = coarse.shape
-        k = min(int(self.R.randint(1, self.max_missing + 1)), d)
+        k = min(int(self.R.randint(1, self.max_missing + 1)), d - 1)
         drop = sorted(int(i) for i in self.R.choice(d, size=k, replace=False))
         surviving = [i for i in range(d) if i not in drop]
-        out = coarse.clone()
+        out: Dict[int, Optional[int]] = {}
         for z in drop:
             if self.missing_fill == "replicate" and surviving:
-                src = min(surviving, key=lambda s: abs(s - z))
-                out[:, z] = coarse[:, src]
+                out[z] = min(surviving, key=lambda s: abs(s - z))
             else:
-                out[:, z] = 0.0
+                out[z] = None
+        return out
+
+    @staticmethod
+    def _apply_missing(
+        coarse: torch.Tensor, missing: Dict[int, Optional[int]],
+    ) -> torch.Tensor:
+        out = coarse.clone()
+        for z, src in missing.items():
+            out[:, z] = 0.0 if src is None else coarse[:, src]
         return out
 
     def _section_noise(self, coarse: torch.Tensor) -> torch.Tensor:
@@ -196,6 +221,11 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         )
         # Gamma is defined on [0, 1]; clamp to stay in range.
         return coarse.clamp(0.0, 1.0).pow(gamma)
+
+    def _volume_contrast(self, vol: torch.Tensor) -> torch.Tensor:
+        lo, hi = self.volume_contrast_gamma
+        gamma = float(self.R.uniform(lo, hi))
+        return vol.clamp(0.0, 1.0).pow(gamma)
 
     # ------------------------------------------------------------------
     # Apply
@@ -224,13 +254,12 @@ class RandResolutionDegraded(MapTransform, Randomizable):
 
             do = self.R.random() < self.prob and D > 1
             if do:
-                # Augment first.  Jitter and contrast are the values the loss
-                # compares to.  Degrade and corrupt are derived from this
-                # snapshot and do not write back into it.
-                if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
-                    clean = self._jitter_sections(clean)
-                if self.R.random() < self.contrast_prob:
-                    clean = self._section_contrast(clean)
+                # Augment first: the values the loss compares to.  Only
+                # whole-crop changes belong here.  A per-section change in
+                # the target streaks it along z, and the model learns the
+                # streaks.  Degrade and corrupt do not write back into it.
+                if self.R.random() < self.volume_contrast_prob:
+                    clean = self._volume_contrast(clean)
 
                 coarse = clean
                 d_coarse = D
@@ -243,10 +272,17 @@ class RandResolutionDegraded(MapTransform, Randomizable):
                             mode="nearest",
                         ).squeeze(0)
 
-                if d_coarse > 1 and self.R.random() < self.missing_prob:
-                    coarse = self._drop_sections(coarse)
+                if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
+                    coarse = self._jitter_sections(coarse)
+                if self.R.random() < self.contrast_prob:
+                    coarse = self._section_contrast(coarse)
                 if self.noise_std > 0 and self.R.random() < self.noise_prob:
                     coarse = self._section_noise(coarse)
+
+                # Missing is last: corrupt is per section and would give a
+                # missing section its own noise and a duplicate its own shift.
+                if d_coarse > 1 and self.R.random() < self.missing_prob:
+                    coarse = self._apply_missing(coarse, self._pick_missing(d_coarse))
 
                 degraded = coarse
                 if self.z_sections_key is not None:

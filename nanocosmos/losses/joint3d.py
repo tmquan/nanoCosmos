@@ -23,7 +23,7 @@ per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
 (8 nm) is one such rung.
 
 ``ssl``  -- self-supervised reconstruction.  The batched ``recon_image`` is
-    the augmented crop (jitter and contrast) nearest-upsampled to
+    the augmented crop (one gamma for the whole crop) nearest-upsampled to
     4 nm.  Resample average-pools ``raw`` onto the native resolution
     ``recon_native_size`` (each native voxel is the mean of the 4 nm voxels
     in its bin) and the L1 compares it to those augmented values.  A 4 nm

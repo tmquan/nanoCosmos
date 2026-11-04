@@ -23,7 +23,7 @@ reconstruction Resample average-pools the 4 nm prediction back to the native res
 On the ``sft`` branch the clean native image is captured as ``recon_image``
 before the image is resampled (the raw data-consistency target).  On ``ssl``
 the degradation transform has already written ``recon_image`` (the augmented
-patch: jitter and contrast); this transform only moves the two onto
+patch: one gamma for the whole crop); this transform only moves the two onto
 their grids.
 """
 

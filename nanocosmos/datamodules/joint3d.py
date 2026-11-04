@@ -10,8 +10,9 @@ grid (``patch_size`` @ ``pixel_size`` nm, e.g. [400, 400, 400] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
 the fine grid while the label stays native.  SSL then runs Augment
-(jitter, contrast), Degrade (nearest ``z`` downsample, 4 nm only), and
-Corrupt (missing sections and noise) on the input alone.
+(one gamma for the whole crop), Degrade (nearest ``z`` downsample, 4 nm
+only), Corrupt (per-section jitter and gamma, and noise), and Missing (whole
+native sections, every crop) on the input alone.
 ``ToFineGridd`` nearest-upsamples the image onto the 4 nm cube.  The
 augmented target is nearest-upsampled onto that cube after the axis
 permutation, and only then collated, so an anisotropic crop still stacks.
@@ -125,7 +126,7 @@ from nanocosmos.datamodules.condition_text import (  # noqa: E402
 _DEGRADE_KEYS = (
     "zf_range", "prob", "jitter_prob", "max_jitter", "missing_prob",
     "max_missing", "missing_fill", "noise_prob", "noise_std", "contrast_prob",
-    "contrast_gamma",
+    "contrast_gamma", "volume_contrast_prob", "volume_contrast_gamma",
 )
 
 
