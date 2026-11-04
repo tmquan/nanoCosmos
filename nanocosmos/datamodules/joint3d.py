@@ -10,9 +10,12 @@ grid (``patch_size`` @ ``pixel_size`` nm, e.g. [400, 400, 400] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
 the fine grid while the label stays native.  SSL then runs Augment
-(one gamma for the whole crop), Degrade (nearest ``z`` downsample, 4 nm
-only), Corrupt (per-section jitter and gamma, and noise), and Missing (whole
-native sections, every crop) on the input alone.
+(one gamma for the whole crop), Degrade (nearest ``z`` downsample on a 4 nm
+crop; on an anisotropic crop, one random in-plane axis nearest-downsampled to
+the z spacing), Corrupt (per-section jitter and gamma, and noise), and
+Missing (whole native sections, every crop) on the input alone.  The target
+keeps the native crop, so the degraded fine axis is supervised at its own
+resolution.
 ``ToFineGridd`` nearest-upsamples the image onto the 4 nm cube.  The
 augmented target is nearest-upsampled onto that cube after the axis
 permutation, and only then collated, so an anisotropic crop still stacks.
@@ -127,6 +130,7 @@ _DEGRADE_KEYS = (
     "zf_range", "prob", "jitter_prob", "max_jitter", "missing_prob",
     "max_missing", "missing_fill", "noise_prob", "noise_std", "contrast_prob",
     "contrast_gamma", "volume_contrast_prob", "volume_contrast_gamma",
+    "fine_axis_prob",
 )
 
 
@@ -365,7 +369,9 @@ class Joint3DDataModule(pl.LightningDataModule):
                 EnsureChannelFirstd(keys=["image"], channel_dim="no_channel"),
                 RandResolutionDegraded(
                     keys=["image"], recon_key="recon_image",
-                    downsample=self._is_fine_nm(native_res), **self.degrade,
+                    downsample=self._is_fine_nm(native_res),
+                    fine_axis_factor=self._fine_axis_factor(native_res),
+                    **self.degrade,
                 ),
                 ToFineGridd(
                     image_size=self.fine_patch, recon_size=recon_size,
@@ -420,6 +426,14 @@ class Joint3DDataModule(pl.LightningDataModule):
     def _is_fine_nm(self, native_res: Sequence[float]) -> bool:
         """True when every native axis is the fine voxel size (the 4 nm crop)."""
         return all(abs(float(r) - self.fine_nm) <= 1e-3 for r in native_res)
+
+    @staticmethod
+    def _fine_axis_factor(native_res: Sequence[float]) -> Optional[float]:
+        """Native z nm over xy nm when z is coarser than a square xy, else ``None``."""
+        z, y, x = (float(r) for r in native_res)
+        if abs(y - x) > 1e-3 or z <= y * (1.0 + 1e-3):
+            return None
+        return z / y
 
     def _append_recon_on_fine(self, tf: List[Any]) -> None:
         """Nearest-upsample the native clean target onto the fine cube.

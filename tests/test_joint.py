@@ -156,6 +156,22 @@ def test_pool_to_shape_all_axes():
     assert same is head
 
 
+@pytest.mark.parametrize("native", [26, 34, 171, 128, 64])
+def test_pool_undoes_nearest_upsample_at_every_ratio(native):
+    """A native voxel averages exactly the 4 nm voxels it was copied to."""
+    x = torch.rand(1, 1, native, 3, native, dtype=torch.float64)
+    up = torch.nn.functional.interpolate(x, size=(256, 3, 256), mode="nearest")
+    back = Joint3DReconSegLoss._pool_to(up, (native, 3, native))
+    assert torch.allclose(back, x, atol=1e-12)
+
+
+def test_pool_matches_adaptive_avg_at_integer_ratio():
+    x = torch.rand(2, 3, 32, 64, 16)
+    pooled = Joint3DReconSegLoss._pool_to(x, (8, 32, 4))
+    ref = torch.nn.functional.adaptive_avg_pool3d(x, (8, 32, 4))
+    assert torch.allclose(pooled, ref, atol=1e-6)
+
+
 def test_mixed_task_batch_rejected():
     loss = Joint3DReconSegLoss()
     head = _head()
@@ -291,6 +307,32 @@ def test_degrade_replicated_section_is_exact_copy():
     out = t({"image": img.clone()})["image"].float()
     dup = [z for z in range(11) if torch.equal(out[:, z], out[:, z + 1])]
     assert len(dup) == 1
+
+
+def test_degrade_fine_axis_downsamples_one_xy_axis_and_keeps_target():
+    t = RandResolutionDegraded(
+        prob=1.0, downsample=False, fine_axis_factor=10.0, fine_axis_prob=1.0,
+        jitter_prob=0.0, contrast_prob=0.0, volume_contrast_prob=0.0,
+        missing_prob=0.0, noise_prob=0.0,
+    )
+    img = torch.rand(1, 26, 256, 256)
+    shapes = set()
+    for seed in range(8):
+        t.set_random_state(seed)
+        out = t({"image": img.clone()})
+        assert torch.equal(out["recon_image"].float(), img)
+        shapes.add(tuple(out["image"].shape))
+    assert shapes == {(1, 26, 26, 256), (1, 26, 256, 26)}
+
+
+def test_degrade_fine_axis_off_for_isotropic_and_4nm():
+    from nanocosmos.datamodules.joint3d import Joint3DDataModule as DM
+
+    assert DM._fine_axis_factor([8, 8, 8]) is None
+    assert DM._fine_axis_factor([4, 4, 4]) is None
+    assert DM._fine_axis_factor([40, 4, 4]) == pytest.approx(10.0)
+    assert DM._fine_axis_factor([30, 6, 6]) == pytest.approx(5.0)
+    assert DM._fine_axis_factor([33, 4, 4]) == pytest.approx(8.25)
 
 
 def test_degrade_section_jitter_and_gamma_stay_out_of_target():

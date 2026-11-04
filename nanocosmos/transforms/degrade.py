@@ -32,7 +32,12 @@ The order after the read is:
    is as isotropic as the read.
 2. **Degrade** -- nearest ``z`` downsample (4 nm only).  ``d = round(D / zf)``
    sections of the augmented crop, each a nearest sample, not an average.
-   The datamodule turns this on only for a 4 nm crop.
+   The datamodule turns this on only for a 4 nm crop.  On an anisotropic
+   crop it sets ``fine_axis_factor`` (native z nm / xy nm) instead: one
+   random in-plane axis is nearest-downsampled by that factor, so the input
+   is as coarse there as along z while the target keeps the fine axis.
+   After the zyx permutation that axis can point anywhere, and the loss
+   needs real fine detail along it.
 3. **Corrupt** -- per-section jitter, per-section gamma, then per-section
    Gaussian noise.  These touch ``image`` only.  A coarser crop skips
    degrade and still gets this step, at its own depth.
@@ -73,6 +78,11 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         downsample: Degrade by nearest-downsampling ``z`` of the augmented
             crop, before corrupt.  The datamodule sets this only for a 4 nm
             crop.  Off: corrupt still runs, at the crop's own depth.
+        fine_axis_factor: Degrade.  On an anisotropic crop, native z nm over
+            xy nm.  ``None`` (the default, and every isotropic crop) skips
+            the in-plane downsample.
+        fine_axis_prob: Degrade.  Probability of nearest-downsampling one
+            random in-plane axis by ``fine_axis_factor``.
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
             exists).
@@ -98,6 +108,8 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         recon_key: str = "recon_image",
         zf_range: Tuple[float, float] = (2.0, 10.0),
         downsample: bool = True,
+        fine_axis_factor: Optional[float] = None,
+        fine_axis_prob: float = 0.5,
         prob: float = 1.0,
         jitter_prob: float = 0.5,
         max_jitter: float = 2.0,
@@ -117,6 +129,10 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         self.recon_key = str(recon_key)
         self.zf_range = (float(zf_range[0]), float(zf_range[1]))
         self.downsample = bool(downsample)
+        self.fine_axis_factor = (
+            float(fine_axis_factor) if fine_axis_factor is not None else None
+        )
+        self.fine_axis_prob = float(fine_axis_prob)
         self.prob = float(prob)
         self.jitter_prob = float(jitter_prob)
         self.max_jitter = float(max_jitter)
@@ -145,17 +161,22 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         lo, hi = self.zf_range
         return log_uniform(self.R, lo, hi)
 
-    def _jitter_sections(self, coarse: torch.Tensor) -> torch.Tensor:
+    def _jitter_sections(
+        self, coarse: torch.Tensor, scale: Tuple[float, float] = (1.0, 1.0),
+    ) -> torch.Tensor:
         """Translate each coarse section in-plane by a small random shift.
 
         ``coarse`` is ``[C, d, H, W]``.  Each of the ``d`` sections is
         sampled with its own ``(dy, dx)`` pixel offset via ``grid_sample``
         (reflection padding), modelling serial-section registration error.
+        ``scale`` converts the offset from native pixels to ``coarse``
+        pixels on an in-plane axis the fine-axis degrade shortened.
         """
         c, d, h, w = coarse.shape
         # Treat each section as a batch item: [d, C, H, W].
         x = coarse.permute(1, 0, 2, 3).contiguous()
         shifts = self.R.uniform(-self.max_jitter, self.max_jitter, size=(d, 2))
+        shifts = shifts * np.asarray(scale, dtype=np.float64)[None, :]
         # Normalised translation (full extent is [-1, 1]); affine_grid theta.
         theta = torch.zeros(d, 2, 3, dtype=x.dtype, device=x.device)
         theta[:, 0, 0] = 1.0
@@ -271,9 +292,22 @@ class RandResolutionDegraded(MapTransform, Randomizable):
                             clean.unsqueeze(0), size=(d_coarse, H, W),
                             mode="nearest",
                         ).squeeze(0)
+                elif (
+                    self.fine_axis_factor is not None
+                    and self.fine_axis_factor > 1.0
+                    and self.R.random() < self.fine_axis_prob
+                ):
+                    size = [H, W]
+                    axis = int(self.R.randint(0, 2))
+                    size[axis] = max(1, int(round(size[axis] / self.fine_axis_factor)))
+                    coarse = F.interpolate(
+                        clean.unsqueeze(0), size=(D, size[0], size[1]),
+                        mode="nearest",
+                    ).squeeze(0)
 
+                jitter_scale = (coarse.shape[2] / H, coarse.shape[3] / W)
                 if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
-                    coarse = self._jitter_sections(coarse)
+                    coarse = self._jitter_sections(coarse, jitter_scale)
                 if self.R.random() < self.contrast_prob:
                     coarse = self._section_contrast(coarse)
                 if self.noise_std > 0 and self.R.random() < self.noise_prob:

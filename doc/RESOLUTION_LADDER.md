@@ -167,7 +167,7 @@ CREMI, MICrONS (and FIB / SNEMI / Hemibrain / MaleCNS also contribute here):
 
 ```
 native x ──resample→ 4 nm grid ──backbone──► head (small-voxel seg)
-                                              │ adaptive_avg_pool3d → (d, h, w)_native
+                                              │ nearest-adjoint mean → (d, h, w)_native
                                               ▼
                                     AffinityFGLoss vs native labels
 ```
@@ -190,9 +190,11 @@ The pieces in `nanocosmos/losses/joint3d.py` + `nanocosmos/transforms/degrade.py
 | SFT where native == 4 nm grid | `sft` with pool factor 1 (the `up=1` special case) |
 | pool factor | **derived from the GT shape** (`labels.shape[-3:]` / `recon_image.shape[-3:]`) |
 
-The all-axis pool `Joint3DReconSegLoss._pool_to(x, (d, h, w))` via
-`adaptive_avg_pool3d` handles every rung (z *and* xy), with the factor read
-from the ground-truth shape (no `z_sections` key). Recon (`raw`) pools the same
+The all-axis pool `Joint3DReconSegLoss._pool_to(x, (d, h, w))` handles every
+rung (z *and* xy), with the factor read from the ground-truth shape (no
+`z_sections` key). Each native voxel is the mean of exactly the 4 nm voxels
+the input's nearest upsample copied it to, so the windows do not overlap at a
+fractional ratio (26 or 34 sections, 171 pixels onto 256). Recon (`raw`) pools the same
 way to the reconstruction target's grid. `tests/test_joint.py` covers both.
 
 ---
