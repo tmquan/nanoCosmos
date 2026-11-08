@@ -31,13 +31,12 @@
 # RandResolutionZoom -- fixed resolution per volume; the per-volume pool factor
 # is the only "resampling" and it is derived from the native label shape.
 #
-# Text condition (Cosmos3-Nano): every volume sets ``imaging:`` and SFT volumes
-# set ``label_convention:``.  The fixed prompt is
-#   ``{imaging} · z{Z} y{Y} x{X} nm · {gapped|filled|ssl}``
-# (SSL always uses the ``ssl`` tail).  Fed to the DiT understanding stream.
-# ``freeze_understanding_stream: true`` freezes the whole text encoder
-# (embed_tokens + understanding attn/norms + mlp.*); the prompt still conditions
-# because the vision stream keeps training and attends to the static text KV.
+# Text prompt (Cosmos3-Nano): every volume sets ``imaging:`` and SFT volumes
+# set ``label_convention:``.  Each batch carries
+#   ``{imaging} · {gapped|filled|ssl}``
+# (SSL always uses the ``ssl`` tail), logged to TensorBoard as ``.../prompt``
+# for debugging.  The network is not conditioned on it: the DiT
+# understanding stream always gets the null text token.
 # Volume lists match
 # nanocosmos-4B.yaml; only patch/batch memory knobs differ.
 #
@@ -131,7 +130,7 @@ data:
     zf_range: [2.0, 10.0]
     # Anisotropic crop: one random in-plane axis nearest-downsampled to the
     # native z spacing; the target keeps it fine.
-    fine_axis_prob: 0.5
+    fine_axis_prob: 0.8
     volume_contrast_prob: 0.5   # Augment, whole crop; in the loss target
     volume_contrast_gamma: [0.8, 1.25]
     jitter_prob: 0.5            # Corrupt, per section, input only
@@ -978,10 +977,9 @@ model:
   # causal + vision-independent, so freezing it does not touch the vision
   # stream.  freeze_understanding_stream freezes the WHOLE text encoder
   # (embed_tokens + understanding attn to_q/k/v/out + norm_q/k + understanding
-  # norms + mlp.*); it SUPERSEDES freeze_understanding_ffn (mlp.* only).  With a
-  # fixed tiny prompt vocabulary the prompt still conditions fully (the vision
-  # stream keeps training and attends to the now-static text KV -- a frozen
-  # text encoder), and we reclaim the text encoder's optimizer/grad memory
+  # norms + mlp.*); it SUPERSEDES freeze_understanding_ffn (mlp.* only).  The
+  # network only sees the null text token, so the text encoder has nothing to
+  # learn, and we reclaim the text encoder's optimizer/grad memory
   # (notably the large embed_tokens table).
   freeze_understanding_ffn: false
   freeze_understanding_stream: true

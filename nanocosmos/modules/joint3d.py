@@ -119,7 +119,6 @@ class Joint3DModule(Cosmos3Nano3DModule):
         losses: Dict[str, torch.Tensor],
         images: torch.Tensor,
         batch: Dict[str, torch.Tensor],
-        prompts: Any,
     ) -> Dict[str, torch.Tensor]:
         """Add ``weight_dif * MSE(proj_out, v)`` beside the reconstruction L1.
 
@@ -127,14 +126,30 @@ class Joint3DModule(Cosmos3Nano3DModule):
         0. This second forward trains the velocity that few-step integration
         follows. ``recon_image`` stays in the dataset ``[0, 1]`` range; the
         wrapper applies the VAE scale. A missing clean target skips the term
-        (an sft batch with no ``recon_image``).
+        (an sft batch with no ``recon_image``), and so does every sample whose
+        native grid is coarser than the 4 nm cube.
         """
         weight = float(getattr(self.criterion, "weight_dif", 0.0) or 0.0)
         clean = None if weight <= 0 else batch.get("recon_image")
         flow_fn = getattr(self.model, "rectified_flow_loss", None)
         if weight <= 0 or clean is None or not callable(flow_fn):
             return losses
-        flow = flow_fn(images, clean, prompts=prompts)
+        # Only a sample whose native grid is the 4 nm cube has a clean 4 nm
+        # endpoint.  Coarser targets are nearest repeats, and the velocity
+        # toward them is a velocity toward slabs.
+        native = batch.get("recon_native_size")
+        if native is not None:
+            native = torch.as_tensor(native, device=images.device)
+            if native.dim() == 1:
+                native = native.unsqueeze(0).expand(images.shape[0], -1)
+            fine = torch.tensor(images.shape[-3:], device=images.device)
+            keep = (native == fine).all(dim=1)
+            if not bool(keep.any()):
+                return losses
+            if not bool(keep.all()):
+                idx = keep.nonzero().flatten()
+                images, clean = images[idx], clean[idx]
+        flow = flow_fn(images, clean)
         losses["loss/rflow"] = flow
         branch = (
             self.criterion.weight_ssl

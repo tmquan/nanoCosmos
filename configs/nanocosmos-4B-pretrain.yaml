@@ -46,7 +46,7 @@ data:
   pixel_size: [4, 4, 4]          # fine grid spacing (z, y, x) nm
   # Train-only random permutation of z, y, x.  The FOV is cubic, so each of
   # the 6 axis orders (identity included) is a pure reorientation: the crop,
-  # the native voxel sizes, and the text prompt's z/y/x nm move together.
+  # and the native voxel sizes move together (the prompt has no spacing).
   # The finest native axis -- the highest-resolution dimension (xy on
   # anisotropic ssTEM / SBEM, any axis on isotropic FIB-SEM) -- therefore
   # lands on network z, y, or x equally often.  Section degradation stays
@@ -103,7 +103,7 @@ data:
     zf_range: [2.0, 10.0]
     # Anisotropic crop: one random in-plane axis nearest-downsampled to the
     # native z spacing; the target keeps it fine.
-    fine_axis_prob: 0.5
+    fine_axis_prob: 0.8
     volume_contrast_prob: 0.5   # Augment, whole crop; in the loss target
     volume_contrast_gamma: [0.8, 1.25]
     jitter_prob: 0.5            # Corrupt, per section, input only

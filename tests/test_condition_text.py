@@ -11,37 +11,34 @@ import pytest
 
 def test_build_condition_text_examples():
     assert (
-        build_condition_text(
-            "ssTEM", [40, 8, 8], task="sft", label_convention="filled",
+        build_condition_text("ssTEM", task="sft", label_convention="filled",
         )
-        == "ssTEM · z40 y8 x8 nm · filled"
+        == "ssTEM · filled"
     )
     assert (
-        build_condition_text(
-            "FIB-SEM", [8, 8, 8], task="sft", label_convention="gapped",
+        build_condition_text("FIB-SEM", task="sft", label_convention="gapped",
         )
-        == "FIB-SEM · z8 y8 x8 nm · gapped"
+        == "FIB-SEM · gapped"
     )
     assert (
-        build_condition_text("ssTEM", [40, 8, 8], task="ssl")
-        == "ssTEM · z40 y8 x8 nm · ssl"
+        build_condition_text("ssTEM", task="ssl")
+        == "ssTEM · ssl"
     )
 
 
 def test_ssl_ignores_label_convention():
     # SSL always uses the ssl tail even if a convention sneaks in.
     assert (
-        build_condition_text(
-            "ssTEM", [33, 4, 4], task="ssl", label_convention="gapped",
+        build_condition_text("ssTEM", task="ssl", label_convention="gapped",
         )
-        == "ssTEM · z33 y4 x4 nm · ssl"
+        == "ssTEM · ssl"
     )
 
 
 def test_sft_defaults_missing_convention_to_filled():
     assert (
-        build_condition_text("FIB-SEM", [8.0, 8.0, 8.0], task="sft")
-        == "FIB-SEM · z8 y8 x8 nm · filled"
+        build_condition_text("FIB-SEM", task="sft")
+        == "FIB-SEM · filled"
     )
 
 
@@ -60,8 +57,9 @@ def test_prompt_from_volume_spec():
         "native_resolution": [40, 8, 8],
         "label_convention": "filled",
     }
-    assert prompt_from_volume_spec(vol, task="sft") == (
-        "ssTEM · z40 y8 x8 nm · filled"
+    assert prompt_from_volume_spec(vol, task="sft") == "ssTEM · filled"
+    assert prompt_from_volume_spec({**vol, "native_resolution": [4, 4, 4]}, task="sft") == (
+        "ssTEM · filled"
     )
     with pytest.raises(ValueError, match="imaging"):
         prompt_from_volume_spec(

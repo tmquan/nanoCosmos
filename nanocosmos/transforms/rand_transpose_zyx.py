@@ -8,23 +8,20 @@ orientation stored on disk (xy for anisotropic serial-section EM).
 The fine field of view must be cubic (``patch_size`` and ``pixel_size`` both
 cubic; :class:`~nanocosmos.datamodules.joint3d.Joint3DDataModule` raises
 ``ValueError`` otherwise), so a permutation is a pure reorientation: spatial
-arrays and the native ``(z, y, x)`` voxel-size vector move together, and a
-text prompt of the form ``{imaging} · z{Z} y{Y} x{X} nm · {tail}`` is
-rewritten to the permuted sizes.
+arrays and the native ``(z, y, x)`` voxel-size vector move together.  The text
+prompt carries no spacing and is left as is.
 
 Run this **after** :class:`~nanocosmos.transforms.fine_grid.ToFineGridd` and
 :class:`~nanocosmos.transforms.degrade.RandResolutionDegraded`.  The joint
 datamodule attaches it to train crops only.  The network image is already on
 the cubic fine grid (its shape is unchanged); the recon target, which may
-still be anisotropic, is permuted with it so the coarse axis and the prompt
-stay aligned.  Section degradation has already been applied on the native
+still be anisotropic, is permuted with it.  Section degradation has already been applied on the native
 section axis, and that axis moves with the permutation.
 """
 
 from __future__ import annotations
 
-import re
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -41,28 +38,6 @@ _ZYX_PERMS: Tuple[Tuple[int, int, int], ...] = (
     (2, 0, 1),
     (2, 1, 0),
 )
-
-_PROMPT_RES = re.compile(
-    r"^(?P<prefix>.*?) · z\d+ y\d+ x\d+ nm · (?P<tail>.*)$"
-)
-
-
-def _rewrite_prompt(
-    prompt: str,
-    perm: Tuple[int, int, int],
-    native_resolution: Sequence[float],
-) -> Optional[str]:
-    """Return ``prompt`` with z/y/x nm rewritten for ``perm``, or None if the
-    string is not a joint condition prompt."""
-    match = _PROMPT_RES.match(prompt.strip())
-    if match is None:
-        return None
-    vals = [int(native_resolution[i]) for i in perm]
-    return (
-        f"{match.group('prefix')} · z{vals[0]} y{vals[1]} x{vals[2]} nm · "
-        f"{match.group('tail')}"
-    )
-
 
 def _permute_spatial(val, perm: Tuple[int, int, int]):
     """Permute the last three axes of a tensor or ndarray.  ``perm[i]`` is the
@@ -88,7 +63,7 @@ class RandTransposeZYXd(MapTransform, Randomizable):
     Args:
         keys: Spatial arrays to permute together (image, recon target, label).
         native_resolution: Voxel size ``(z, y, x)`` nm of those arrays **before**
-            permutation.  Used to rewrite ``data["prompt"]`` when present.
+            permutation.
         allow_missing_keys: Skip keys that are absent from the sample.
     """
 
@@ -117,15 +92,6 @@ class RandTransposeZYXd(MapTransform, Randomizable):
         if perm != (0, 1, 2):
             for key in self.key_iterator(d):
                 d[key] = _permute_spatial(d[key], perm)
-            prompt = d.get("prompt")
-            if isinstance(prompt, str):
-                rewritten = _rewrite_prompt(prompt, perm, self.native_resolution)
-                if rewritten is None:
-                    raise ValueError(
-                        "rand_transpose_zyx could not rewrite the condition "
-                        f"prompt {prompt!r} for axis perm {perm}."
-                    )
-                d["prompt"] = rewritten
         return d
 
 

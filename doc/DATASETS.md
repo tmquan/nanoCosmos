@@ -87,12 +87,12 @@ two incompatible instance-annotation styles coexist across datasets:
 | `gapped` | membranes / extracellular are already `label==0` — instances separated by native background gaps | SNEMI3D, Neurons, H01Cell | **skipped** (gaps already present) |
 | `filled` | space-filling / abutting instances — membranes are assigned to a neuron (e.g. automated seg) | MICrONS, FlyWire, CREMI, FIB-25 | **applied** — erode a `sem_label` copy to synthesise thin membrane gaps for the sem head; the affinity target always uses the pristine instance labels |
 
-Both are 6-char tokens on purpose: they are emitted as the fixed text-condition
-prompt tail — `{imaging} · z{Z} y{Y} x{X} nm · {gapped|filled|ssl}` (image-only
-`ssl` batches use the `ssl` tail). The datamodule buckets volumes by
+Both are 6-char tokens on purpose: they are emitted as the batch prompt tail —
+`{imaging} · {gapped|filled|ssl}`, no voxel spacing (image-only `ssl` batches
+use the `ssl` tail). The prompt is logged to TensorBoard only; the network gets
+null text and is not told the convention. The datamodule buckets volumes by
 `(native_resolution, label_convention)`, so a `gapped` and a `filled` set at the
-same resolution never share a transform group, and the prompt tail lets the
-model tell them apart. Mixing the conventions under one `AffinityFGLoss` target
+same resolution never share a transform group. Mixing the conventions under one `AffinityFGLoss` target
 *without* this separation is what previously "poisoned" the SFT branch (and why
 MICrONS used to be dropped to image-only SSL).
 

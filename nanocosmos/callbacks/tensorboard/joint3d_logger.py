@@ -230,6 +230,13 @@ class Joint3DImageLogger(ImageLogger):
             # batch from one volume; resolution/subset mode may mix several).
             uniq = list(dict.fromkeys(shown))
             tb.add_text(ctx.tag("volume"), ", ".join(uniq), global_step=epoch)
+        # Logged for debugging only; the network is not conditioned on it.
+        prompts = batch.get("prompt")
+        if prompts is not None:
+            if isinstance(prompts, str):
+                prompts = [prompts]
+            shown = list(dict.fromkeys(str(p) for p in list(prompts)[:n]))
+            tb.add_text(ctx.tag("prompt"), ", ".join(shown), global_step=epoch)
 
         # 4 nm display grid: the network input.  Source and target mid-planes
         # are drawn only on this grid; a coarser recon target is nearest-

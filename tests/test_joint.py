@@ -378,11 +378,11 @@ def _perm_from_markers(out: torch.Tensor):
     return tuple(perm)
 
 
-def test_rand_transpose_zyx_moves_finest_axis_with_prompt():
-    """A zyx perm reorients arrays and the prompt together.
+def test_rand_transpose_zyx_moves_finest_axis_keeps_prompt():
+    """A zyx perm reorients the arrays and leaves the prompt as is.
 
-    Native sizes are all distinct so the finest axis (4 nm, stored on x) is
-    visible in the prompt.  Across draws it must occupy z, y, and x.
+    Native sizes are all distinct, so the finest axis (4 nm, stored on x) can
+    be tracked.  Across draws it must occupy z, y, and x.
     """
     res = (40, 8, 4)
     t = RandTransposeZYXd(
@@ -391,7 +391,7 @@ def test_rand_transpose_zyx_moves_finest_axis_with_prompt():
     t.set_random_state(0)
     base = _axis_markers((6, 5, 4))
     recon = _axis_markers((6, 5, 4)) + 10.0
-    prompt0 = "ssTEM · z40 y8 x4 nm · ssl"
+    prompt0 = "ssTEM · ssl"
     finest_on = set()
     seen_perms = set()
     for _ in range(80):
@@ -408,7 +408,7 @@ def test_rand_transpose_zyx_moves_finest_axis_with_prompt():
             base.permute(0, *(1 + p for p in perm)),
         )
         vals = [res[i] for i in perm]
-        assert out["prompt"] == f"ssTEM · z{vals[0]} y{vals[1]} x{vals[2]} nm · ssl"
+        assert out["prompt"] == prompt0
         finest_on.add(vals.index(4))
     assert seen_perms == {
         (0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0),
@@ -417,12 +417,61 @@ def test_rand_transpose_zyx_moves_finest_axis_with_prompt():
     assert finest_on == {0, 1, 2}
 
 
+def test_degrade_keeps_the_prompt():
+    """The prompt has no spacing, so degrade never changes it."""
+    for kw in (
+        dict(downsample=False, fine_axis_factor=10.0, fine_axis_prob=1.0),
+        dict(zf_range=(8.0, 8.0)),
+    ):
+        t = RandResolutionDegraded(
+            prob=1.0, jitter_prob=0.0, contrast_prob=0.0,
+            volume_contrast_prob=0.0, missing_prob=0.0, noise_prob=0.0, **kw,
+        )
+        t.set_random_state(0)
+        out = t({"image": torch.rand(1, 64, 32, 32), "prompt": "ssTEM · ssl"})
+        assert out["image"].shape != (1, 64, 32, 32)
+        assert out["prompt"] == "ssTEM · ssl"
+
+
+def test_rflow_runs_only_on_4nm_samples():
+    from types import SimpleNamespace
+
+    from nanocosmos.modules.joint3d import Joint3DModule
+
+    calls = []
+
+    def flow(images, clean, prompts=None):
+        calls.append((images.shape[0], prompts))
+        return images.new_tensor(0.5)
+
+    fake = SimpleNamespace(
+        criterion=SimpleNamespace(weight_dif=1.0, weight_ssl=1.0, weight_sft=1.0),
+        model=SimpleNamespace(rectified_flow_loss=flow),
+        _batch_task=Joint3DModule._batch_task,
+    )
+    images = torch.rand(2, 1, 8, 8, 8)
+    base = {"task": [SSL, SSL], "recon_image": torch.rand(2, 1, 8, 8, 8)}
+
+    out = Joint3DModule._combine_rflow(
+        fake, {"loss": torch.tensor(1.0)}, images,
+        dict(base, recon_native_size=torch.tensor([[2, 8, 8], [8, 8, 2]]), prompt=["a", "b"]),
+    )
+    assert "loss/rflow" not in out and calls == []
+
+    out = Joint3DModule._combine_rflow(
+        fake, {"loss": torch.tensor(1.0)}, images,
+        dict(base, recon_native_size=torch.tensor([[8, 8, 8], [2, 8, 8]]), prompt=["a", "b"]),
+    )
+    assert calls == [(1, None)]
+    assert torch.isclose(out["loss"], torch.tensor(1.5))
+
+
 def test_rand_transpose_zyx_identity_keeps_prompt():
     t = RandTransposeZYXd(keys=["image"], native_resolution=(8, 8, 8))
     t.randomize = lambda data=None: None
     t._perm = (0, 1, 2)
     img = torch.arange(8, dtype=torch.float32).reshape(1, 2, 2, 2)
-    prompt = "FIB-SEM · z8 y8 x8 nm · ssl"
+    prompt = "FIB-SEM · ssl"
     out = t({"image": img, "prompt": prompt})
     assert torch.equal(out["image"], img)
     assert out["prompt"] == prompt

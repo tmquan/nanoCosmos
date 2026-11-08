@@ -1,16 +1,17 @@
-"""Fixed short text-condition templates for joint Cosmos3 training.
+"""Fixed short batch prompts for joint Cosmos3 training.
 
 Template::
 
-    {imaging} · z{Z} y{Y} x{X} nm · {tail}
+    {imaging} · {tail}
 
 where ``tail`` is ``ssl`` on the SSL branch and ``gapped`` / ``filled``
-(``label_convention``) on SFT.
+(``label_convention``) on SFT.  The prompt is logged to TensorBoard for
+debugging; the network is not conditioned on it (null text).
 """
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional
 
 LABEL_CONVENTIONS = frozenset({"gapped", "filled"})
 
@@ -31,7 +32,6 @@ def validate_label_convention(raw: Any, *, vol: Optional[str] = None) -> Optiona
 
 def build_condition_text(
     imaging: str,
-    native_resolution: Sequence[float],
     *,
     task: str,
     label_convention: Optional[str] = None,
@@ -40,25 +40,20 @@ def build_condition_text(
 
     Examples
     --------
-    >>> build_condition_text("ssTEM", [40, 8, 8], task="sft", label_convention="filled")
-    'ssTEM · z40 y8 x8 nm · filled'
-    >>> build_condition_text("FIB-SEM", [8, 8, 8], task="ssl")
-    'FIB-SEM · z8 y8 x8 nm · ssl'
+    >>> build_condition_text("ssTEM", task="sft", label_convention="filled")
+    'ssTEM · filled'
+    >>> build_condition_text("FIB-SEM", task="ssl")
+    'FIB-SEM · ssl'
     """
     if not imaging or not str(imaging).strip():
         raise ValueError("imaging must be a non-empty string (e.g. 'ssTEM', 'FIB-SEM').")
-    if len(native_resolution) < 3:
-        raise ValueError(
-            f"native_resolution must be [z, y, x]; got {list(native_resolution)!r}."
-        )
-    z, y, x = (int(r) for r in native_resolution[:3])
     task_l = str(task).lower()
     if task_l == "ssl":
         tail = "ssl"
     else:
         conv = validate_label_convention(label_convention)
         tail = conv if conv is not None else "filled"
-    return f"{str(imaging).strip()} · z{z} y{y} x{x} nm · {tail}"
+    return f"{str(imaging).strip()} · {tail}"
 
 
 def prompt_from_volume_spec(vol: Mapping[str, Any], *, task: str) -> str:
@@ -69,17 +64,10 @@ def prompt_from_volume_spec(vol: Mapping[str, Any], *, task: str) -> str:
             f"volume {vol.get('vol')!r} is missing required 'imaging' "
             f"(e.g. ssTEM / FIB-SEM) for text conditioning."
         )
-    res = vol.get("native_resolution")
-    if res is None:
-        raise ValueError(
-            f"volume {vol.get('vol')!r} is missing 'native_resolution'."
-        )
     conv = validate_label_convention(
         vol.get("label_convention"), vol=str(vol.get("vol")),
     )
-    return build_condition_text(
-        str(imaging), res, task=task, label_convention=conv,
-    )
+    return build_condition_text(str(imaging), task=task, label_convention=conv)
 
 
 __all__ = [

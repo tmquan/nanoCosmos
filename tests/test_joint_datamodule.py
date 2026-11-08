@@ -7,8 +7,6 @@ target), and (b) runs the *real* ``Joint3DModule`` loop over the datamodule via
 without the 16B backbone.
 """
 
-import re
-
 import numpy as np
 import pytest
 import torch
@@ -163,8 +161,10 @@ class _StubBackbone(nn.Module):
         self.vae_encoder = None
         self.vae_input_pm1 = False
         self.conv = nn.Conv3d(1, head_channels, 1)
+        self.prompts_seen = []
 
     def forward(self, x, prompts=None):
+        self.prompts_seen.append(prompts)
         return self.conv(x)
 
 
@@ -184,8 +184,8 @@ def test_joint_datamodule_condition_prompts(synth_root):
         assert "prompt" in batch
         prompt = batch["prompt"][0]
         seen[task] = prompt
-    assert seen["ssl"] == "FIB-SEM · z4 y4 x4 nm · ssl"
-    assert seen["sft"] == "FIB-SEM · z8 y8 x8 nm · filled"
+    assert seen["ssl"] == "FIB-SEM · ssl"
+    assert seen["sft"] == "FIB-SEM · filled"
 
 
 def test_gapped_skips_sem_label_erosion(synth_root):
@@ -197,7 +197,7 @@ def test_gapped_skips_sem_label_erosion(synth_root):
         task = batch["task"][0] if isinstance(batch["task"], (list, tuple)) else batch["task"]
         if task == "sft":
             assert "sem_label" not in batch
-            assert batch["prompt"][0] == "FIB-SEM · z8 y8 x8 nm · gapped"
+            assert batch["prompt"][0] == "FIB-SEM · gapped"
 
 
 def test_joint_train_end_to_end(synth_root):
@@ -216,14 +216,49 @@ def test_joint_train_end_to_end(synth_root):
         enable_model_summary=False,
     )
     trainer.fit(module, dm)
+    # Batches carry a prompt for logging; the network only ever gets null text.
+    assert module.model.prompts_seen and set(module.model.prompts_seen) == {None}
+
+
+def test_image_logger_writes_prompt_text(synth_root):
+    from nanocosmos.callbacks.tensorboard.joint3d_logger import Joint3DImageLogger
+
+    class _RecordingTB:
+        def __init__(self):
+            self.text = {}
+
+        def add_text(self, tag, text, global_step=None):
+            self.text[tag] = text
+
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    tb = _RecordingTB()
+    logger_cb = Joint3DImageLogger(spatial_dims=3)
+    logger_cb._get_tb = lambda trainer: tb
+    dm = _make_dm(synth_root, num_samples=2, with_prompts=True, sft_convention="filled")
+    module = _StubJointModule(
+        model_config={"pretrained": False},
+        optimizer_config={"lr": 1e-4},
+        loss_config={"weight_ssl": 1.0, "weight_sft": 1.0,
+                     "seg": {"offsets": _OFFSETS, "n_pull": _N_PULL}},
+        training_config={"mutex_watershed": {"backend": "cpu"}},
+    )
+    trainer = pl.Trainer(
+        max_epochs=1, limit_train_batches=2, limit_val_batches=0,
+        accelerator="cpu", logger=False, enable_checkpointing=False,
+        enable_progress_bar=False, enable_model_summary=False,
+        callbacks=[logger_cb],
+    )
+    trainer.fit(module, dm)
+    prompts = {k: v for k, v in tb.text.items() if k.endswith("/prompt")}
+    assert prompts.get("train/automatic/ssl/prompt") == "FIB-SEM · ssl"
+    assert set(module.model.prompts_seen) == {None}
 
 
 # ---------------------------------------------------------------------------
 # rand_transpose_zyx: cubic FOV, finest native axis moves
 # ---------------------------------------------------------------------------
-
-_PROMPT_ZYX = re.compile(r"z(\d+) y(\d+) x(\d+)")
-
 
 def _recon_for(fine: int, fine_nm: float, zyx):
     return tuple(
@@ -306,6 +341,7 @@ def test_rand_transpose_zyx_augments_finest_axis(synth_root):
         degrade={
             "zf_range": [2.0, 2.0], "missing_prob": 0.0, "jitter_prob": 0.0,
             "noise_prob": 0.0, "contrast_prob": 0.0, "volume_contrast_prob": 0.0,
+            "fine_axis_prob": 0.0,
         },
         val_volumes=[{
             "vol": "cosem_vol", "root": synth_root, "task": "ssl",
@@ -322,17 +358,16 @@ def test_rand_transpose_zyx_augments_finest_axis(synth_root):
     coarse_on_z = False
     for batch in dm.train_dataloader():
         assert tuple(batch["image"].shape) == (1, 1, fine, fine, fine)
-        prompt = batch["prompt"][0]
-        nums = tuple(int(v) for v in _PROMPT_ZYX.search(prompt).groups())
-        assert sorted(nums) == sorted(native)
+        assert batch["prompt"][0] == "ssTEM · ssl"
         assert tuple(batch["recon_image"].shape[-3:]) == (fine, fine, fine)
-        assert tuple(batch["recon_native_size"][0].tolist()) == _recon_for(fine, 4.0, nums)
-        finest_on_z = finest_on_z or nums[0] == 4
-        coarse_on_z = coarse_on_z or nums[0] == 16
+        nat = tuple(batch["recon_native_size"][0].tolist())
+        assert sorted(nat) == sorted(_recon_for(fine, 4.0, native))
+        finest_on_z = finest_on_z or nat[0] == fine
+        coarse_on_z = coarse_on_z or nat[0] == 8
     assert finest_on_z and coarse_on_z
 
     for batch in dm.val_dataloader():
-        assert batch["prompt"][0] == "ssTEM · z16 y4 x4 nm · ssl"
+        assert batch["prompt"][0] == "ssTEM · ssl"
         assert tuple(batch["image"].shape) == (1, 1, fine, fine, fine)
         assert tuple(batch["recon_image"].shape[-3:]) == (fine, fine, fine)
         assert tuple(batch["recon_native_size"][0].tolist()) == (8, 32, 32)

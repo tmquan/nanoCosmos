@@ -30,8 +30,9 @@ three axes, after :class:`~nanocosmos.transforms.ToFineGridd` and
 :class:`~nanocosmos.transforms.RandResolutionDegraded`, so section degradation
 stays on the native section axis.  The fine FOV has to be cubic: ``patch_size``
 and ``pixel_size`` must both be cubic or ``__init__`` raises ``ValueError``.
-A permutation is then a pure reorientation: the recon grid and the text
-prompt's z/y/x nm move with the data.  The finest native axis -- the
+A permutation is then a pure reorientation: the recon grid moves with the
+data.  The text prompt (``{imaging} · {tail}``) is only logged; the network
+gets null text.  The finest native axis -- the
 highest-resolution dimension -- therefore lands on network z, y, or x equally
 often.  Validation stays in the stored axis order.
 
@@ -339,8 +340,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         """Permute z/y/x after the fine-grid resample (train only).
 
         The network image is already cubic, so its shape is unchanged.  The
-        recon / label grids follow the same permutation, and the prompt's
-        z/y/x nm are rewritten to match.  That places the finest native axis
+        recon / label grids follow the same permutation.  That places the finest native axis
         on a random network axis.
         """
         tf.append(RandTransposeZYXd(
@@ -456,7 +456,7 @@ class Joint3DDataModule(pl.LightningDataModule):
         augment: bool = False,
     ) -> LazyVolDataset:
         native_patch = _scaled(self.fine_patch, self.fine_nm, native_res)
-        # Attach fixed text-condition prompts (imaging · z/y/x nm · tail).
+        # Attach the logged batch prompt (imaging · tail); the network gets null text.
         lazy_vols: List[Dict[str, Any]] = []
         for vol in volumes:
             entry = {k: v for k, v in vol.items() if k in ("vol", "seg", "root")}
