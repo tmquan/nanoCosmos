@@ -225,10 +225,9 @@ def test_degrade_downsamples_z_and_keeps_clean_target():
     assert tuple(out["image"].shape) == (1, 4, 16, 16)
     assert out["recon_image"].shape == img.shape
     assert torch.equal(out["recon_image"].float(), img)
-    nearest = torch.nn.functional.interpolate(
-        img.unsqueeze(0), size=(4, 16, 16), mode="nearest",
-    ).squeeze(0)
-    assert torch.equal(out["image"].float(), nearest)
+    # Each of the 4 sections is the mean of its 8 planes: 3.5, 11.5, ...
+    slabs = img.view(1, 4, 8, 16, 16).mean(dim=2)
+    assert torch.allclose(out["image"].float(), slabs)
 
 
 def test_degrade_without_downsample_keeps_depth():
@@ -259,10 +258,8 @@ def test_degrade_loss_target_is_augmented_clean():
     out = t({"image": img.clone()})
     augmented = img.clamp(0.0, 1.0).pow(2.0)
     assert torch.allclose(out["recon_image"].float(), augmented)
-    nearest = torch.nn.functional.interpolate(
-        augmented.unsqueeze(0), size=(4, 8, 8), mode="nearest",
-    ).squeeze(0)
-    assert torch.allclose(out["image"].float(), nearest)
+    slabs = augmented.view(1, 4, 8, 8, 8).mean(dim=2)
+    assert torch.allclose(out["image"].float(), slabs)
 
 
 def test_degrade_noise_does_not_enter_target():
@@ -415,6 +412,49 @@ def test_rand_transpose_zyx_moves_finest_axis_keeps_prompt():
     }
     # Finest native axis (4 nm) landed on every network axis.
     assert finest_on == {0, 1, 2}
+
+
+def _quiet_degrade(**kw):
+    return RandResolutionDegraded(
+        prob=1.0, jitter_prob=0.0, contrast_prob=0.0, volume_contrast_prob=0.0,
+        missing_prob=0.0, noise_prob=0.0, **kw,
+    )
+
+
+def test_degrade_z_slab_is_the_mean_of_its_planes():
+    from nanocosmos.utils.nearest import nearest_source
+
+    t = _quiet_degrade(zf_range=(10.0, 10.0))
+    t.set_random_state(0)
+    img = torch.rand(1, 256, 4, 4)
+    out = t({"image": img})["image"]
+    assert out.shape == (1, 26, 4, 4)
+    src = nearest_source(26, 256)
+    for s in (0, 7, 25):
+        assert torch.allclose(out[:, s], img[:, src == s].mean(dim=1), atol=1e-6)
+    # A slab of 9 or 10 planes averages them, so it is not any single plane.
+    assert not any(torch.allclose(out[:, 0], img[:, i]) for i in range(256))
+
+
+def test_degrade_fine_axis_slab_is_the_mean_of_its_planes():
+    from nanocosmos.utils.nearest import nearest_source
+
+    t = _quiet_degrade(downsample=False, fine_axis_factor=10.0, fine_axis_prob=1.0)
+    img = torch.rand(1, 2, 256, 256)
+    src = nearest_source(26, 256)
+    seen = set()
+    for seed in range(8):
+        t.set_random_state(seed)
+        out = t({"image": img.clone()})["image"]
+        if out.shape[2] == 26:
+            expect = img[:, :, src == 5].mean(dim=2)
+            assert torch.allclose(out[:, :, 5], expect, atol=1e-6)
+        else:
+            assert out.shape[3] == 26
+            expect = img[:, :, :, src == 5].mean(dim=3)
+            assert torch.allclose(out[:, :, :, 5], expect, atol=1e-6)
+        seen.add(tuple(out.shape))
+    assert len(seen) == 2
 
 
 def test_degrade_keeps_the_prompt():

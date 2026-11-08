@@ -12,6 +12,10 @@ I/O (:mod:`nanocosmos.utils.io`)
       NRRD, NumPy).  This module does not call
       :mod:`nanocosmos.preprocessors`.
 
+Nearest windows (:mod:`nanocosmos.utils.nearest`)
+    * :func:`nearest_mean_pool` -- mean over the windows a nearest upsample
+      fills; used by degrade (slabs) and the joint loss (native grid).
+
 Extending this module: anything reused by **two or more** subpackages
 and with no better home belongs here.  Anything used by exactly one
 subpackage should live next to its consumer.

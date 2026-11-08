@@ -10,9 +10,9 @@ grid (``patch_size`` @ ``pixel_size`` nm, e.g. [400, 400, 400] @ 4 nm).  Each
 volume is read at its **native** voxel size over the same physical field of
 view, then :class:`~nanocosmos.transforms.ToFineGridd` resamples the image onto
 the fine grid while the label stays native.  SSL then runs Augment
-(one gamma for the whole crop), Degrade (nearest ``z`` downsample on a 4 nm
-crop; on an anisotropic crop, one random in-plane axis nearest-downsampled to
-the z spacing), Corrupt (per-section jitter and gamma, and noise), and
+(one gamma for the whole crop), Degrade (``z`` downsample on a 4 nm crop; on
+an anisotropic crop, one random in-plane axis downsampled to the z spacing;
+each slab is the mean of its planes), Corrupt (per-section jitter and gamma, and noise), and
 Missing (whole native sections, every crop) on the input alone.  The target
 keeps the native crop, so the degraded fine axis is supervised at its own
 resolution.

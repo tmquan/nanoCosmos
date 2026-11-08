@@ -32,7 +32,7 @@ per-branch batch size).  A labeled rung is drawn in both branches; FIB-25
 
 ``sft``  -- segmentation, gated by labels: any labeled rung.  The
     small-voxel head is pooled to the **label grid** (``labels.shape[-3:]``)
-    with :func:`_nearest_mean_pool` (each label voxel averages the small
+    with :func:`~nanocosmos.utils.nearest.nearest_mean_pool` (each label voxel averages the small
     voxels the input's nearest upsample filled from it, on z and on xy,
     including fractional factors),
     then :class:`~nanocosmos.losses.AffinityFGLoss`.  The head is
@@ -63,6 +63,7 @@ import torch.nn as nn
 
 from nanocosmos.losses.affinity import AffinityFGLoss
 from nanocosmos.losses._common import regression_loss_fn
+from nanocosmos.utils.nearest import nearest_mean_pool, nearest_source
 
 # Canonical branch names.  A batch carries exactly one of these in
 # ``targets["task"]`` (the datamodule's sampler yields task-homogeneous
@@ -104,7 +105,7 @@ def _nearest_gather_index(native: int, fine: int, device: torch.device) -> torch
         raise ValueError(
             f"native size {native} must lie in 1..{fine} to undo a nearest upsample."
         )
-    src = _nearest_source(native, fine)
+    src = nearest_source(native, fine)
     first = torch.full((native,), -1, dtype=torch.long)
     first[src.flip(0)] = torch.arange(fine - 1, -1, -1)
     if bool((first < 0).any()):
@@ -112,47 +113,6 @@ def _nearest_gather_index(native: int, fine: int, device: torch.device) -> torch
             f"nearest upsample from {native} to {fine} does not cover every native index."
         )
     return first.to(device)
-
-
-def _nearest_source(native: int, fine: int) -> torch.Tensor:
-    """Native index each fine voxel copies under ``F.interpolate`` nearest."""
-    dst = torch.arange(int(fine), dtype=torch.float32)
-    scale = torch.tensor(int(native), dtype=torch.float32) / torch.tensor(int(fine), dtype=torch.float32)
-    return torch.floor(dst * scale).to(torch.long).clamp(max=int(native) - 1)
-
-
-def _nearest_mean_matrix(
-    native: int, fine: int, device: torch.device, dtype: torch.dtype,
-) -> torch.Tensor:
-    """``[native, fine]`` row-mean over the fine voxels each native voxel fills."""
-    src = _nearest_source(native, fine)
-    m = torch.zeros(int(native), int(fine), dtype=torch.float32)
-    m[src, torch.arange(int(fine))] = 1.0
-    m = m / m.sum(dim=1, keepdim=True)
-    return m.to(device=device, dtype=dtype)
-
-
-def _nearest_mean_pool(x: torch.Tensor, shape: Sequence[int]) -> torch.Tensor:
-    """Average a fine ``[..., D, H, W]`` volume onto the native ``shape``.
-
-    Each native voxel is the mean of exactly the fine voxels that the
-    nearest upsample of the input filled from it, so the windows do not
-    overlap and follow the input slabs.  ``adaptive_avg_pool3d`` uses
-    ``floor``/``ceil`` windows instead; at a fractional ratio (26 or 34 z
-    sections, 171 xy pixels onto 256) each window also takes a voxel of the
-    neighbouring section.
-    """
-    out = x
-    for axis, n in zip((-3, -2, -1), shape):
-        f = out.shape[axis]
-        n = int(n)
-        if n == f:
-            continue
-        if n < 1 or n > f:
-            raise ValueError(f"native size {n} must lie in 1..{f} to pool a fine axis.")
-        m = _nearest_mean_matrix(n, f, out.device, out.dtype)
-        out = torch.movedim(torch.movedim(out, axis, -1) @ m.t(), -1, axis)
-    return out
 
 
 def _native_from_nearest(vol: torch.Tensor, native: Sequence[int]) -> torch.Tensor:
@@ -413,7 +373,7 @@ class Joint3DReconSegLoss(nn.Module):
         """Average-pool a small-voxel volume down to the native ``(d, h, w)``.
 
         Each native voxel is the mean of the 4 nm voxels the input's nearest
-        upsample filled from it (:func:`_nearest_mean_pool`), on every axis,
+        upsample filled from it (:func:`~nanocosmos.utils.nearest.nearest_mean_pool`), on every axis,
         so larger-voxel *xy* rungs (MICrONS / FIB at 8 nm) pool in-plane too.
         A no-op when ``x`` is already at ``shape`` (the smallest-voxel rung /
         pool factor 1).
@@ -421,7 +381,7 @@ class Joint3DReconSegLoss(nn.Module):
         target = tuple(int(s) for s in shape)
         if tuple(x.shape[-3:]) == target:
             return x
-        return _nearest_mean_pool(x, target)
+        return nearest_mean_pool(x, target)
 
     # ------------------------------------------------------------------
     # Forward

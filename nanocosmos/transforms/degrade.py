@@ -22,7 +22,7 @@ spatial size it is given.  In the joint pipeline that size is the
 * ``recon_image``  -- the augmented crop (the L1 target): one gamma for the
   whole crop, still at the input resolution.
 * ``image``        -- that crop after degrade and corrupt.  With
-  ``downsample`` it is shorter in ``z`` (nearest-neighbour decimation).
+  ``downsample`` it is shorter in ``z`` (each section the mean of its planes).
   The 4 nm upsample is the next transform, not this one.
 
 The order after the read is:
@@ -30,11 +30,13 @@ The order after the read is:
 1. **Augment** -- one gamma for the whole crop.  This snapshot is the
    reconstruction target.  Nothing here varies by section, so the target
    is as isotropic as the read.
-2. **Degrade** -- nearest ``z`` downsample (4 nm only).  ``d = round(D / zf)``
-   sections of the augmented crop, each a nearest sample, not an average.
-   The datamodule turns this on only for a 4 nm crop.  On an anisotropic
-   crop it sets ``fine_axis_factor`` (native z nm / xy nm) instead: one
-   random in-plane axis is nearest-downsampled by that factor, so the input
+2. **Degrade** -- ``z`` downsample (4 nm only).  ``d = round(D / zf)``
+   sections of the augmented crop, each the mean of the planes the nearest
+   upsample to 4 nm later repeats it over, as a real section images its
+   whole thickness.  The datamodule turns this on only for a 4 nm crop.  On
+   an anisotropic crop it sets ``fine_axis_factor`` (native z nm / xy nm)
+   instead: one random in-plane axis is mean-downsampled by that factor in
+   the same windows, so the input
    is as coarse there as along z while the target keeps the fine axis.
    After the zyx permutation that axis can point anywhere, and the loss
    needs real fine detail along it.
@@ -42,7 +44,7 @@ The order after the read is:
    Gaussian noise.  These touch ``image`` only.  A coarser crop skips
    degrade and still gets this step, at its own depth.
 4. **Missing** -- last, on every crop.  Whole native sections (the
-   decimated ones on a 4 nm crop) are zeroed or replaced by an exact copy
+   averaged ones on a 4 nm crop) are zeroed or replaced by an exact copy
    of the nearest surviving section.  Nothing runs after it, so a missing
    section stays missing.
 
@@ -63,6 +65,7 @@ from monai.config import KeysCollection
 from monai.transforms import MapTransform, Randomizable
 
 from nanocosmos.transforms._sampling import log_uniform
+from nanocosmos.utils.nearest import nearest_mean_pool
 
 
 class RandResolutionDegraded(MapTransform, Randomizable):
@@ -75,13 +78,13 @@ class RandResolutionDegraded(MapTransform, Randomizable):
         zf_range: ``(min, max)`` factor on the input z size, used only when
             ``downsample`` is set.  ``d = round(D / zf)``.  On a 4 nm crop,
             ``(2, 10)`` spans 8 nm to 40 nm sections.  Sampled log-uniformly.
-        downsample: Degrade by nearest-downsampling ``z`` of the augmented
+        downsample: Degrade by mean-downsampling ``z`` of the augmented
             crop, before corrupt.  The datamodule sets this only for a 4 nm
             crop.  Off: corrupt still runs, at the crop's own depth.
         fine_axis_factor: Degrade.  On an anisotropic crop, native z nm over
             xy nm.  ``None`` (the default, and every isotropic crop) skips
             the in-plane downsample.
-        fine_axis_prob: Degrade.  Probability of nearest-downsampling one
+        fine_axis_prob: Degrade.  Probability of mean-downsampling one
             random in-plane axis by ``fine_axis_factor``.
         prob: Probability of degrading at all (else passthrough, but the
             ``recon_key`` copy is still written so the recon target always
@@ -288,10 +291,7 @@ class RandResolutionDegraded(MapTransform, Randomizable):
                     zf = self._sample_zf()
                     d_coarse = max(1, int(round(D / zf)))
                     if d_coarse != D:
-                        coarse = F.interpolate(
-                            clean.unsqueeze(0), size=(d_coarse, H, W),
-                            mode="nearest",
-                        ).squeeze(0)
+                        coarse = nearest_mean_pool(clean, (d_coarse, H, W))
                 elif (
                     self.fine_axis_factor is not None
                     and self.fine_axis_factor > 1.0
@@ -300,10 +300,7 @@ class RandResolutionDegraded(MapTransform, Randomizable):
                     size = [H, W]
                     axis = int(self.R.randint(0, 2))
                     size[axis] = max(1, int(round(size[axis] / self.fine_axis_factor)))
-                    coarse = F.interpolate(
-                        clean.unsqueeze(0), size=(D, size[0], size[1]),
-                        mode="nearest",
-                    ).squeeze(0)
+                    coarse = nearest_mean_pool(clean, (D, size[0], size[1]))
 
                 jitter_scale = (coarse.shape[2] / H, coarse.shape[3] / W)
                 if self.max_jitter > 0 and self.R.random() < self.jitter_prob:
